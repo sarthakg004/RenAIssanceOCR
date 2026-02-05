@@ -1,0 +1,4 @@
+CRAFT-pytorch
+data
+ocr-preprocess-ui/node_modules
+.env
