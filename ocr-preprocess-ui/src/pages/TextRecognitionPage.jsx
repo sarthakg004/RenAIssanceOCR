@@ -17,6 +17,7 @@ import {
 /**
  * TextRecognitionPage - Full Viewport OCR Workspace
  * Redesigned with 3-column responsive layout
+ * Supports background auto-processing while user can freely view any page
  */
 export default function TextRecognitionPage({ processedImages, onBack, onComplete }) {
   // API Configuration
@@ -27,8 +28,11 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   const [models, setModels] = useState([]);
   const [backendOnline, setBackendOnline] = useState(null);
 
-  // Processing state
-  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  // Viewing state - which page user is looking at
+  const [viewingPageIndex, setViewingPageIndex] = useState(0);
+  
+  // Processing state - which page is being processed (can be different from viewing)
+  const [processingPageIndex, setProcessingPageIndex] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAutoProcessing, setIsAutoProcessing] = useState(false);
   const [error, setError] = useState(null);
@@ -95,13 +99,16 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     }
   }, [waitSeconds]);
 
-  // Computed values
-  const currentPage = processedImages[currentPageIndex];
-  const pageNumber = currentPageIndex + 1;
+  // Computed values - for the page user is VIEWING
+  const viewingPage = processedImages[viewingPageIndex];
+  const viewingPageNumber = viewingPageIndex + 1;
   const totalPages = processedImages.length;
-  const isPageProcessed = processedPages.has(pageNumber);
+  const isViewingPageProcessed = processedPages.has(viewingPageNumber);
   const hasAnyTranscript = processedPages.size > 0;
   const canProcess = apiKey && apiKey.length >= 10 && isKeyValid !== false && rateLimitReady;
+  
+  // Check if the currently viewing page is also being processed
+  const isViewingPageProcessing = isProcessing && processingPageIndex === viewingPageIndex;
 
   // Manual API key verification
   const handleVerifyKey = useCallback(async () => {
@@ -134,29 +141,33 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     setError(null);
   }, [isKeyValid]);
 
-  // Navigation
+  // Navigation - only changes viewing, not processing
   const goToPage = useCallback((index) => {
     if (index >= 0 && index < totalPages) {
-      setCurrentPageIndex(index);
+      setViewingPageIndex(index);
       setError(null);
     }
   }, [totalPages]);
 
-  // Process single page
-  const processCurrentPage = useCallback(async () => {
+  // Process a specific page (used by both manual and auto processing)
+  const processPage = useCallback(async (pageIndex) => {
     if (!canProcess || isProcessing) return;
 
+    const pageNum = pageIndex + 1;
+    const page = processedImages[pageIndex];
+    
+    setProcessingPageIndex(pageIndex);
     setIsProcessing(true);
     setError(null);
 
     try {
-      const imageData = currentPage.processed || currentPage.original;
+      const imageData = page.processed || page.original;
       const result = await processPageOCR(imageData, selectedModel, apiKey);
 
       if (result.success) {
-        setTranscripts((prev) => ({ ...prev, [pageNumber]: result.transcript }));
-        setOriginalTranscripts((prev) => ({ ...prev, [pageNumber]: result.transcript }));
-        setProcessedPages((prev) => new Set([...prev, pageNumber]));
+        setTranscripts((prev) => ({ ...prev, [pageNum]: result.transcript }));
+        setOriginalTranscripts((prev) => ({ ...prev, [pageNum]: result.transcript }));
+        setProcessedPages((prev) => new Set([...prev, pageNum]));
         // Mark key as valid since OCR succeeded
         setIsKeyValid(true);
       } else if (result.error === 'rate_limited') {
@@ -173,35 +184,41 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
       setError(err.message);
     } finally {
       setIsProcessing(false);
+      setProcessingPageIndex(null);
     }
-  }, [apiKey, currentPage, pageNumber, selectedModel, canProcess, isProcessing]);
+  }, [apiKey, processedImages, selectedModel, canProcess, isProcessing]);
 
-  // Auto-processing
+  // Process the currently viewed page (for manual "Process Page" button)
+  const processCurrentPage = useCallback(() => {
+    processPage(viewingPageIndex);
+  }, [processPage, viewingPageIndex]);
+
+  // Auto-processing - processes pages in background without changing view
   useEffect(() => {
     if (!isAutoProcessing || isProcessing || !rateLimitReady) return;
 
+    // Find next unprocessed page
     const nextUnprocessed = processedImages.findIndex((_, i) => !processedPages.has(i + 1));
+    
     if (nextUnprocessed === -1) {
+      // All pages processed
       setIsAutoProcessing(false);
       return;
     }
 
-    if (nextUnprocessed !== currentPageIndex) {
-      setCurrentPageIndex(nextUnprocessed);
-    } else {
-      processCurrentPage();
-    }
-  }, [isAutoProcessing, isProcessing, rateLimitReady, processedPages, currentPageIndex, processCurrentPage, processedImages]);
+    // Process the next unprocessed page (don't change viewing page)
+    processPage(nextUnprocessed);
+  }, [isAutoProcessing, isProcessing, rateLimitReady, processedPages, processedImages, processPage]);
 
   // Handle transcript change
   const handleTranscriptChange = useCallback((value) => {
-    setTranscripts((prev) => ({ ...prev, [pageNumber]: value }));
-  }, [pageNumber]);
+    setTranscripts((prev) => ({ ...prev, [viewingPageNumber]: value }));
+  }, [viewingPageNumber]);
 
   // Reset transcript
   const handleResetTranscript = useCallback(() => {
-    setTranscripts((prev) => ({ ...prev, [pageNumber]: originalTranscripts[pageNumber] }));
-  }, [pageNumber, originalTranscripts]);
+    setTranscripts((prev) => ({ ...prev, [viewingPageNumber]: originalTranscripts[viewingPageNumber] }));
+  }, [viewingPageNumber, originalTranscripts]);
 
   // Export
   const handleExport = useCallback(async (format) => {
@@ -244,40 +261,43 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
           />
           <PageThumbnailList
             images={processedImages}
-            currentIndex={currentPageIndex}
+            currentIndex={viewingPageIndex}
             processedPages={processedPages}
+            processingPageIndex={processingPageIndex}
             onPageSelect={goToPage}
           />
         </>
       }
       centerPanel={
         <PagePreview
-          currentPage={currentPage}
-          currentIndex={currentPageIndex}
+          currentPage={viewingPage}
+          currentIndex={viewingPageIndex}
           totalPages={totalPages}
-          isProcessing={isProcessing}
-          isPageProcessed={isPageProcessed}
+          isProcessing={isViewingPageProcessing}
+          isPageProcessed={isViewingPageProcessed}
           isAutoProcessing={isAutoProcessing}
           rateLimitReady={rateLimitReady}
           waitSeconds={waitSeconds}
           error={error}
           canProcess={canProcess}
-          onPrevPage={() => goToPage(currentPageIndex - 1)}
-          onNextPage={() => goToPage(currentPageIndex + 1)}
+          onPrevPage={() => goToPage(viewingPageIndex - 1)}
+          onNextPage={() => goToPage(viewingPageIndex + 1)}
           onProcess={processCurrentPage}
           onToggleAutoProcess={handleToggleAutoProcess}
           // Controlled zoom - persists across page changes
           zoomLevel={zoomLevel}
           onZoomChange={setZoomLevel}
+          // Show which page is being processed during auto-processing
+          processingPageIndex={processingPageIndex}
         />
       }
       rightPanel={
         <TranscriptPanel
-          pageNumber={pageNumber}
-          transcript={transcripts[pageNumber] || ''}
-          originalTranscript={originalTranscripts[pageNumber] || ''}
-          isProcessing={isProcessing}
-          isProcessed={isPageProcessed}
+          pageNumber={viewingPageNumber}
+          transcript={transcripts[viewingPageNumber] || ''}
+          originalTranscript={originalTranscripts[viewingPageNumber] || ''}
+          isProcessing={isViewingPageProcessing}
+          isProcessed={isViewingPageProcessed}
           hasAnyTranscript={hasAnyTranscript}
           processedCount={processedPages.size}
           onTranscriptChange={handleTranscriptChange}
