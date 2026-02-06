@@ -1,8 +1,9 @@
-import { ChevronLeft, Sparkles, CheckCircle2, AlertCircle } from 'lucide-react';
+import { ChevronLeft, Sparkles, CheckCircle2, AlertCircle, Check } from 'lucide-react';
+import ResizablePanels from './ResizablePanels';
 
 /**
  * OCRLayout Component
- * Full viewport 3-column responsive layout wrapper
+ * Full viewport 3-column responsive layout wrapper with centered progress and resizable panels
  */
 export default function OCRLayout({
   // Header props
@@ -18,93 +19,113 @@ export default function OCRLayout({
   rightPanel,
 }) {
   const progressPercent = totalPages > 0 ? (processedCount / totalPages) * 100 : 0;
+  const isComplete = processedCount === totalPages && totalPages > 0;
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/40 overflow-hidden">
-      {/* Header */}
-      <header className="h-16 bg-white/80 backdrop-blur-md border-b border-gray-100/50 px-6 flex items-center justify-between shrink-0 shadow-sm">
-        <div className="flex items-center gap-4">
+    <div className="h-full w-full flex flex-col bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/40 overflow-hidden">
+      {/* Header - Fixed height with truly centered progress */}
+      <header className="h-12 bg-white/95 backdrop-blur-md border-b border-gray-200 shrink-0 relative z-10">
+        {/* Left: Back button and title - absolutely positioned */}
+        <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
           <button
             onClick={onBack}
-            className="flex items-center gap-2 text-gray-600 hover:text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg transition-all duration-200"
+            className="flex items-center gap-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all text-sm"
           >
-            <ChevronLeft size={20} />
-            <span className="text-sm font-medium">Back</span>
+            <ChevronLeft size={16} />
+            <span className="font-medium hidden sm:inline">Back</span>
           </button>
-          <div className="h-6 w-px bg-gray-200" />
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg text-white shadow-md shadow-blue-500/20">
-              <Sparkles size={20} />
+          <div className="h-4 w-px bg-gray-200 hidden sm:block" />
+          <div className="flex items-center gap-1.5 hidden sm:flex">
+            <div className="p-1 bg-gradient-to-br from-blue-500 to-indigo-600 rounded text-white">
+              <Sparkles size={14} />
             </div>
-            <div>
-              <h1 className="text-lg font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent">
-                Gemini OCR
-              </h1>
-            </div>
+            <span className="text-sm font-bold text-gray-700">Gemini OCR</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          {/* Progress */}
-          <div className="flex items-center gap-3 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100/50">
+        {/* Center: Step Progress - truly centered */}
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+          <div className="flex items-center gap-3 px-4 py-1.5 bg-gradient-to-r from-blue-50 via-white to-indigo-50 rounded-full border border-blue-100/60 shadow-sm">
+            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+              isComplete 
+                ? 'bg-gradient-to-br from-green-500 to-emerald-600' 
+                : 'bg-gradient-to-br from-blue-500 to-indigo-600'
+            }`}>
+              {isComplete ? <Check size={12} /> : '5'}
+            </div>
             <div className="flex items-center gap-2">
-              <div className="w-28 h-2.5 bg-blue-100 rounded-full overflow-hidden shadow-inner">
+              <div className="w-24 h-1.5 bg-blue-100 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full transition-all duration-500 ease-out shadow-sm"
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    isComplete 
+                      ? 'bg-gradient-to-r from-green-500 to-emerald-500' 
+                      : 'bg-gradient-to-r from-blue-500 to-indigo-500'
+                  }`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
-              <span className="text-sm font-bold text-blue-700">
+              <span className={`text-xs font-bold ${isComplete ? 'text-green-600' : 'text-blue-700'}`}>
                 {processedCount}/{totalPages}
               </span>
             </div>
           </div>
+        </div>
 
-          {/* Complete button */}
+        {/* Right: Complete button - absolutely positioned */}
+        <div className="absolute right-3 top-1/2 -translate-y-1/2">
           <button
             onClick={onComplete}
             disabled={!hasAnyTranscript}
-            className={`px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2 transition-all duration-200 ${hasAnyTranscript
-                ? 'btn-primary'
+            className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all text-sm ${
+              hasAnyTranscript
+                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-sm'
                 : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-              }`}
+            }`}
           >
-            <CheckCircle2 size={18} />
-            Complete
+            <CheckCircle2 size={14} />
+            <span className="hidden sm:inline">Complete</span>
           </button>
         </div>
       </header>
 
       {/* Backend offline warning */}
       {backendOnline === false && (
-        <div className="mx-6 mt-4 px-4 py-3 bg-red-50/80 backdrop-blur-sm border border-red-200 rounded-xl flex items-center gap-3 text-red-700 shrink-0 shadow-sm">
-          <AlertCircle size={18} />
-          <span className="text-sm">
-            Backend not running. Start with:{' '}
-            <code className="bg-red-100 px-2 py-0.5 rounded-md font-mono text-xs">
-              uvicorn main:app --reload
-            </code>
-          </span>
+        <div className="px-3 py-1.5 shrink-0">
+          <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+            <AlertCircle size={14} />
+            <span>
+              Backend offline. Run:{' '}
+              <code className="bg-red-100 px-1.5 py-0.5 rounded font-mono text-xs">
+                uvicorn main:app --reload
+              </code>
+            </span>
+          </div>
         </div>
       )}
 
-      {/* Main 3-column layout */}
-      <main className="flex-1 p-4 overflow-hidden min-h-0">
-        <div className="h-full flex gap-4">
-          {/* Left Sidebar */}
-          <aside className="w-64 shrink-0 flex flex-col gap-4 overflow-hidden min-h-0 lg:w-72">
-            {leftSidebar}
-          </aside>
-
-          {/* Center Panel */}
-          <div className="flex-1 min-w-0 min-h-0">
+      {/* Main 3-column layout - Takes remaining viewport height */}
+      <main className="flex-1 min-h-0 p-2 overflow-hidden">
+        {/* Resizable 3-column layout */}
+        <div className="h-full hidden lg:block">
+          <ResizablePanels
+            leftPanel={leftSidebar}
+            centerPanel={centerPanel}
+            rightPanel={rightPanel}
+            defaultLeftWidth={260}
+            defaultRightWidth={340}
+            minLeftWidth={200}
+            maxLeftWidth={400}
+            minRightWidth={280}
+            maxRightWidth={500}
+            minCenterWidth={350}
+          />
+        </div>
+        
+        {/* Mobile fallback - stacked layout */}
+        <div className="h-full lg:hidden flex flex-col gap-2 overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-hidden">
             {centerPanel}
           </div>
-
-          {/* Right Panel */}
-          <aside className="w-96 shrink-0 min-h-0 xl:w-[420px]">
-            {rightPanel}
-          </aside>
         </div>
       </main>
     </div>

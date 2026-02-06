@@ -91,18 +91,32 @@ export async function processPageOCR(imageData, model, apiKey) {
 
 /**
  * Export transcripts as a combined document
+ * Only includes pages that have actual transcripts (non-empty)
  * 
  * @param {Object} transcripts - Object with page numbers as keys and transcript text as values
  * @param {string} format - Export format: 'txt', 'docx', or 'pdf'
  * @returns {Promise<Blob>}
  */
 export async function exportTranscripts(transcripts, format) {
+  // Filter out empty transcripts - only include pages with actual content
+  const filteredTranscripts = {};
+  for (const [pageNum, text] of Object.entries(transcripts)) {
+    if (text && text.trim().length > 0) {
+      filteredTranscripts[pageNum] = text;
+    }
+  }
+  
+  // Check if there's anything to export
+  if (Object.keys(filteredTranscripts).length === 0) {
+    throw new Error('No transcripts to export');
+  }
+
   const response = await fetch(`${API_BASE}/export/${format}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ transcripts, format }),
+    body: JSON.stringify({ transcripts: filteredTranscripts, format }),
   });
 
   if (!response.ok) {
