@@ -45,6 +45,9 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   // Export state
   const [exporting, setExporting] = useState(null);
 
+  // Zoom state - lifted here to persist across page changes
+  const [zoomLevel, setZoomLevel] = useState(1);
+
   // Load models on mount
   useEffect(() => {
     async function loadModels() {
@@ -263,6 +266,9 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
           onNextPage={() => goToPage(currentPageIndex + 1)}
           onProcess={processCurrentPage}
           onToggleAutoProcess={handleToggleAutoProcess}
+          // Controlled zoom - persists across page changes
+          zoomLevel={zoomLevel}
+          onZoomChange={setZoomLevel}
         />
       }
       rightPanel={

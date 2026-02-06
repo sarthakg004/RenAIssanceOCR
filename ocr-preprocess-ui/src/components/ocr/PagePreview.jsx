@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
@@ -9,6 +9,13 @@ import {
   AlertCircle,
   Zap,
   Image as ImageIcon,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Maximize2,
+  Move,
+  Minus,
+  Plus,
 } from 'lucide-react';
 
 /**
@@ -19,11 +26,13 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
   const [previewSrc, setPreviewSrc] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     if (!imageSrc) {
       setPreviewSrc(null);
       setError(false);
+      setDimensions({ width: 0, height: 0 });
       return;
     }
 
@@ -40,6 +49,8 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
     
     img.onload = () => {
       try {
+        setDimensions({ width: img.width, height: img.height });
+        
         // Check if downscaling is needed
         if (img.width <= maxWidth && img.height <= maxHeight) {
           setPreviewSrc(imageSrc);
@@ -104,12 +115,13 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
     };
   }, [imageSrc, maxWidth, maxHeight]);
 
-  return { previewSrc, isLoading, error };
+  return { previewSrc, isLoading, error, dimensions };
 }
 
 /**
  * PagePreview Component
- * Large image preview with navigation and process controls
+ * Large image preview with navigation, zoom controls, and process controls
+ * Supports controlled zoom (from parent) for persistence across page changes
  */
 export default function PagePreview({
   currentPage,
@@ -126,138 +138,421 @@ export default function PagePreview({
   onNextPage,
   onProcess,
   onToggleAutoProcess,
+  // Controlled zoom props - if provided, zoom is controlled by parent
+  zoomLevel: controlledZoom,
+  onZoomChange,
 }) {
   const pageNumber = currentIndex + 1;
   const imageSrc = currentPage?.processed || currentPage?.original;
 
   // Use downscaled image for preview to handle large images
-  const { previewSrc, isLoading: isDownscaling, error: downscaleError } = useDownscaledImage(imageSrc);
+  const { previewSrc, isLoading: isDownscaling, error: downscaleError, dimensions } = useDownscaledImage(imageSrc);
   
   const [imageLoaded, setImageLoaded] = useState(false);
+  // Internal zoom state (used if not controlled)
+  const [internalZoom, setInternalZoom] = useState(1);
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [scrollStart, setScrollStart] = useState({ x: 0, y: 0 });
+  const containerRef = useRef(null);
+  const imageRef = useRef(null);
+  const lastClickTime = useRef(0);
 
-  // Reset loading state when page changes
+  // Determine if zoom is controlled or internal
+  const isControlled = controlledZoom !== undefined && onZoomChange !== undefined;
+  const zoomLevel = isControlled ? controlledZoom : internalZoom;
+  const setZoomLevel = isControlled ? onZoomChange : setInternalZoom;
+
+  const MIN_ZOOM = 0.25;
+  const MAX_ZOOM = 5.0;
+  const ZOOM_STEP = 0.1;
+
+  // Reset only image loading state when page changes (not zoom - that's controlled by parent now)
   useEffect(() => {
     setImageLoaded(false);
   }, [currentIndex, previewSrc]);
 
+  // Smooth zoom with easing - uses requestAnimationFrame for smoother transitions
+  const smoothZoom = useCallback((targetZoom, instant = false) => {
+    const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, targetZoom));
+    const roundedZoom = Math.round(clampedZoom * 100) / 100;
+    setZoomLevel(roundedZoom);
+  }, [setZoomLevel]);
+
+  // Zoom handlers with larger increments for better UX
+  const handleZoomIn = useCallback(() => {
+    smoothZoom(zoomLevel * 1.25); // Multiplicative zoom feels more natural
+  }, [zoomLevel, smoothZoom]);
+
+  const handleZoomOut = useCallback(() => {
+    smoothZoom(zoomLevel / 1.25);
+  }, [zoomLevel, smoothZoom]);
+
+  const handleResetZoom = useCallback(() => {
+    smoothZoom(1);
+    if (containerRef.current) {
+      containerRef.current.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+    }
+  }, [smoothZoom]);
+
+  const handleFitToPanel = useCallback(() => {
+    if (!containerRef.current || !dimensions.width || !dimensions.height) {
+      smoothZoom(1);
+      return;
+    }
+    const container = containerRef.current;
+    const containerWidth = container.clientWidth - 32;
+    const containerHeight = container.clientHeight - 32;
+    const widthRatio = containerWidth / dimensions.width;
+    const heightRatio = containerHeight / dimensions.height;
+    const fitZoom = Math.min(widthRatio, heightRatio, 1);
+    smoothZoom(Math.max(MIN_ZOOM, fitZoom));
+  }, [dimensions, smoothZoom]);
+
+  // Handle slider change
+  const handleSliderChange = useCallback((e) => {
+    smoothZoom(parseFloat(e.target.value));
+  }, [smoothZoom]);
+
+  // Preset zoom levels for quick access
+  const handlePresetZoom = useCallback((preset) => {
+    smoothZoom(preset);
+  }, [smoothZoom]);
+
+  // Smooth mouse wheel zoom - multiplicative for natural feel
+  const handleWheel = useCallback((e) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 0.9 : 1.1; // 10% zoom per scroll
+      smoothZoom(zoomLevel * factor);
+    }
+  }, [zoomLevel, smoothZoom]);
+
+  // Double-click to toggle zoom
+  const handleDoubleClick = useCallback((e) => {
+    e.preventDefault();
+    if (zoomLevel <= 1.1) {
+      // Zoom to 2x centered on click point
+      smoothZoom(2);
+    } else {
+      // Reset to 1x
+      smoothZoom(1);
+      if (containerRef.current) {
+        containerRef.current.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+      }
+    }
+  }, [zoomLevel, smoothZoom]);
+
+  // Mouse pan handlers for dragging when zoomed
+  const handleMouseDown = useCallback((e) => {
+    // Check for double-click
+    const now = Date.now();
+    if (now - lastClickTime.current < 300) {
+      handleDoubleClick(e);
+      lastClickTime.current = 0;
+      return;
+    }
+    lastClickTime.current = now;
+
+    if (zoomLevel > 1 && e.button === 0) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX, y: e.clientY });
+      setScrollStart({ 
+        x: containerRef.current?.scrollLeft || 0, 
+        y: containerRef.current?.scrollTop || 0 
+      });
+      e.preventDefault();
+    }
+  }, [zoomLevel, handleDoubleClick]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (isPanning && containerRef.current) {
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      containerRef.current.scrollLeft = scrollStart.x - dx;
+      containerRef.current.scrollTop = scrollStart.y - dy;
+    }
+  }, [isPanning, panStart, scrollStart]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsPanning(false);
+  }, []);
+
+  // Attach wheel event
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
+
+  // Global mouse up listener for panning
+  useEffect(() => {
+    if (isPanning) {
+      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('mousemove', handleMouseMove);
+      return () => {
+        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('mousemove', handleMouseMove);
+      };
+    }
+  }, [isPanning, handleMouseUp, handleMouseMove]);
+
   const showLoading = isDownscaling || (!imageLoaded && previewSrc && !downscaleError);
   const showError = downscaleError;
   const showPlaceholder = !imageSrc;
+  const zoomPercent = Math.round(zoomLevel * 100);
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col h-full">
-      {/* Header */}
-      <div className="px-4 py-3 bg-gradient-to-r from-blue-50 to-white border-b border-gray-100 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
+    <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
+      {/* Header with navigation */}
+      <div className="px-3 py-2 bg-gradient-to-r from-blue-50/80 to-white border-b border-gray-100 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
           <button
             onClick={onPrevPage}
             disabled={currentIndex === 0}
             className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
-            <ChevronLeft size={20} />
+            <ChevronLeft size={18} />
           </button>
-          <span className="font-semibold text-gray-800 min-w-[100px] text-center">
-            Page {pageNumber} of {totalPages}
+          <span className="font-semibold text-gray-800 text-sm min-w-[80px] text-center">
+            {pageNumber} / {totalPages}
           </span>
           <button
             onClick={onNextPage}
             disabled={currentIndex === totalPages - 1}
             className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
-            <ChevronRight size={20} />
+            <ChevronRight size={18} />
           </button>
         </div>
 
+        {/* Status badge */}
         {isPageProcessed && (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-green-50 text-green-600 text-xs font-medium rounded-full">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-600 text-xs font-medium rounded-full">
             <CheckCircle2 size={12} />
-            Processed
+            Done
           </span>
         )}
       </div>
 
-      {/* Image Container */}
-      <div className="flex-1 p-4 bg-gray-50 flex items-center justify-center overflow-hidden min-h-0 relative">
+      {/* Zoom Toolbar - Enhanced with slider and presets */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-50/80 border-b border-gray-100 shrink-0">
+        <div className="flex items-center gap-1.5">
+          {/* Zoom out button */}
+          <button
+            onClick={handleZoomOut}
+            disabled={zoomLevel <= MIN_ZOOM}
+            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            title="Zoom out (Ctrl+Scroll)"
+          >
+            <Minus size={14} />
+          </button>
+          
+          {/* Zoom slider */}
+          <div className="flex items-center gap-1.5">
+            <input
+              type="range"
+              min={MIN_ZOOM}
+              max={MAX_ZOOM}
+              step={0.01}
+              value={zoomLevel}
+              onChange={handleSliderChange}
+              className="w-24 h-1.5 bg-gray-200 rounded-full appearance-none cursor-pointer accent-blue-600
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 
+                [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer
+                [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-125
+                [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:bg-blue-600 
+                [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer"
+              title="Drag to zoom"
+            />
+          </div>
+          
+          {/* Zoom in button */}
+          <button
+            onClick={handleZoomIn}
+            disabled={zoomLevel >= MAX_ZOOM}
+            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            title="Zoom in (Ctrl+Scroll)"
+          >
+            <Plus size={14} />
+          </button>
+          
+          <div className="w-px h-4 bg-gray-200 mx-0.5" />
+          
+          {/* Zoom presets dropdown-style buttons */}
+          <div className="flex items-center gap-0.5">
+            {[0.5, 1, 1.5, 2].map((preset) => (
+              <button
+                key={preset}
+                onClick={() => handlePresetZoom(preset)}
+                className={`px-1.5 py-0.5 text-xs font-medium rounded transition-all ${
+                  Math.abs(zoomLevel - preset) < 0.05
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-white'
+                }`}
+                title={`Zoom to ${preset * 100}%`}
+              >
+                {preset === 1 ? '1×' : preset < 1 ? `${preset * 100}%` : `${preset}×`}
+              </button>
+            ))}
+          </div>
+          
+          <div className="w-px h-4 bg-gray-200 mx-0.5" />
+          
+          {/* Fit and reset buttons */}
+          <button
+            onClick={handleFitToPanel}
+            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-white transition-all"
+            title="Fit to panel"
+          >
+            <Maximize2 size={14} />
+          </button>
+          <button
+            onClick={handleResetZoom}
+            className="p-1.5 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-white transition-all"
+            title="Reset to 100%"
+          >
+            <RotateCcw size={14} />
+          </button>
+        </div>
+        
+        {/* Pan hint when zoomed + zoom percentage */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-gray-600 bg-white px-2 py-1 rounded border border-gray-200 min-w-[50px] text-center">
+            {zoomPercent}%
+          </span>
+          {zoomLevel > 1 && (
+            <div className="flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full">
+              <Move size={12} />
+              <span>Drag / Double-click</span>
+            </div>
+          )}
+          {zoomLevel <= 1 && (
+            <div className="text-xs text-gray-400">
+              Double-click to zoom
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Image Container with zoom and pan support */}
+      <div
+        ref={containerRef}
+        className={`flex-1 overflow-auto bg-gradient-to-br from-gray-100 to-gray-50 min-h-0 relative ${
+          zoomLevel > 1 ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-zoom-in'
+        }`}
+        onMouseDown={handleMouseDown}
+      >
         {/* Loading skeleton */}
         {showLoading && (
-          <div className="absolute inset-4 bg-gray-200 rounded-lg animate-pulse flex items-center justify-center">
+          <div className="absolute inset-0 bg-gray-50 flex items-center justify-center z-10">
             <div className="text-center text-gray-400">
-              <Loader2 size={32} className="animate-spin mx-auto mb-2" />
-              <p className="text-sm">{isDownscaling ? 'Preparing preview...' : 'Loading preview...'}</p>
+              <Loader2 size={24} className="animate-spin mx-auto mb-2" />
+              <p className="text-xs">{isDownscaling ? 'Preparing...' : 'Loading...'}</p>
             </div>
           </div>
         )}
 
         {/* Error state */}
         {showError && (
-          <div className="text-center text-gray-400">
-            <ImageIcon size={48} className="mx-auto mb-2 opacity-50" />
-            <p className="text-sm">Failed to load image</p>
-            <p className="text-xs mt-1">Image may be too large or corrupted</p>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center text-gray-400">
+              <ImageIcon size={32} className="mx-auto mb-2 opacity-50" />
+              <p className="text-sm">Failed to load image</p>
+            </div>
           </div>
         )}
 
         {/* No image placeholder */}
         {showPlaceholder && (
-          <div className="text-center text-gray-400">
-            <ImageIcon size={48} className="mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No image selected</p>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center text-gray-400">
+              <ImageIcon size={32} className="mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No image selected</p>
+            </div>
           </div>
         )}
 
-        {/* Image - use downscaled preview */}
+        {/* Zoomable Image - optimized for smooth zoom with high quality rendering */}
         {previewSrc && !showError && (
-          <img
-            src={previewSrc}
-            alt={`Page ${pageNumber}`}
-            className={`max-w-full max-h-full object-contain rounded-lg shadow-md transition-opacity duration-300 ${
-              imageLoaded ? 'opacity-100' : 'opacity-0'
-            }`}
-            onLoad={() => setImageLoaded(true)}
-            onError={() => {}}
-          />
+          <div 
+            className="min-w-full min-h-full flex items-center justify-center p-4"
+            style={{
+              // Scale container to provide scroll area when zoomed
+              width: zoomLevel > 1 ? `${100 * zoomLevel}%` : '100%',
+              height: zoomLevel > 1 ? `${100 * zoomLevel}%` : '100%',
+            }}
+          >
+            <img
+              ref={imageRef}
+              src={previewSrc}
+              alt={`Page ${pageNumber}`}
+              className={`rounded-lg shadow-xl select-none ${
+                imageLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+              onLoad={() => setImageLoaded(true)}
+              draggable={false}
+              style={{
+                transform: `scale(${zoomLevel})`,
+                transformOrigin: 'center center',
+                // Faster transition for more responsive feel
+                transition: isPanning ? 'none' : 'transform 0.1s ease-out, opacity 0.2s ease-out',
+                maxWidth: zoomLevel <= 1 ? '100%' : 'none',
+                maxHeight: zoomLevel <= 1 ? '100%' : 'none',
+                objectFit: 'contain',
+                // Performance optimizations
+                willChange: 'transform',
+                // High quality image rendering
+                imageRendering: zoomLevel > 1.5 ? 'auto' : 'auto',
+                // Prevent blurry text during transforms
+                backfaceVisibility: 'hidden',
+                WebkitBackfaceVisibility: 'hidden',
+              }}
+            />
+          </div>
         )}
 
         {/* Processing overlay */}
         {isProcessing && (
-          <div className="absolute inset-4 bg-blue-500/10 backdrop-blur-sm rounded-lg flex items-center justify-center">
-            <div className="bg-white rounded-xl shadow-lg px-6 py-4 text-center">
-              <Loader2 size={32} className="animate-spin text-blue-600 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-700">Processing with Gemini...</p>
+          <div className="absolute inset-0 bg-blue-500/10 backdrop-blur-sm flex items-center justify-center z-20">
+            <div className="bg-white rounded-xl shadow-lg px-5 py-3 text-center">
+              <Loader2 size={28} className="animate-spin text-blue-600 mx-auto mb-2" />
+              <p className="text-sm font-medium text-gray-700">Processing...</p>
             </div>
           </div>
         )}
       </div>
 
-      {/* Process Controls */}
-      <div className="px-4 py-3 border-t border-gray-100 bg-white shrink-0">
-        <div className="flex items-center gap-3">
+      {/* Process Controls - Compact */}
+      <div className="px-3 py-2 border-t border-gray-100 bg-white shrink-0">
+        <div className="flex items-center gap-2">
           {/* Main Process Button */}
           <button
             onClick={onProcess}
             disabled={!canProcess || isProcessing || isPageProcessed}
             className={`
-              flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-semibold 
+              flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm
               transition-all duration-200
               ${!canProcess || isProcessing || isPageProcessed
                 ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow-md active:scale-[0.98]'
+                : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-sm hover:shadow-md active:scale-[0.98]'
               }
             `}
           >
             {isProcessing ? (
               <>
-                <Loader2 size={20} className="animate-spin" />
+                <Loader2 size={18} className="animate-spin" />
                 Processing...
               </>
             ) : isPageProcessed ? (
               <>
-                <CheckCircle2 size={20} />
-                Already Processed
+                <CheckCircle2 size={18} />
+                Processed
               </>
             ) : (
               <>
-                <Play size={20} />
+                <Play size={18} />
                 Process Page
               </>
             )}
@@ -269,7 +564,7 @@ export default function PagePreview({
             disabled={!canProcess}
             title={isAutoProcessing ? 'Stop auto-processing' : 'Auto-process all pages'}
             className={`
-              px-4 py-3 rounded-xl font-medium transition-all duration-200
+              px-3 py-2.5 rounded-lg font-medium transition-all duration-200
               ${isAutoProcessing
                 ? 'bg-amber-500 text-white hover:bg-amber-600'
                 : !canProcess
@@ -278,20 +573,20 @@ export default function PagePreview({
               }
             `}
           >
-            {isAutoProcessing ? <Pause size={20} /> : <Zap size={20} />}
+            {isAutoProcessing ? <Pause size={18} /> : <Zap size={18} />}
           </button>
         </div>
 
         {/* Rate limit / Error message */}
         {(error || !rateLimitReady) && (
           <div
-            className={`mt-3 px-3 py-2 rounded-lg text-sm flex items-center gap-2 ${
+            className={`mt-2 px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 ${
               !rateLimitReady
                 ? 'bg-amber-50 text-amber-700 border border-amber-100'
                 : 'bg-red-50 text-red-700 border border-red-100'
             }`}
           >
-            <AlertCircle size={16} />
+            <AlertCircle size={14} />
             {!rateLimitReady ? `Rate limited. Wait ${waitSeconds}s...` : error}
           </div>
         )}
