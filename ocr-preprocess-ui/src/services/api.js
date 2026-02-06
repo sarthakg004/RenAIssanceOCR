@@ -82,7 +82,7 @@ export async function preprocessImage(imageUrl, pipeline) {
   console.log('Mock API: preprocessImage called', { imageUrl, pipeline });
 
   // Simulate processing delay
-  await randomDelay(500, 1200);
+  await randomDelay(300, 800);
 
   // Load the image
   const img = new Image();
@@ -109,7 +109,32 @@ export async function preprocessImage(imageUrl, pipeline) {
 
   // Apply operations based on pipeline
   for (const step of pipeline) {
+    console.log('Applying operation:', step.op, step.params);
+    
     switch (step.op) {
+      case 'normalize': {
+        // Normalize: stretch histogram to full range
+        const strength = (step.params?.strength || 50) / 100;
+        
+        // Find min and max values
+        let minVal = 255, maxVal = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          minVal = Math.min(minVal, gray);
+          maxVal = Math.max(maxVal, gray);
+        }
+        
+        // Apply normalization with strength
+        const range = maxVal - minVal || 1;
+        for (let i = 0; i < data.length; i += 4) {
+          for (let c = 0; c < 3; c++) {
+            const normalized = ((data[i + c] - minVal) / range) * 255;
+            data[i + c] = Math.round(data[i + c] * (1 - strength) + normalized * strength);
+          }
+        }
+        break;
+      }
+
       case 'grayscale':
         // Convert to grayscale
         for (let i = 0; i < data.length; i += 4) {
@@ -120,8 +145,8 @@ export async function preprocessImage(imageUrl, pipeline) {
         }
         break;
 
-      case 'contrast':
-        // Enhance contrast (simplified CLAHE simulation)
+      case 'contrast': {
+        // Enhance contrast (CLAHE simulation)
         const clipLimit = step.params?.clipLimit || 2;
         const factor = (259 * (clipLimit * 50 + 255)) / (255 * (259 - clipLimit * 50));
         for (let i = 0; i < data.length; i += 4) {
@@ -130,19 +155,58 @@ export async function preprocessImage(imageUrl, pipeline) {
           data[i + 2] = Math.min(255, Math.max(0, factor * (data[i + 2] - 128) + 128));
         }
         break;
+      }
 
-      case 'binarize':
-        // Simple threshold binarization
+      case 'sharpen': {
+        // Unsharp mask sharpening
+        const amount = (step.params?.amount || 50) / 100;
+        const radius = step.params?.radius || 1;
+        
+        // Create a blurred version
+        const tempData = new Uint8ClampedArray(data);
+        const blurRadius = Math.max(1, Math.floor(radius));
+        
+        for (let y = blurRadius; y < canvas.height - blurRadius; y++) {
+          for (let x = blurRadius; x < canvas.width - blurRadius; x++) {
+            let r = 0, g = 0, b = 0, count = 0;
+            for (let dy = -blurRadius; dy <= blurRadius; dy++) {
+              for (let dx = -blurRadius; dx <= blurRadius; dx++) {
+                const idx = ((y + dy) * canvas.width + (x + dx)) * 4;
+                r += data[idx];
+                g += data[idx + 1];
+                b += data[idx + 2];
+                count++;
+              }
+            }
+            const idx = (y * canvas.width + x) * 4;
+            // Apply unsharp mask: original + amount * (original - blurred)
+            const blurR = r / count;
+            const blurG = g / count;
+            const blurB = b / count;
+            tempData[idx] = Math.min(255, Math.max(0, data[idx] + amount * (data[idx] - blurR)));
+            tempData[idx + 1] = Math.min(255, Math.max(0, data[idx + 1] + amount * (data[idx + 1] - blurG)));
+            tempData[idx + 2] = Math.min(255, Math.max(0, data[idx + 2] + amount * (data[idx + 2] - blurB)));
+          }
+        }
+        
+        // Copy back
+        for (let i = 0; i < data.length; i++) {
+          data[i] = tempData[i];
+        }
+        break;
+      }
+
+      case 'threshold':
+      case 'binarize': {
+        // Thresholding / Binarization
         const method = step.params?.method || 'otsu';
         let threshold = 128;
 
         if (method === 'otsu') {
-          // Simplified Otsu's method
+          // Otsu's method for automatic threshold
           const histogram = new Array(256).fill(0);
           for (let i = 0; i < data.length; i += 4) {
-            const gray = Math.round(
-              data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114
-            );
+            const gray = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
             histogram[gray]++;
           }
 
@@ -150,10 +214,7 @@ export async function preprocessImage(imageUrl, pipeline) {
           let sum = 0;
           for (let i = 0; i < 256; i++) sum += i * histogram[i];
 
-          let sumB = 0;
-          let wB = 0;
-          let maximum = 0;
-
+          let sumB = 0, wB = 0, maximum = 0;
           for (let i = 0; i < 256; i++) {
             wB += histogram[i];
             if (wB === 0) continue;
@@ -170,8 +231,55 @@ export async function preprocessImage(imageUrl, pipeline) {
               threshold = i;
             }
           }
+        } else if (method === 'adaptive' || method === 'sauvola') {
+          // Adaptive thresholding
+          const blockSize = step.params?.blockSize || 15;
+          const k = step.params?.k || 0.5;
+          const halfBlock = Math.floor(blockSize / 2);
+          const tempData = new Uint8ClampedArray(data);
+          
+          for (let y = 0; y < canvas.height; y++) {
+            for (let x = 0; x < canvas.width; x++) {
+              let sum = 0, sumSq = 0, count = 0;
+              
+              for (let dy = -halfBlock; dy <= halfBlock; dy++) {
+                for (let dx = -halfBlock; dx <= halfBlock; dx++) {
+                  const ny = Math.max(0, Math.min(canvas.height - 1, y + dy));
+                  const nx = Math.max(0, Math.min(canvas.width - 1, x + dx));
+                  const idx = (ny * canvas.width + nx) * 4;
+                  const gray = tempData[idx] * 0.299 + tempData[idx + 1] * 0.587 + tempData[idx + 2] * 0.114;
+                  sum += gray;
+                  sumSq += gray * gray;
+                  count++;
+                }
+              }
+              
+              const mean = sum / count;
+              const variance = (sumSq / count) - (mean * mean);
+              const std = Math.sqrt(Math.max(0, variance));
+              
+              let localThreshold;
+              if (method === 'sauvola') {
+                // Sauvola's method
+                localThreshold = mean * (1 + k * (std / 128 - 1));
+              } else {
+                // Simple adaptive
+                localThreshold = mean - 5;
+              }
+              
+              const idx = (y * canvas.width + x) * 4;
+              const gray = tempData[idx] * 0.299 + tempData[idx + 1] * 0.587 + tempData[idx + 2] * 0.114;
+              const binary = gray > localThreshold ? 255 : 0;
+              data[idx] = binary;
+              data[idx + 1] = binary;
+              data[idx + 2] = binary;
+            }
+          }
+          // Skip the global threshold application below
+          continue;
         }
 
+        // Apply global threshold
         for (let i = 0; i < data.length; i += 4) {
           const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
           const binary = gray > threshold ? 255 : 0;
@@ -180,11 +288,12 @@ export async function preprocessImage(imageUrl, pipeline) {
           data[i + 2] = binary;
         }
         break;
+      }
 
-      case 'denoise':
-        // Simple blur for noise reduction (simplified bilateral)
+      case 'denoise': {
+        // Noise reduction
         const strength = step.params?.strength || 10;
-        const radius = Math.floor(strength / 3);
+        const radius = Math.max(1, Math.floor(strength / 4));
         const tempData = new Uint8ClampedArray(data);
 
         for (let y = radius; y < canvas.height - radius; y++) {
@@ -208,9 +317,10 @@ export async function preprocessImage(imageUrl, pipeline) {
           }
         }
         break;
+      }
 
-      case 'deskew':
-        // For demo purposes, apply a slight rotation correction
+      case 'deskew': {
+        // Deskew: apply a rotation correction
         ctx.putImageData(imageData, 0, 0);
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = canvas.width;
@@ -220,8 +330,9 @@ export async function preprocessImage(imageUrl, pipeline) {
         tempCtx.fillStyle = '#fff';
         tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
-        // Simulate small rotation correction
-        const angle = (Math.random() - 0.5) * 0.02; // ±0.01 radians
+        // Simulate small rotation correction (in real app, would detect actual skew)
+        const maxAngle = step.params?.maxAngle || 15;
+        const angle = (Math.random() - 0.5) * 0.02; // Small random correction for demo
         tempCtx.translate(canvas.width / 2, canvas.height / 2);
         tempCtx.rotate(angle);
         tempCtx.translate(-canvas.width / 2, -canvas.height / 2);
@@ -231,51 +342,7 @@ export async function preprocessImage(imageUrl, pipeline) {
         imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         data = imageData.data;
         break;
-
-      case 'morph':
-        // Simplified morphological operation
-        const operation = step.params?.operation || 'open';
-        const kernelSize = step.params?.kernelSize || 2;
-
-        // This is a very simplified version - real implementation would be more complex
-        if (operation === 'dilate' || operation === 'close') {
-          // Dilate: expand white regions
-          const tempData2 = new Uint8ClampedArray(data);
-          for (let y = kernelSize; y < canvas.height - kernelSize; y++) {
-            for (let x = kernelSize; x < canvas.width - kernelSize; x++) {
-              let maxVal = 0;
-              for (let dy = -kernelSize; dy <= kernelSize; dy++) {
-                for (let dx = -kernelSize; dx <= kernelSize; dx++) {
-                  const idx = ((y + dy) * canvas.width + (x + dx)) * 4;
-                  maxVal = Math.max(maxVal, tempData2[idx]);
-                }
-              }
-              const idx = (y * canvas.width + x) * 4;
-              data[idx] = maxVal;
-              data[idx + 1] = maxVal;
-              data[idx + 2] = maxVal;
-            }
-          }
-        } else if (operation === 'erode' || operation === 'open') {
-          // Erode: shrink white regions
-          const tempData3 = new Uint8ClampedArray(data);
-          for (let y = kernelSize; y < canvas.height - kernelSize; y++) {
-            for (let x = kernelSize; x < canvas.width - kernelSize; x++) {
-              let minVal = 255;
-              for (let dy = -kernelSize; dy <= kernelSize; dy++) {
-                for (let dx = -kernelSize; dx <= kernelSize; dx++) {
-                  const idx = ((y + dy) * canvas.width + (x + dx)) * 4;
-                  minVal = Math.min(minVal, tempData3[idx]);
-                }
-              }
-              const idx = (y * canvas.width + x) * 4;
-              data[idx] = minVal;
-              data[idx + 1] = minVal;
-              data[idx + 2] = minVal;
-            }
-          }
-        }
-        break;
+      }
 
       default:
         console.log('Unknown operation:', step.op);
@@ -284,10 +351,6 @@ export async function preprocessImage(imageUrl, pipeline) {
 
   // Put processed data back
   ctx.putImageData(imageData, 0, 0);
-
-  // Add visual indicator that image was processed
-  ctx.fillStyle = 'rgba(37, 99, 235, 0.1)';
-  ctx.fillRect(0, 0, 5, canvas.height);
 
   return canvas.toDataURL('image/png');
 }
@@ -323,20 +386,22 @@ export function getPresets() {
       name: 'Recommended',
       description: 'Best for most documents',
       pipeline: [
+        { op: 'grayscale', params: {} },
         { op: 'deskew', params: {} },
         { op: 'denoise', params: { method: 'nlm', strength: 10 } },
-        { op: 'contrast', params: { method: 'clahe', clipLimit: 2, tileSize: 8 } },
-        { op: 'binarize', params: { method: 'adaptive', blockSize: 15 } },
+        { op: 'contrast', params: { clipLimit: 2, tileSize: 8 } },
+        { op: 'threshold', params: { method: 'otsu' } },
       ],
     },
     handwritten: {
       name: 'Handwritten',
       description: 'Optimized for handwritten documents',
       pipeline: [
+        { op: 'grayscale', params: {} },
         { op: 'deskew', params: {} },
         { op: 'denoise', params: { method: 'bilateral', strength: 15 } },
-        { op: 'contrast', params: { method: 'clahe', clipLimit: 3, tileSize: 8 } },
-        { op: 'binarize', params: { method: 'adaptive', blockSize: 21 } },
+        { op: 'contrast', params: { clipLimit: 3, tileSize: 8 } },
+        { op: 'threshold', params: { method: 'adaptive', blockSize: 21 } },
       ],
     },
     printed: {
@@ -345,18 +410,7 @@ export function getPresets() {
       pipeline: [
         { op: 'grayscale', params: {} },
         { op: 'denoise', params: { method: 'nlm', strength: 5 } },
-        { op: 'binarize', params: { method: 'otsu' } },
-      ],
-    },
-    historical: {
-      name: 'Historical Documents',
-      description: 'For aged or degraded documents',
-      pipeline: [
-        { op: 'deskew', params: {} },
-        { op: 'denoise', params: { method: 'nlm', strength: 15 } },
-        { op: 'contrast', params: { method: 'clahe', clipLimit: 4, tileSize: 16 } },
-        { op: 'binarize', params: { method: 'adaptive', blockSize: 25 } },
-        { op: 'morph', params: { operation: 'close', kernelSize: 2, iterations: 1 } },
+        { op: 'threshold', params: { method: 'otsu' } },
       ],
     },
   };
