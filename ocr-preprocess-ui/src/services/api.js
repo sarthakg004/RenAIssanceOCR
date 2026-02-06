@@ -1,14 +1,13 @@
 /**
- * Mock API service for OCR preprocessing
- * Simulates backend responses with realistic delays
+ * API service for OCR preprocessing
+ * Calls backend Python OpenCV-based preprocessing
  */
 
-// Simulate network delay
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Backend API base URL
+const API_BASE = 'http://localhost:8000';
 
-// Random delay between min and max ms
-const randomDelay = (min = 300, max = 800) =>
-  delay(Math.random() * (max - min) + min);
+// Simulate network delay (for mock functions only)
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Convert PDF to images (mock)
@@ -75,300 +74,168 @@ export async function pdfToImages(pdfFile, options = {}) {
 }
 
 /**
- * Preprocess an image (mock)
- * Applies visual transformations to simulate preprocessing
+ * Preprocess an image using backend OpenCV pipeline
+ * Sends image to Python backend for processing
  */
 export async function preprocessImage(imageUrl, pipeline) {
-  console.log('Mock API: preprocessImage called', { imageUrl, pipeline });
+  console.log('API: preprocessImage called', { imageUrl: imageUrl?.substring(0, 50), pipeline });
 
-  // Simulate processing delay
-  await randomDelay(300, 800);
+  try {
+    // Convert pipeline format to backend format
+    const operations = pipeline.map(step => ({
+      op: step.op,
+      params: step.params || {},
+      enabled: true,
+    }));
 
-  // Load the image
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
+    const response = await fetch(`${API_BASE}/api/preprocess`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        image_data: imageUrl,
+        operations: operations,
+        preview_mode: false,
+      }),
+    });
 
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-    img.src = imageUrl;
-  });
-
-  // Create canvas for processing
-  const canvas = document.createElement('canvas');
-  canvas.width = img.width;
-  canvas.height = img.height;
-  const ctx = canvas.getContext('2d');
-
-  // Draw original image
-  ctx.drawImage(img, 0, 0);
-
-  // Get image data for manipulation
-  let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  let data = imageData.data;
-
-  // Apply operations based on pipeline
-  for (const step of pipeline) {
-    console.log('Applying operation:', step.op, step.params);
-    
-    switch (step.op) {
-      case 'normalize': {
-        // Normalize: stretch histogram to full range
-        const strength = (step.params?.strength || 50) / 100;
-        
-        // Find min and max values
-        let minVal = 255, maxVal = 0;
-        for (let i = 0; i < data.length; i += 4) {
-          const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          minVal = Math.min(minVal, gray);
-          maxVal = Math.max(maxVal, gray);
-        }
-        
-        // Apply normalization with strength
-        const range = maxVal - minVal || 1;
-        for (let i = 0; i < data.length; i += 4) {
-          for (let c = 0; c < 3; c++) {
-            const normalized = ((data[i + c] - minVal) / range) * 255;
-            data[i + c] = Math.round(data[i + c] * (1 - strength) + normalized * strength);
-          }
-        }
-        break;
-      }
-
-      case 'grayscale':
-        // Convert to grayscale
-        for (let i = 0; i < data.length; i += 4) {
-          const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-          data[i] = gray;
-          data[i + 1] = gray;
-          data[i + 2] = gray;
-        }
-        break;
-
-      case 'contrast': {
-        // Enhance contrast (CLAHE simulation)
-        const clipLimit = step.params?.clipLimit || 2;
-        const factor = (259 * (clipLimit * 50 + 255)) / (255 * (259 - clipLimit * 50));
-        for (let i = 0; i < data.length; i += 4) {
-          data[i] = Math.min(255, Math.max(0, factor * (data[i] - 128) + 128));
-          data[i + 1] = Math.min(255, Math.max(0, factor * (data[i + 1] - 128) + 128));
-          data[i + 2] = Math.min(255, Math.max(0, factor * (data[i + 2] - 128) + 128));
-        }
-        break;
-      }
-
-      case 'sharpen': {
-        // Unsharp mask sharpening
-        const amount = (step.params?.amount || 50) / 100;
-        const radius = step.params?.radius || 1;
-        
-        // Create a blurred version
-        const tempData = new Uint8ClampedArray(data);
-        const blurRadius = Math.max(1, Math.floor(radius));
-        
-        for (let y = blurRadius; y < canvas.height - blurRadius; y++) {
-          for (let x = blurRadius; x < canvas.width - blurRadius; x++) {
-            let r = 0, g = 0, b = 0, count = 0;
-            for (let dy = -blurRadius; dy <= blurRadius; dy++) {
-              for (let dx = -blurRadius; dx <= blurRadius; dx++) {
-                const idx = ((y + dy) * canvas.width + (x + dx)) * 4;
-                r += data[idx];
-                g += data[idx + 1];
-                b += data[idx + 2];
-                count++;
-              }
-            }
-            const idx = (y * canvas.width + x) * 4;
-            // Apply unsharp mask: original + amount * (original - blurred)
-            const blurR = r / count;
-            const blurG = g / count;
-            const blurB = b / count;
-            tempData[idx] = Math.min(255, Math.max(0, data[idx] + amount * (data[idx] - blurR)));
-            tempData[idx + 1] = Math.min(255, Math.max(0, data[idx + 1] + amount * (data[idx + 1] - blurG)));
-            tempData[idx + 2] = Math.min(255, Math.max(0, data[idx + 2] + amount * (data[idx + 2] - blurB)));
-          }
-        }
-        
-        // Copy back
-        for (let i = 0; i < data.length; i++) {
-          data[i] = tempData[i];
-        }
-        break;
-      }
-
-      case 'threshold':
-      case 'binarize': {
-        // Thresholding / Binarization
-        const method = step.params?.method || 'otsu';
-        let threshold = 128;
-
-        if (method === 'otsu') {
-          // Otsu's method for automatic threshold
-          const histogram = new Array(256).fill(0);
-          for (let i = 0; i < data.length; i += 4) {
-            const gray = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
-            histogram[gray]++;
-          }
-
-          const total = data.length / 4;
-          let sum = 0;
-          for (let i = 0; i < 256; i++) sum += i * histogram[i];
-
-          let sumB = 0, wB = 0, maximum = 0;
-          for (let i = 0; i < 256; i++) {
-            wB += histogram[i];
-            if (wB === 0) continue;
-            const wF = total - wB;
-            if (wF === 0) break;
-
-            sumB += i * histogram[i];
-            const mB = sumB / wB;
-            const mF = (sum - sumB) / wF;
-            const between = wB * wF * (mB - mF) * (mB - mF);
-
-            if (between > maximum) {
-              maximum = between;
-              threshold = i;
-            }
-          }
-        } else if (method === 'adaptive' || method === 'sauvola') {
-          // Adaptive thresholding
-          const blockSize = step.params?.blockSize || 15;
-          const k = step.params?.k || 0.5;
-          const halfBlock = Math.floor(blockSize / 2);
-          const tempData = new Uint8ClampedArray(data);
-          
-          for (let y = 0; y < canvas.height; y++) {
-            for (let x = 0; x < canvas.width; x++) {
-              let sum = 0, sumSq = 0, count = 0;
-              
-              for (let dy = -halfBlock; dy <= halfBlock; dy++) {
-                for (let dx = -halfBlock; dx <= halfBlock; dx++) {
-                  const ny = Math.max(0, Math.min(canvas.height - 1, y + dy));
-                  const nx = Math.max(0, Math.min(canvas.width - 1, x + dx));
-                  const idx = (ny * canvas.width + nx) * 4;
-                  const gray = tempData[idx] * 0.299 + tempData[idx + 1] * 0.587 + tempData[idx + 2] * 0.114;
-                  sum += gray;
-                  sumSq += gray * gray;
-                  count++;
-                }
-              }
-              
-              const mean = sum / count;
-              const variance = (sumSq / count) - (mean * mean);
-              const std = Math.sqrt(Math.max(0, variance));
-              
-              let localThreshold;
-              if (method === 'sauvola') {
-                // Sauvola's method
-                localThreshold = mean * (1 + k * (std / 128 - 1));
-              } else {
-                // Simple adaptive
-                localThreshold = mean - 5;
-              }
-              
-              const idx = (y * canvas.width + x) * 4;
-              const gray = tempData[idx] * 0.299 + tempData[idx + 1] * 0.587 + tempData[idx + 2] * 0.114;
-              const binary = gray > localThreshold ? 255 : 0;
-              data[idx] = binary;
-              data[idx + 1] = binary;
-              data[idx + 2] = binary;
-            }
-          }
-          // Skip the global threshold application below
-          continue;
-        }
-
-        // Apply global threshold
-        for (let i = 0; i < data.length; i += 4) {
-          const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-          const binary = gray > threshold ? 255 : 0;
-          data[i] = binary;
-          data[i + 1] = binary;
-          data[i + 2] = binary;
-        }
-        break;
-      }
-
-      case 'denoise': {
-        // Noise reduction
-        const strength = step.params?.strength || 10;
-        const radius = Math.max(1, Math.floor(strength / 4));
-        const tempData = new Uint8ClampedArray(data);
-
-        for (let y = radius; y < canvas.height - radius; y++) {
-          for (let x = radius; x < canvas.width - radius; x++) {
-            let r = 0, g = 0, b = 0, count = 0;
-
-            for (let dy = -radius; dy <= radius; dy++) {
-              for (let dx = -radius; dx <= radius; dx++) {
-                const idx = ((y + dy) * canvas.width + (x + dx)) * 4;
-                r += tempData[idx];
-                g += tempData[idx + 1];
-                b += tempData[idx + 2];
-                count++;
-              }
-            }
-
-            const idx = (y * canvas.width + x) * 4;
-            data[idx] = r / count;
-            data[idx + 1] = g / count;
-            data[idx + 2] = b / count;
-          }
-        }
-        break;
-      }
-
-      case 'deskew': {
-        // Deskew: apply a rotation correction
-        ctx.putImageData(imageData, 0, 0);
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        const tempCtx = tempCanvas.getContext('2d');
-
-        tempCtx.fillStyle = '#fff';
-        tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-
-        // Simulate small rotation correction (in real app, would detect actual skew)
-        const maxAngle = step.params?.maxAngle || 15;
-        const angle = (Math.random() - 0.5) * 0.02; // Small random correction for demo
-        tempCtx.translate(canvas.width / 2, canvas.height / 2);
-        tempCtx.rotate(angle);
-        tempCtx.translate(-canvas.width / 2, -canvas.height / 2);
-        tempCtx.drawImage(canvas, 0, 0);
-
-        ctx.drawImage(tempCanvas, 0, 0);
-        imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        data = imageData.data;
-        break;
-      }
-
-      default:
-        console.log('Unknown operation:', step.op);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(error.detail?.message || error.detail || 'Preprocessing failed');
     }
+
+    const result = await response.json();
+
+    if (!result.success) {
+      console.warn('Preprocessing had errors:', result.errors);
+    }
+
+    // Return the processed image data URL
+    return result.processed_image || imageUrl;
+
+  } catch (error) {
+    console.error('Preprocessing API error:', error);
+    // Return original image on error
+    return imageUrl;
   }
-
-  // Put processed data back
-  ctx.putImageData(imageData, 0, 0);
-
-  return canvas.toDataURL('image/png');
 }
 
 /**
- * Process multiple pages (mock batch)
+ * Preprocess an image with progress callback
+ * For UI progress display during processing
  */
-export async function preprocessBatch(images, pipeline) {
-  console.log('Mock API: preprocessBatch called', { imageCount: images.length });
+export async function preprocessImageWithProgress(imageUrl, pipeline, onProgress) {
+  console.log('API: preprocessImageWithProgress called', { pipeline });
+
+  try {
+    // Notify starting
+    if (onProgress) {
+      onProgress({ step: 'starting', percent: 0, message: 'Starting preprocessing...' });
+    }
+
+    // Convert pipeline format
+    const operations = pipeline.map(step => ({
+      op: step.op,
+      params: step.params || {},
+      enabled: true,
+    }));
+
+    // Simulate initial progress
+    if (onProgress) {
+      onProgress({ step: 'uploading', percent: 10, message: 'Sending to backend...' });
+    }
+
+    const response = await fetch(`${API_BASE}/api/preprocess`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        image_data: imageUrl,
+        operations: operations,
+        preview_mode: false,
+      }),
+    });
+
+    if (onProgress) {
+      onProgress({ step: 'processing', percent: 50, message: 'Processing image...' });
+    }
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(error.detail?.message || error.detail || 'Preprocessing failed');
+    }
+
+    const result = await response.json();
+
+    if (onProgress) {
+      onProgress({ step: 'complete', percent: 100, message: 'Complete' });
+    }
+
+    return {
+      success: result.success,
+      processedImage: result.processed_image || imageUrl,
+      progressInfo: result.progress_info,
+      errors: result.errors,
+    };
+
+  } catch (error) {
+    console.error('Preprocessing API error:', error);
+    if (onProgress) {
+      onProgress({ step: 'error', percent: 0, message: error.message });
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get available preprocessing operations from backend
+ */
+export async function getAvailableOperations() {
+  try {
+    const response = await fetch(`${API_BASE}/api/preprocess/operations`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch operations');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to fetch operations:', error);
+    // Return default list on error
+    return {
+      operations: ['normalize', 'grayscale', 'deskew', 'denoise', 'contrast', 'sharpen', 'threshold'],
+    };
+  }
+}
+
+/**
+ * Process multiple pages (batch preprocessing)
+ */
+export async function preprocessBatch(images, pipeline, onProgress) {
+  console.log('API: preprocessBatch called', { imageCount: images.length });
 
   const results = [];
 
-  for (const image of images) {
+  for (let i = 0; i < images.length; i++) {
+    const image = images[i];
+    
+    if (onProgress) {
+      onProgress({
+        step: `page_${image.pageNumber}`,
+        percent: (i / images.length) * 100,
+        message: `Processing page ${image.pageNumber}...`,
+      });
+    }
+
     const processed = await preprocessImage(image.thumbnail, pipeline);
     results.push({
       pageNumber: image.pageNumber,
       processed,
     });
+  }
+
+  if (onProgress) {
+    onProgress({ step: 'complete', percent: 100, message: 'Batch complete' });
   }
 
   return {

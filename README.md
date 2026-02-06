@@ -27,7 +27,12 @@ A modern web application for preprocessing historical documents and extracting t
 RenAIssance/
 ├── backend/                    # FastAPI backend server
 │   ├── main.py                 # API endpoints & Gemini OCR
-│   └── requirements.txt        # Python dependencies
+│   ├── requirements.txt        # Python dependencies
+│   └── preprocessing/          # OpenCV preprocessing module
+│       ├── __init__.py         # Module exports
+│       ├── operations.py       # Preprocessing operations (OpenCV)
+│       ├── pipeline.py         # Pipeline executor
+│       └── progress.py         # Progress tracking utilities
 │
 ├── ocr-preprocess-ui/          # React frontend application
 │   ├── src/
@@ -52,7 +57,7 @@ RenAIssance/
 │   │   │   └── TextRecognitionPage.jsx # Step 5: OCR & export
 │   │   │
 │   │   ├── services/           # API services
-│   │   │   ├── api.js               # Mock preprocessing API
+│   │   │   ├── api.js               # Preprocessing API (calls backend)
 │   │   │   └── geminiApi.js         # Gemini OCR API client
 │   │   │
 │   │   ├── hooks/              # Custom React hooks
@@ -200,9 +205,133 @@ Navigate to **http://localhost:5173** to use the application.
 | `/api/rate-limit-status` | GET | Check rate limit status |
 | `/api/validate-key` | POST | Validate Gemini API key |
 | `/api/gemini-ocr-base64` | POST | Process image with OCR |
+| `/api/preprocess` | POST | Apply preprocessing pipeline |
+| `/api/preprocess/operations` | GET | List available operations |
+| `/api/preprocess/validate` | POST | Validate pipeline config |
 | `/api/export/txt` | POST | Export as plain text |
 | `/api/export/docx` | POST | Export as Word document |
 | `/api/export/pdf` | POST | Export as PDF |
+
+## 🔄 Preprocessing System
+
+Preprocessing is now fully backend-powered using Python OpenCV. The UI remains unchanged, but all image processing operations are executed on the server for consistent, high-quality results.
+
+### Available Operations
+
+| Operation | Description | Parameters |
+|-----------|-------------|------------|
+| `normalize` | Normalize brightness/contrast levels | `strength` (0-100) |
+| `grayscale` | Convert to grayscale | - |
+| `deskew` | Auto-correct image rotation | `maxAngle` (1-45°) |
+| `denoise` | Remove noise, preserve text | `method` (nlm/bilateral/gaussian), `strength` (1-20) |
+| `contrast` | CLAHE contrast enhancement | `clipLimit` (1-10), `tileSize` (2-16) |
+| `sharpen` | Sharpen text edges | `amount` (0-100%), `radius` (0.5-3px) |
+| `threshold` | Binarization | `method` (otsu/adaptive/sauvola), `blockSize`, `k` |
+
+### Pipeline Configuration Format
+
+```json
+{
+  "image_data": "data:image/png;base64,...",
+  "operations": [
+    {"op": "grayscale", "params": {}, "enabled": true},
+    {"op": "deskew", "params": {"maxAngle": 15}, "enabled": true},
+    {"op": "denoise", "params": {"method": "nlm", "strength": 10}, "enabled": true},
+    {"op": "contrast", "params": {"clipLimit": 2, "tileSize": 8}, "enabled": true},
+    {"op": "threshold", "params": {"method": "otsu"}, "enabled": true}
+  ],
+  "preview_mode": false
+}
+```
+
+### Progress Reporting
+
+The preprocessing endpoint returns detailed progress information:
+
+```json
+{
+  "success": true,
+  "processed_image": "data:image/png;base64,...",
+  "processing_time_ms": 450,
+  "progress_info": {
+    "total_duration_ms": 450,
+    "steps": [
+      {"step": "grayscale", "duration_ms": 25, "success": true},
+      {"step": "deskew", "duration_ms": 180, "success": true},
+      {"step": "denoise", "duration_ms": 200, "success": true}
+    ]
+  },
+  "errors": []
+}
+```
+
+### Adding New Operations
+
+To add a new preprocessing operation:
+
+1. **Create the function** in `backend/preprocessing/operations.py`:
+```python
+def my_operation(
+    img: np.ndarray,
+    params: Dict[str, Any],
+    progress: ProgressCallbackType = None
+) -> np.ndarray:
+    if progress:
+        progress(0.1, "Starting operation")
+    
+    # Your OpenCV processing here
+    result = cv2.someOperation(img)
+    
+    if progress:
+        progress(1.0, "Operation complete")
+    
+    return result
+```
+
+2. **Register the operation** in the `OP_REGISTRY`:
+```python
+OP_REGISTRY = {
+    # ... existing operations ...
+    "my_operation": my_operation,
+}
+```
+
+3. **Add UI controls** in `ocr-preprocess-ui/src/config/preprocessOperations.js`:
+```javascript
+{
+  id: 'my_operation',
+  name: 'My Operation',
+  category: 'enhancement',
+  tooltip: 'Description of what this operation does.',
+  controls: [
+    {
+      id: 'param1',
+      label: 'Parameter 1',
+      type: 'slider',
+      min: 0,
+      max: 100,
+      default: 50,
+    },
+  ],
+  defaultParams: { param1: 50 },
+}
+```
+
+### Architecture Overview
+
+```
+Frontend (React)                    Backend (FastAPI)
+┌─────────────────┐                ┌─────────────────────┐
+│  PreprocessPage │                │   preprocessing/    │
+│                 │   HTTP POST    │                     │
+│  usePipeline    │───────────────▶│   operations.py     │
+│                 │   /api/        │   (OpenCV funcs)    │
+│  api.js         │   preprocess   │                     │
+│                 │◀───────────────│   pipeline.py       │
+│  Before/After   │   base64 img   │   (executor)        │
+│  Viewer         │                │                     │
+└─────────────────┘                └─────────────────────┘
+```
 
 ## ⚙️ Available Gemini Models
 
@@ -226,6 +355,8 @@ Navigate to **http://localhost:5173** to use the application.
 - **FastAPI** - API framework
 - **Uvicorn** - ASGI server
 - **Google GenAI** - Gemini API client
+- **OpenCV** - Image preprocessing (server-side)
+- **NumPy** - Numerical operations
 - **python-docx** - DOCX generation
 - **ReportLab** - PDF generation
 - **Pillow** - Image processing
