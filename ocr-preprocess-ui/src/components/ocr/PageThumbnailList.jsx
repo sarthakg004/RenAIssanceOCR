@@ -65,6 +65,7 @@ export default function PageThumbnailList({
   images,
   currentIndex,
   processedPages,
+  processingPageIndex,
   onPageSelect,
 }) {
   return (
@@ -90,6 +91,7 @@ export default function PageThumbnailList({
               index={index}
               isActive={index === currentIndex}
               isProcessed={processedPages.has(index + 1)}
+              isProcessing={index === processingPageIndex}
               onClick={() => onPageSelect(index)}
             />
           ))}
@@ -102,7 +104,7 @@ export default function PageThumbnailList({
 /**
  * ThumbnailItem - Single thumbnail with lazy loading and downscaling
  */
-function ThumbnailItem({ image, index, isActive, isProcessed, onClick }) {
+function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onClick }) {
   const [thumbnailSrc, setThumbnailSrc] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -165,9 +167,11 @@ function ThumbnailItem({ image, index, isActive, isProcessed, onClick }) {
         border-2 group
         ${isActive
           ? 'border-blue-500 ring-2 ring-blue-200 shadow-md'
-          : isProcessed
-            ? 'border-green-300 hover:border-green-400'
-            : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+          : isProcessing
+            ? 'border-amber-400 ring-2 ring-amber-200'
+            : isProcessed
+              ? 'border-green-300 hover:border-green-400'
+              : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
         }
       `}
     >
@@ -198,8 +202,17 @@ function ThumbnailItem({ image, index, isActive, isProcessed, onClick }) {
         />
       )}
 
+      {/* Processing indicator - shows spinner on the page being processed */}
+      {isProcessing && (
+        <div className="absolute inset-0 bg-amber-500/20 flex items-center justify-center">
+          <div className="bg-white rounded-full p-1 shadow-md">
+            <Loader2 size={16} className="text-amber-500 animate-spin" />
+          </div>
+        </div>
+      )}
+
       {/* Processed indicator */}
-      {isProcessed && (
+      {isProcessed && !isProcessing && (
         <div className="absolute top-1.5 right-1.5">
           <CheckCircle2
             size={16}

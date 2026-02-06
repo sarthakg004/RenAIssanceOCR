@@ -141,8 +141,11 @@ export default function PagePreview({
   // Controlled zoom props - if provided, zoom is controlled by parent
   zoomLevel: controlledZoom,
   onZoomChange,
+  // Which page is being processed (for showing status during auto-processing)
+  processingPageIndex,
 }) {
   const pageNumber = currentIndex + 1;
+  const processingPageNumber = processingPageIndex !== null ? processingPageIndex + 1 : null;
   const imageSrc = currentPage?.processed || currentPage?.original;
 
   // Use downscaled image for preview to handle large images
@@ -327,13 +330,24 @@ export default function PagePreview({
           </button>
         </div>
 
-        {/* Status badge */}
-        {isPageProcessed && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-600 text-xs font-medium rounded-full">
-            <CheckCircle2 size={12} />
-            Done
-          </span>
-        )}
+        {/* Status badges */}
+        <div className="flex items-center gap-2">
+          {/* Auto-processing indicator - shows which page is being processed */}
+          {isAutoProcessing && processingPageNumber && processingPageNumber !== pageNumber && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-600 text-xs font-medium rounded-full animate-pulse">
+              <Loader2 size={12} className="animate-spin" />
+              Processing #{processingPageNumber}
+            </span>
+          )}
+          
+          {/* Current page processed badge */}
+          {isPageProcessed && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 text-green-600 text-xs font-medium rounded-full">
+              <CheckCircle2 size={12} />
+              Done
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Zoom Toolbar - Enhanced with slider and presets */}
