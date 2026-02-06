@@ -57,21 +57,21 @@ export default function SidebarConfig({
   };
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+    <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden shrink-0">
       {/* Header */}
-      <div className="px-4 py-3 bg-gradient-to-r from-blue-50 to-white border-b border-gray-100">
-        <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-          <Key size={18} className="text-blue-600" />
-          API Configuration
+      <div className="px-3 py-2 bg-gradient-to-r from-blue-50/80 to-white border-b border-gray-100">
+        <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
+          <Key size={16} className="text-blue-600" />
+          API Config
         </h3>
       </div>
 
-      <div className="p-4 space-y-4">
+      <div className="p-3 space-y-3">
         {/* Backend Status */}
         {backendOnline === false && (
-          <div className="px-3 py-2 bg-red-50 border border-red-100 rounded-lg">
-            <p className="text-xs text-red-600 flex items-center gap-1.5">
-              <AlertCircle size={14} />
+          <div className="px-2.5 py-1.5 bg-red-50 border border-red-100 rounded-lg">
+            <p className="text-[11px] text-red-600 flex items-center gap-1.5">
+              <AlertCircle size={12} />
               Backend offline
             </p>
           </div>
@@ -79,9 +79,9 @@ export default function SidebarConfig({
 
         {/* API Key Input */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">
-              Gemini API Key
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-medium text-gray-700">
+              API Key
             </label>
             {getKeyStatusBadge()}
           </div>
@@ -90,18 +90,18 @@ export default function SidebarConfig({
               type={showKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => onApiKeyChange(e.target.value)}
-              placeholder="Enter your API key..."
-              className="w-full px-3 py-2.5 pr-20 text-sm border border-gray-200 rounded-lg 
+              placeholder="Enter API key..."
+              className="w-full px-2.5 py-2 pr-16 text-sm border border-gray-200 rounded-lg 
                        focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400
                        transition-colors bg-gray-50 focus:bg-white"
             />
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
               <button
                 onClick={() => setShowKey(!showKey)}
-                className="p-1.5 text-gray-400 hover:text-gray-600 rounded transition-colors"
+                className="p-1 text-gray-400 hover:text-gray-600 rounded transition-colors"
                 title={showKey ? 'Hide key' : 'Show key'}
               >
-                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
             </div>
           </div>
@@ -110,20 +110,20 @@ export default function SidebarConfig({
           <button
             onClick={onVerifyKey}
             disabled={!apiKey || apiKey.length < 10 || isValidating}
-            className="mt-2 w-full flex items-center justify-center gap-2 px-3 py-2 
-                     text-sm font-medium rounded-lg transition-colors
+            className="mt-1.5 w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 
+                     text-xs font-medium rounded-lg transition-colors
                      disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed
                      bg-blue-50 text-blue-600 hover:bg-blue-100"
           >
             {isValidating ? (
               <>
-                <Loader2 size={14} className="animate-spin" />
+                <Loader2 size={12} className="animate-spin" />
                 Verifying...
               </>
             ) : (
               <>
-                <RefreshCw size={14} />
-                Verify API Key
+                <RefreshCw size={12} />
+                Verify Key
               </>
             )}
           </button>
@@ -131,13 +131,13 @@ export default function SidebarConfig({
 
         {/* Model Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-xs font-medium text-gray-700 mb-1.5">
             Model
           </label>
           <select
             value={selectedModel}
             onChange={(e) => onModelChange(e.target.value)}
-            className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-lg 
+            className="w-full px-2.5 py-2 text-sm border border-gray-200 rounded-lg 
                      focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400
                      transition-colors bg-gray-50 focus:bg-white cursor-pointer"
           >
@@ -147,7 +147,7 @@ export default function SidebarConfig({
               </option>
             ))}
           </select>
-          <p className="mt-1.5 text-xs text-gray-500 leading-relaxed">
+          <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">
             {models.find((m) => m.id === selectedModel)?.description || ''}
           </p>
         </div>

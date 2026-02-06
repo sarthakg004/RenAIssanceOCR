@@ -90,14 +90,42 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Header */}
-      <header className="bg-white/80 backdrop-blur-md border-b border-gray-100/50 sticky top-0 z-40 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
-              <FileText className="w-6 h-6 text-white" />
-            </div>
-            <div>
+      {/* Step 5 (OCR) takes over the full screen */}
+      {currentStep === 5 ? (
+        <div className="h-screen w-screen overflow-hidden">
+          <TextRecognitionPage
+            processedImages={
+              // Get the final images (preprocessed or original) for selected pages
+              selectedPages.map((pageNum) => {
+                const pageIndex = pageNum - 1;
+                const preprocessed = processedImages[pageNum];
+                const original = pages[pageIndex];
+                return {
+                  pageNumber: pageNum,
+                  // Use thumbnail for original (from PDF/image extraction)
+                  original: original?.thumbnail || original,
+                  // Use preprocessed if available, otherwise fall back to thumbnail
+                  processed: preprocessed || original?.thumbnail || original,
+                };
+              })
+            }
+            onBack={() => goToStep(4)}
+            onComplete={() => {
+              // OCR complete - show success state or reset
+              alert('OCR processing complete! Transcripts have been saved.');
+            }}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Header */}
+          <header className="bg-white/80 backdrop-blur-md border-b border-gray-100/50 sticky top-0 z-40 shadow-sm">
+            <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+                  <FileText className="w-6 h-6 text-white" />
+                </div>
+                <div>
               <h1 className="text-xl font-bold bg-gradient-to-r from-gray-800 to-gray-600 bg-clip-text text-transparent">
                 OCR Preprocess Studio
               </h1>
@@ -194,31 +222,6 @@ function App() {
               }}
             />
           )}
-
-          {currentStep === 5 && (
-            <TextRecognitionPage
-              processedImages={
-                // Get the final images (preprocessed or original) for selected pages
-                selectedPages.map((pageNum) => {
-                  const pageIndex = pageNum - 1;
-                  const preprocessed = processedImages[pageNum];
-                  const original = pages[pageIndex];
-                  return {
-                    pageNumber: pageNum,
-                    // Use thumbnail for original (from PDF/image extraction)
-                    original: original?.thumbnail || original,
-                    // Use preprocessed if available, otherwise fall back to thumbnail
-                    processed: preprocessed || original?.thumbnail || original,
-                  };
-                })
-              }
-              onBack={() => goToStep(4)}
-              onComplete={() => {
-                // OCR complete - show success state or reset
-                alert('OCR processing complete! Transcripts have been saved.');
-              }}
-            />
-          )}
         </div>
       </main>
 
@@ -234,6 +237,8 @@ function App() {
           </p>
         </div>
       </footer>
+        </>
+      )}
     </div>
   );
 }
