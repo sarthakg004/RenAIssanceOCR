@@ -59,7 +59,7 @@ function createThumbnail(imageSrc, maxSize = 200) {
 
 /**
  * PageThumbnailList Component
- * Scrollable list of page thumbnails with lazy loading
+ * Scrollable list of page thumbnails with lazy loading - Compact version
  */
 export default function PageThumbnailList({
   images,
@@ -68,21 +68,21 @@ export default function PageThumbnailList({
   onPageSelect,
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
+    <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
       {/* Header */}
-      <div className="px-4 py-3 bg-gradient-to-r from-blue-50 to-white border-b border-gray-100 flex items-center justify-between shrink-0">
-        <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-          <ImageIcon size={18} className="text-blue-600" />
+      <div className="px-3 py-2 bg-gradient-to-r from-blue-50/80 to-white border-b border-gray-100 flex items-center justify-between shrink-0">
+        <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
+          <ImageIcon size={16} className="text-blue-600" />
           Pages
         </h3>
-        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+        <span className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full font-medium">
           {images.length}
         </span>
       </div>
 
-      {/* Thumbnails */}
-      <div className="flex-1 overflow-y-auto p-3 min-h-0">
-        <div className="grid grid-cols-2 gap-2">
+      {/* Thumbnails - scrollable */}
+      <div className="flex-1 overflow-y-auto p-2 min-h-0">
+        <div className="grid grid-cols-2 gap-1.5">
           {images.map((img, index) => (
             <ThumbnailItem
               key={index}
