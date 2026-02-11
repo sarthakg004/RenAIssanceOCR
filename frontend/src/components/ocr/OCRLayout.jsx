@@ -1,4 +1,4 @@
-import { ChevronLeft, Sparkles, CheckCircle2, AlertCircle, Check } from 'lucide-react';
+import { ChevronLeft, Sparkles, CheckCircle2, AlertCircle, Check, FileText } from 'lucide-react';
 import ResizablePanels from './ResizablePanels';
 
 /**
@@ -51,10 +51,10 @@ export default function OCRLayout({
                 ? 'bg-gradient-to-br from-green-500 to-emerald-600' 
                 : 'bg-gradient-to-br from-blue-500 to-indigo-600'
             }`}>
-              {isComplete ? <Check size={12} /> : '5'}
+              {isComplete ? <Check size={12} /> : <FileText size={12} />}
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-24 h-1.5 bg-blue-100 rounded-full overflow-hidden">
+              <div className="w-40 h-1.5 bg-blue-100 rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
                     isComplete 

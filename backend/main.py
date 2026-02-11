@@ -4,11 +4,18 @@ FastAPI server for OCR text recognition using Google Gemini
 """
 
 import os
+import sys
 import io
 import time
 import base64
+import asyncio
 from typing import Optional
 from datetime import datetime
+
+# Add backend directory to path for imports when running from workspace root
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +45,34 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# Register DejaVu Sans font for Unicode support in PDFs
+# This font supports a wide range of Unicode characters including special symbols
+try:
+    # Try common font paths on different systems
+    font_paths = [
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux (Debian/Ubuntu)
+        '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf',  # Linux (Fedora/RHEL)
+        '/usr/share/fonts/TTF/DejaVuSans.ttf',  # Linux (Arch)
+        'C:/Windows/Fonts/DejaVuSans.ttf',  # Windows
+        '/System/Library/Fonts/Supplemental/DejaVuSans.ttf',  # macOS
+        '/Library/Fonts/DejaVuSans.ttf',  # macOS alternative
+    ]
+    
+    UNICODE_FONT_REGISTERED = False
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('DejaVuSans', font_path))
+            UNICODE_FONT_REGISTERED = True
+            break
+    
+    if not UNICODE_FONT_REGISTERED:
+        print("Warning: DejaVu Sans font not found. PDF export may have limited Unicode support.")
+except Exception as e:
+    UNICODE_FONT_REGISTERED = False
+    print(f"Warning: Could not register Unicode font for PDF: {e}")
 
 app = FastAPI(title="Gemini OCR API", version="1.0.0")
 
@@ -51,46 +86,78 @@ app.add_middleware(
 )
 
 # ============================================
-# Rate Limiting - Simple In-Memory Guard
+# Rate Limiting - Sliding Window for Batch Support
 # ============================================
 
 class RateLimiter:
-    """Simple rate limiter: 5 requests per minute = 1 request per 12 seconds"""
+    """
+    Sliding window rate limiter: 5 requests per minute
+    Supports batch processing of up to 4 concurrent requests
+    """
     
-    def __init__(self, min_interval: int = 12):
-        self.min_interval = min_interval
-        self.last_request_time: Optional[float] = None
+    def __init__(self, max_requests: int = 5, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.request_times: list[float] = []
+    
+    def _clean_old_requests(self):
+        """Remove requests outside the sliding window"""
+        cutoff = time.time() - self.window_seconds
+        self.request_times = [t for t in self.request_times if t > cutoff]
+    
+    def get_available_slots(self) -> int:
+        """Get number of requests that can be made right now"""
+        self._clean_old_requests()
+        return max(0, self.max_requests - len(self.request_times))
     
     def can_proceed(self) -> tuple[bool, int]:
-        """Check if request can proceed. Returns (can_proceed, wait_time_seconds)"""
-        if self.last_request_time is None:
+        """Check if at least one request can proceed. Returns (can_proceed, wait_time_seconds)"""
+        self._clean_old_requests()
+        
+        if len(self.request_times) < self.max_requests:
             return True, 0
         
-        elapsed = time.time() - self.last_request_time
-        if elapsed >= self.min_interval:
-            return True, 0
-        
-        wait_time = int(self.min_interval - elapsed) + 1
-        return False, wait_time
+        # Calculate wait time until oldest request expires
+        oldest = min(self.request_times)
+        wait_time = int(oldest + self.window_seconds - time.time()) + 1
+        return False, max(0, wait_time)
     
     def record_request(self):
         """Record that a request was made"""
-        self.last_request_time = time.time()
+        self.request_times.append(time.time())
+    
+    def record_requests(self, count: int):
+        """Record multiple requests at once (for batch processing)"""
+        now = time.time()
+        for _ in range(count):
+            self.request_times.append(now)
     
     def get_status(self) -> dict:
         """Get current rate limit status"""
-        if self.last_request_time is None:
-            return {"ready": True, "wait_seconds": 0, "last_request": None}
+        self._clean_old_requests()
+        available = self.max_requests - len(self.request_times)
         
-        elapsed = time.time() - self.last_request_time
-        if elapsed >= self.min_interval:
-            return {"ready": True, "wait_seconds": 0, "last_request": self.last_request_time}
+        if available > 0:
+            return {
+                "ready": True, 
+                "wait_seconds": 0, 
+                "available_slots": available,
+                "requests_in_window": len(self.request_times)
+            }
         
-        wait_time = int(self.min_interval - elapsed) + 1
-        return {"ready": False, "wait_seconds": wait_time, "last_request": self.last_request_time}
+        # Calculate wait time
+        oldest = min(self.request_times) if self.request_times else time.time()
+        wait_time = int(oldest + self.window_seconds - time.time()) + 1
+        
+        return {
+            "ready": False, 
+            "wait_seconds": max(0, wait_time),
+            "available_slots": 0,
+            "requests_in_window": len(self.request_times)
+        }
 
-# Global rate limiter instance - 5 requests per minute = 12 second intervals
-rate_limiter = RateLimiter(min_interval=12)
+# Global rate limiter instance - 5 requests per 60 seconds
+rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
 
 # ============================================
 # Gemini OCR Core
@@ -647,6 +714,165 @@ async def ocr_page_json(
 
 
 # ============================================
+# Batch OCR Endpoint - Process multiple pages concurrently
+# ============================================
+
+class BatchOCRItem(BaseModel):
+    """Single item in batch OCR request"""
+    page_index: int
+    image_data: str
+
+class BatchOCRRequest(BaseModel):
+    """Request body for batch OCR"""
+    items: list[BatchOCRItem]
+    model: str = DEFAULT_MODEL
+
+class BatchOCRResultItem(BaseModel):
+    """Single result from batch OCR"""
+    page_index: int
+    success: bool
+    transcript: Optional[str] = None
+    error: Optional[str] = None
+    processing_time_ms: int = 0
+
+class BatchOCRResponse(BaseModel):
+    """Response from batch OCR"""
+    results: list[BatchOCRResultItem]
+    total_processing_time_ms: int
+    successful_count: int
+    failed_count: int
+
+async def process_single_ocr(
+    client,
+    item: BatchOCRItem,
+    model: str
+) -> BatchOCRResultItem:
+    """Process a single OCR request (for concurrent execution)"""
+    start_time = time.time()
+    
+    try:
+        image_data = item.image_data
+        
+        # Parse base64 data
+        if "," in image_data:
+            header, encoded = image_data.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
+        else:
+            encoded = image_data
+            mime_type = "image/png"
+        
+        image_bytes = base64.b64decode(encoded)
+        
+        # Perform OCR (run in thread pool since it's blocking)
+        transcript = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: gemini_ocr(client, image_bytes, model, mime_type)
+        )
+        
+        processing_time = int((time.time() - start_time) * 1000)
+        
+        return BatchOCRResultItem(
+            page_index=item.page_index,
+            success=True,
+            transcript=transcript,
+            processing_time_ms=processing_time
+        )
+        
+    except Exception as e:
+        processing_time = int((time.time() - start_time) * 1000)
+        return BatchOCRResultItem(
+            page_index=item.page_index,
+            success=False,
+            error=str(e),
+            processing_time_ms=processing_time
+        )
+
+@app.post("/api/gemini-ocr-batch", response_model=BatchOCRResponse)
+async def ocr_batch(
+    request: BatchOCRRequest,
+    x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key")
+):
+    """
+    Process multiple images with Gemini OCR concurrently.
+    
+    Supports up to 4 images per batch to stay within rate limits (5 req/min).
+    This allows processing 4 pages at once instead of waiting 12 seconds between each.
+    
+    Headers:
+        X-Gemini-API-Key: Your Gemini API key
+    
+    JSON Body:
+        items: Array of {page_index, image_data} objects
+        model: Gemini model name
+    """
+    MAX_BATCH_SIZE = 4
+    
+    # Limit batch size
+    if len(request.items) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch size exceeds maximum of {MAX_BATCH_SIZE}. Got {len(request.items)} items."
+        )
+    
+    if len(request.items) == 0:
+        raise HTTPException(status_code=400, detail="Empty batch request")
+    
+    # Check rate limit - need enough slots for all items
+    available_slots = rate_limiter.get_available_slots()
+    if available_slots < len(request.items):
+        status = rate_limiter.get_status()
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "rate_limited",
+                "message": f"Not enough rate limit slots. Need {len(request.items)}, have {available_slots}.",
+                "wait_seconds": status.get("wait_seconds", 60),
+                "available_slots": available_slots
+            }
+        )
+    
+    # Validate model
+    if request.model not in MODEL_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model. Available models: {MODEL_IDS}"
+        )
+    
+    start_time = time.time()
+    
+    try:
+        # Create client once for all requests
+        client = get_gemini_client(x_gemini_api_key)
+        
+        # Process all items concurrently
+        tasks = [
+            process_single_ocr(client, item, request.model)
+            for item in request.items
+        ]
+        results = await asyncio.gather(*tasks)
+        
+        # Record all requests
+        rate_limiter.record_requests(len(request.items))
+        
+        total_time = int((time.time() - start_time) * 1000)
+        successful = sum(1 for r in results if r.success)
+        failed = len(results) - successful
+        
+        return BatchOCRResponse(
+            results=results,
+            total_processing_time_ms=total_time,
+            successful_count=successful,
+            failed_count=failed
+        )
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "API_KEY_INVALID" in error_msg or "401" in error_msg:
+            raise HTTPException(status_code=401, detail="Invalid Gemini API key")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
+# ============================================
 # Export Endpoints
 # ============================================
 
@@ -664,15 +890,18 @@ def build_combined_transcript(transcripts: dict) -> str:
 
 @app.post("/api/export/txt")
 async def export_txt(request: ExportRequest):
-    """Export combined transcript as TXT file"""
+    """Export combined transcript as TXT file with UTF-8 encoding and BOM"""
     combined = build_combined_transcript(request.transcripts)
     
-    buffer = io.BytesIO(combined.encode('utf-8'))
+    # Use UTF-8 with BOM for better compatibility with text editors
+    # BOM helps programs recognize the file as UTF-8 encoded
+    utf8_bom = b'\xef\xbb\xbf'
+    buffer = io.BytesIO(utf8_bom + combined.encode('utf-8'))
     buffer.seek(0)
     
     return StreamingResponse(
         buffer,
-        media_type="text/plain",
+        media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename=transcript_full.txt"}
     )
 
@@ -723,7 +952,7 @@ async def export_docx(request: ExportRequest):
 
 @app.post("/api/export/pdf")
 async def export_pdf(request: ExportRequest):
-    """Export combined transcript as PDF file"""
+    """Export combined transcript as PDF file with Unicode support"""
     buffer = io.BytesIO()
     
     doc = SimpleDocTemplate(
@@ -737,10 +966,14 @@ async def export_pdf(request: ExportRequest):
     
     styles = getSampleStyleSheet()
     
-    # Custom styles
+    # Use DejaVu Sans for Unicode support if available, otherwise fall back to Helvetica
+    font_name = 'DejaVuSans' if UNICODE_FONT_REGISTERED else 'Helvetica'
+    
+    # Custom styles with Unicode-compatible font
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
+        fontName=font_name,
         fontSize=18,
         spaceAfter=30,
         alignment=1  # Center
@@ -749,6 +982,7 @@ async def export_pdf(request: ExportRequest):
     page_header_style = ParagraphStyle(
         'PageHeader',
         parent=styles['Heading2'],
+        fontName=font_name,
         fontSize=14,
         spaceAfter=6,
         textColor='#1e40af'
@@ -757,6 +991,7 @@ async def export_pdf(request: ExportRequest):
     body_style = ParagraphStyle(
         'CustomBody',
         parent=styles['Normal'],
+        fontName=font_name,
         fontSize=11,
         spaceAfter=6,
         leading=14
@@ -765,6 +1000,7 @@ async def export_pdf(request: ExportRequest):
     separator_style = ParagraphStyle(
         'Separator',
         parent=styles['Normal'],
+        fontName=font_name,
         fontSize=10,
         spaceAfter=12,
         textColor='#6b7280'

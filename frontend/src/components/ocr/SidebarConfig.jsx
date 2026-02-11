@@ -9,6 +9,9 @@ import {
   ShieldCheck,
   ShieldX,
   RefreshCw,
+  Zap,
+  Minus,
+  Plus,
 } from 'lucide-react';
 
 /**
@@ -25,6 +28,8 @@ export default function SidebarConfig({
   isValidating,
   onVerifyKey,
   backendOnline,
+  batchSize,
+  onBatchSizeChange,
 }) {
   const [showKey, setShowKey] = useState(false);
 
@@ -149,6 +154,48 @@ export default function SidebarConfig({
           </select>
           <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">
             {models.find((m) => m.id === selectedModel)?.description || ''}
+          </p>
+        </div>
+
+        {/* Batch Size / Rate Limit Setting */}
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+            <Zap size={12} className="text-amber-500" />
+            Concurrent Requests
+          </label>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onBatchSizeChange(Math.max(1, batchSize - 1))}
+              disabled={batchSize <= 1}
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 
+                       disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <Minus size={14} />
+            </button>
+            <input
+              type="number"
+              min={1}
+              value={batchSize}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 1) {
+                  onBatchSizeChange(val);
+                }
+              }}
+              className="w-14 px-2 py-1.5 text-center text-sm font-bold border border-gray-200 rounded-lg 
+                       focus:outline-none focus:ring-2 focus:ring-amber-100 focus:border-amber-400
+                       bg-gray-50 focus:bg-white [appearance:textfield] 
+                       [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            />
+            <button
+              onClick={() => onBatchSizeChange(batchSize + 1)}
+              className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+          <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">
+            Pages to process at once. Gemini free tier: 5 req/min.
           </p>
         </div>
       </div>

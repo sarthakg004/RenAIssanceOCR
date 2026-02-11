@@ -16,6 +16,7 @@ import {
   Move,
   Minus,
   Plus,
+  Clock,
 } from 'lucide-react';
 
 /**
@@ -130,6 +131,7 @@ export default function PagePreview({
   isProcessing,
   isPageProcessed,
   isAutoProcessing,
+  isWaitingForRateLimit,
   rateLimitReady,
   waitSeconds,
   error,
@@ -307,7 +309,7 @@ export default function PagePreview({
   const zoomPercent = Math.round(zoomLevel * 100);
 
   return (
-    <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
+    <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full relative">
       {/* Header with navigation */}
       <div className="px-3 py-2 bg-gradient-to-r from-blue-50/80 to-white border-b border-gray-100 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
@@ -527,26 +529,27 @@ export default function PagePreview({
           </div>
         )}
 
-        {/* Processing overlay */}
-        {isProcessing && (
-          <div className="absolute inset-0 bg-blue-500/10 backdrop-blur-sm flex items-center justify-center z-20">
-            <div className="bg-white rounded-xl shadow-lg px-5 py-3 text-center">
-              <Loader2 size={28} className="animate-spin text-blue-600 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-700">Processing...</p>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Processing overlay - positioned relative to viewport, not scrollable content */}
+      {isProcessing && (
+        <div className="absolute inset-0 bg-blue-500/10 backdrop-blur-sm flex items-center justify-center z-20 pointer-events-none">
+          <div className="bg-white rounded-xl shadow-lg px-5 py-3 text-center pointer-events-auto">
+            <Loader2 size={28} className="animate-spin text-blue-600 mx-auto mb-2" />
+            <p className="text-sm font-medium text-gray-700">Processing...</p>
+          </div>
+        </div>
+      )}
 
       {/* Process Controls - Compact */}
       <div className="px-3 py-2 border-t border-gray-100 bg-white shrink-0">
         <div className="flex items-center gap-2">
-          {/* Main Process Button */}
+          {/* Main Process Button - single page */}
           <button
             onClick={onProcess}
             disabled={!canProcess || isProcessing || isPageProcessed}
             className={`
-              flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-semibold text-sm
+              flex-1 py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2
               transition-all duration-200
               ${!canProcess || isProcessing || isPageProcessed
                 ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
@@ -556,52 +559,86 @@ export default function PagePreview({
           >
             {isProcessing ? (
               <>
-                <Loader2 size={18} className="animate-spin" />
+                <Loader2 size={16} className="animate-spin" />
                 Processing...
               </>
             ) : isPageProcessed ? (
               <>
-                <CheckCircle2 size={18} />
-                Processed
+                <CheckCircle2 size={16} />
+                Done
               </>
             ) : (
               <>
-                <Play size={18} />
-                Process Page
+                <Play size={16} />
+                This Page
               </>
             )}
           </button>
 
-          {/* Auto Process Toggle */}
+          {/* Auto Process All Pages Button */}
           <button
             onClick={onToggleAutoProcess}
             disabled={!canProcess}
-            title={isAutoProcessing ? 'Stop auto-processing' : 'Auto-process all pages'}
+            title={isAutoProcessing ? 'Stop auto-processing' : 'Process all pages automatically'}
             className={`
-              px-3 py-2.5 rounded-lg font-medium transition-all duration-200
+              flex-1 py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2
+              transition-all duration-200
               ${isAutoProcessing
                 ? 'bg-amber-500 text-white hover:bg-amber-600'
                 : !canProcess
                   ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  : 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:from-emerald-600 hover:to-teal-700 shadow-sm hover:shadow-md active:scale-[0.98]'
               }
             `}
           >
-            {isAutoProcessing ? <Pause size={18} /> : <Zap size={18} />}
+            {isAutoProcessing ? (
+              <>
+                <Pause size={16} />
+                Stop Processing
+              </>
+            ) : (
+              <>
+                <Zap size={16} />
+                Process All Pages
+              </>
+            )}
           </button>
         </div>
 
-        {/* Rate limit / Error message */}
-        {(error || !rateLimitReady) && (
-          <div
-            className={`mt-2 px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 ${
-              !rateLimitReady
-                ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                : 'bg-red-50 text-red-700 border border-red-100'
-            }`}
-          >
+        {/* Auto-processing waiting for rate limit - show prominent timer */}
+        {isAutoProcessing && isWaitingForRateLimit && waitSeconds > 0 && (
+          <div className="mt-2 px-3 py-2 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-blue-700">
+              <Clock size={16} className="animate-pulse" />
+              <span className="text-sm font-medium">Waiting for rate limit to reset...</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="text-lg font-bold text-blue-600 tabular-nums min-w-[40px] text-center">
+                {waitSeconds}s
+              </div>
+              <div className="w-16 h-1.5 bg-blue-200 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 rounded-full transition-all duration-1000"
+                  style={{ width: `${Math.max(0, (60 - waitSeconds) / 60 * 100)}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Rate limit warning (when not in auto-processing waiting state) */}
+        {!rateLimitReady && !isWaitingForRateLimit && (
+          <div className="mt-2 px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 bg-amber-50 text-amber-700 border border-amber-100">
             <AlertCircle size={14} />
-            {!rateLimitReady ? `Rate limited. Wait ${waitSeconds}s...` : error}
+            Rate limited. Wait {waitSeconds}s...
+          </div>
+        )}
+
+        {/* Error message */}
+        {error && (
+          <div className="mt-2 px-3 py-1.5 rounded-lg text-xs flex items-center gap-2 bg-red-50 text-red-700 border border-red-100">
+            <AlertCircle size={14} />
+            {error}
           </div>
         )}
       </div>

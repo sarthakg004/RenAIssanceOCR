@@ -34,7 +34,7 @@ RenAIssance/
 │       ├── pipeline.py         # Pipeline executor
 │       └── progress.py         # Progress tracking utilities
 │
-├── ocr-preprocess-ui/          # React frontend application
+├── frontend/                   # React frontend application
 │   ├── src/
 │   │   ├── components/         # Reusable UI components
 │   │   │   ├── Stepper.jsx           # Progress stepper
@@ -126,7 +126,7 @@ pip install fastapi uvicorn python-multipart google-genai python-docx reportlab 
 
 ```bash
 # Navigate to frontend directory
-cd ocr-preprocess-ui
+cd frontend
 
 # Install dependencies
 npm install
@@ -158,7 +158,7 @@ The backend API will be available at `http://localhost:8000`
 ### Terminal 2 - Start Frontend Server
 
 ```bash
-cd /home/sarthak/Documents/RenAIssance/ocr-preprocess-ui
+cd /home/sarthak/Documents/RenAIssance/frontend
 npm run dev
 ```
 
@@ -296,7 +296,7 @@ OP_REGISTRY = {
 }
 ```
 
-3. **Add UI controls** in `ocr-preprocess-ui/src/config/preprocessOperations.js`:
+3. **Add UI controls** in `frontend/src/config/preprocessOperations.js`:
 ```javascript
 {
   id: 'my_operation',
@@ -363,7 +363,9 @@ Frontend (React)                    Backend (FastAPI)
 
 ## 📝 Rate Limiting
 
-The backend implements a 20-second cooldown between OCR requests to comply with Gemini API free tier limits. The UI displays a countdown timer when rate limited.
+The backend implements a sliding window rate limiter allowing 5 requests per minute to comply with Gemini API free tier limits. 
+
+**Batch Processing:** The "Process All" feature sends up to 4 pages concurrently (instead of one at a time), making it approximately 4x faster while staying within rate limits. After a batch of 4 requests, the system waits for the rate limit window to refresh before processing the next batch.
 
 ## 🐛 Troubleshooting
 

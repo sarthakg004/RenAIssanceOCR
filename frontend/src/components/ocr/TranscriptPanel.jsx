@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   FileText,
   Copy,
@@ -9,7 +9,83 @@ import {
   Loader2,
   File,
   FileType,
+  Edit3,
+  Eye,
 } from 'lucide-react';
+
+/**
+ * Regex to match special OCR markers like [illegible], [margin], [unclear], etc.
+ */
+const MARKER_REGEX = /(\[(?:illegible|margin|unclear|damaged|torn|faded|stained|missing|blank|unknown|(?:\?+))\])/gi;
+
+/**
+ * Render transcript text with highlighted markers
+ */
+function HighlightedTranscript({ text, monospace }) {
+  const parts = useMemo(() => {
+    if (!text) return [];
+    
+    const result = [];
+    let lastIndex = 0;
+    let match;
+    
+    // Reset regex lastIndex
+    MARKER_REGEX.lastIndex = 0;
+    
+    while ((match = MARKER_REGEX.exec(text)) !== null) {
+      // Add text before the match
+      if (match.index > lastIndex) {
+        result.push({
+          type: 'text',
+          content: text.slice(lastIndex, match.index),
+          key: `text-${lastIndex}`,
+        });
+      }
+      
+      // Add the marker
+      result.push({
+        type: 'marker',
+        content: match[0],
+        key: `marker-${match.index}`,
+      });
+      
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // Add remaining text
+    if (lastIndex < text.length) {
+      result.push({
+        type: 'text',
+        content: text.slice(lastIndex),
+        key: `text-${lastIndex}`,
+      });
+    }
+    
+    return result;
+  }, [text]);
+
+  return (
+    <div 
+      className={`w-full h-full p-3 text-sm leading-relaxed overflow-y-auto whitespace-pre-wrap ${
+        monospace ? 'font-mono' : 'font-sans'
+      }`}
+    >
+      {parts.map((part) => 
+        part.type === 'marker' ? (
+          <span 
+            key={part.key} 
+            className="text-red-600 font-semibold bg-red-50 px-0.5 rounded"
+            title="OCR uncertainty marker"
+          >
+            {part.content}
+          </span>
+        ) : (
+          <span key={part.key}>{part.content}</span>
+        )
+      )}
+    </div>
+  );
+}
 
 /**
  * TranscriptPanel Component
@@ -31,8 +107,17 @@ export default function TranscriptPanel({
 }) {
   const [copied, setCopied] = useState(false);
   const [monospace, setMonospace] = useState(true);
+  const [editMode, setEditMode] = useState(false);
 
   const hasChanges = transcript !== originalTranscript;
+  
+  // Count markers in transcript
+  const markerCount = useMemo(() => {
+    if (!transcript) return 0;
+    MARKER_REGEX.lastIndex = 0;
+    const matches = transcript.match(MARKER_REGEX);
+    return matches ? matches.length : 0;
+  }, [transcript]);
 
   const handleCopy = async () => {
     if (transcript) {
@@ -44,7 +129,9 @@ export default function TranscriptPanel({
 
   const handleDownloadTxt = () => {
     if (!transcript) return;
-    const blob = new Blob([transcript], { type: 'text/plain' });
+    // Add UTF-8 BOM for better compatibility with text editors
+    const utf8Bom = '\uFEFF';
+    const blob = new Blob([utf8Bom + transcript], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -75,6 +162,18 @@ export default function TranscriptPanel({
         <div className="flex items-center gap-0.5">
           {isProcessed && transcript && (
             <>
+              {/* Edit/View toggle */}
+              <button
+                onClick={() => setEditMode(!editMode)}
+                className={`p-1.5 rounded-lg transition-all duration-200 ${editMode
+                    ? 'bg-amber-100 text-amber-600'
+                    : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                  }`}
+                title={editMode ? 'Switch to view mode' : 'Switch to edit mode'}
+              >
+                {editMode ? <Eye size={14} /> : <Edit3 size={14} />}
+              </button>
+
               {/* Monospace toggle */}
               <button
                 onClick={() => setMonospace(!monospace)}
@@ -142,7 +241,7 @@ export default function TranscriptPanel({
             <p className="font-semibold mt-3 text-sm">No transcript yet</p>
             <p className="text-xs">Process this page to extract text</p>
           </div>
-        ) : (
+        ) : editMode ? (
           <textarea
             value={transcript || ''}
             onChange={(e) => onTranscriptChange(e.target.value)}
@@ -150,13 +249,23 @@ export default function TranscriptPanel({
                        border-0 focus:ring-0 bg-transparent overflow-y-auto ${monospace ? 'font-mono' : 'font-sans'}`}
             placeholder="Transcript will appear here..."
           />
+        ) : (
+          <HighlightedTranscript text={transcript} monospace={monospace} />
         )}
       </div>
 
       {/* Footer with stats */}
       {isProcessed && transcript && (
         <div className="px-3 py-1.5 border-t border-gray-100 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between text-xs text-gray-500 shrink-0">
-          <span className="font-medium">{transcript.length.toLocaleString()} chars</span>
+          <div className="flex items-center gap-2">
+            <span className="font-medium">{transcript.length.toLocaleString()} chars</span>
+            {markerCount > 0 && (
+              <span className="text-red-600 font-semibold flex items-center gap-1 px-1.5 py-0.5 bg-red-50 rounded-full">
+                <span className="w-1 h-1 bg-red-500 rounded-full" />
+                {markerCount} uncertain
+              </span>
+            )}
+          </div>
           {hasChanges && (
             <span className="text-amber-600 font-semibold flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 rounded-full">
               <span className="w-1 h-1 bg-amber-500 rounded-full animate-pulse" />
