@@ -66,6 +66,7 @@ export default function PageThumbnailList({
   currentIndex,
   processedPages,
   processingPageIndex,
+  processingPageIndices = new Set(), // Support batch processing
   onPageSelect,
 }) {
   return (
@@ -91,7 +92,7 @@ export default function PageThumbnailList({
               index={index}
               isActive={index === currentIndex}
               isProcessed={processedPages.has(index + 1)}
-              isProcessing={index === processingPageIndex}
+              isProcessing={index === processingPageIndex || processingPageIndices.has(index)}
               onClick={() => onPageSelect(index)}
             />
           ))}

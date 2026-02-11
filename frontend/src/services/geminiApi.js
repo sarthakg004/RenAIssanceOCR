@@ -18,13 +18,28 @@ export async function getAvailableModels() {
 
 /**
  * Get current rate limit status
+ * @returns {Promise<{ready: boolean, wait_seconds: number, available_slots: number}>}
  */
 export async function getRateLimitStatus() {
-  const response = await fetch(`${API_BASE}/rate-limit-status`);
-  if (!response.ok) {
-    throw new Error('Failed to fetch rate limit status');
+  try {
+    const response = await fetch(`${API_BASE}/rate-limit-status`);
+    if (!response.ok) {
+      // Return safe defaults if endpoint fails
+      return { ready: true, wait_seconds: 0, available_slots: 5 };
+    }
+    const data = await response.json();
+    // Handle both old format (without available_slots) and new format
+    return {
+      ready: data.ready ?? true,
+      wait_seconds: data.wait_seconds ?? 0,
+      available_slots: data.available_slots ?? (data.ready ? 5 : 0),
+      requests_in_window: data.requests_in_window ?? 0,
+    };
+  } catch (error) {
+    console.error('Failed to fetch rate limit status:', error);
+    // Return safe defaults on error
+    return { ready: true, wait_seconds: 0, available_slots: 5 };
   }
-  return response.json();
 }
 
 /**
@@ -87,6 +102,104 @@ export async function processPageOCR(imageData, model, apiKey) {
 
   const data = await response.json();
   return data;
+}
+
+/**
+ * Process multiple pages with Gemini OCR concurrently (batch processing)
+ * 
+ * Processes up to 4 pages at once to maximize throughput within rate limits.
+ * The Gemini free tier allows 5 requests per minute, so batching 4 requests
+ * at a time is safe and ~4x faster than sequential processing.
+ * 
+ * @param {Array<{pageIndex: number, imageData: string}>} items - Array of pages to process
+ * @param {string} model - Gemini model name
+ * @param {string} apiKey - Gemini API key
+ * @returns {Promise<{success: boolean, results?: Array, error?: string}>}
+ */
+export async function processBatchOCR(items, model, apiKey) {
+  if (!items || items.length === 0) {
+    return { success: false, error: 'No items to process' };
+  }
+
+  try {
+    // Check rate limit first
+    const rateLimitStatus = await getRateLimitStatus();
+    if (!rateLimitStatus.ready || rateLimitStatus.available_slots < items.length) {
+      return {
+        success: false,
+        error: 'rate_limited',
+        waitSeconds: rateLimitStatus.wait_seconds || 60,
+        availableSlots: rateLimitStatus.available_slots || 0,
+      };
+    }
+
+    const response = await fetch(`${API_BASE}/gemini-ocr-batch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Gemini-API-Key': apiKey,
+      },
+      body: JSON.stringify({
+        items: items.map(item => ({
+          page_index: item.pageIndex,
+          image_data: item.imageData,
+        })),
+        model: model,
+      }),
+    });
+
+    if (response.status === 429) {
+      const errorData = await response.json().catch(() => ({}));
+      return {
+        success: false,
+        error: 'rate_limited',
+        waitSeconds: errorData.detail?.wait_seconds || 60,
+        availableSlots: errorData.detail?.available_slots || 0,
+      };
+    }
+
+    if (response.status === 401) {
+      return {
+        success: false,
+        error: 'invalid_api_key',
+      };
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return {
+        success: false,
+        error: errorData.detail || `Batch OCR failed with status ${response.status}`,
+      };
+    }
+
+    const data = await response.json();
+    
+    // Check if any results indicate quota exceeded (daily limit)
+    const quotaExceeded = data.results?.some(r => 
+      !r.success && r.error && (
+        r.error.toLowerCase().includes('quota') ||
+        r.error.toLowerCase().includes('resource_exhausted') ||
+        r.error.toLowerCase().includes('rate limit') ||
+        r.error.includes('429')
+      )
+    );
+    
+    return {
+      success: true,
+      results: data.results,
+      successfulCount: data.successful_count,
+      failedCount: data.failed_count,
+      totalProcessingTimeMs: data.total_processing_time_ms,
+      quotaExceeded: quotaExceeded,
+    };
+  } catch (error) {
+    console.error('Batch OCR error:', error);
+    return {
+      success: false,
+      error: error.message || 'Batch OCR processing failed',
+    };
+  }
 }
 
 /**

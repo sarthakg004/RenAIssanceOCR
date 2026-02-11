@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   OCRLayout,
   SidebarConfig,
@@ -9,15 +9,20 @@ import {
 import {
   getAvailableModels,
   processPageOCR,
+  processBatchOCR,
+  getRateLimitStatus,
   verifyApiKey,
   exportTranscripts,
   downloadBlob,
 } from '../services/geminiApi';
 
+// Default batch size (safe for 5 req/min limit)
+const DEFAULT_BATCH_SIZE = 4;
+
 /**
  * TextRecognitionPage - Full Viewport OCR Workspace
  * Redesigned with 3-column responsive layout
- * Supports background auto-processing while user can freely view any page
+ * Supports background auto-processing with batch concurrent requests
  */
 export default function TextRecognitionPage({ processedImages, onBack, onComplete }) {
   // API Configuration
@@ -27,15 +32,21 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
   const [models, setModels] = useState([]);
   const [backendOnline, setBackendOnline] = useState(null);
+  const [batchSize, setBatchSize] = useState(DEFAULT_BATCH_SIZE);
 
   // Viewing state - which page user is looking at
   const [viewingPageIndex, setViewingPageIndex] = useState(0);
   
-  // Processing state - which page is being processed (can be different from viewing)
+  // Processing state - tracks pages currently being processed
   const [processingPageIndex, setProcessingPageIndex] = useState(null);
+  const [processingPageIndices, setProcessingPageIndices] = useState(new Set()); // For batch processing
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAutoProcessing, setIsAutoProcessing] = useState(false);
+  const [isWaitingForRateLimit, setIsWaitingForRateLimit] = useState(false); // True when auto-processing is waiting
   const [error, setError] = useState(null);
+  
+  // Ref to track if batch processing is in progress (prevents multiple batches)
+  const batchInProgressRef = useRef(false);
 
   // Transcripts
   const [transcripts, setTranscripts] = useState({});
@@ -45,6 +56,10 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   // Rate limit
   const [rateLimitReady, setRateLimitReady] = useState(true);
   const [waitSeconds, setWaitSeconds] = useState(0);
+  const [availableSlots, setAvailableSlots] = useState(5);
+  const [dailyLimitReached, setDailyLimitReached] = useState(false);
+  const pollRetryCountRef = useRef(0);
+  const MAX_POLL_RETRIES = 30; // Stop polling after ~60 seconds (30 * 2s)
 
   // Export state
   const [exporting, setExporting] = useState(null);
@@ -107,8 +122,11 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   const hasAnyTranscript = processedPages.size > 0;
   const canProcess = apiKey && apiKey.length >= 10 && isKeyValid !== false && rateLimitReady;
   
-  // Check if the currently viewing page is also being processed
-  const isViewingPageProcessing = isProcessing && processingPageIndex === viewingPageIndex;
+  // Check if the currently viewing page is being processed (single or batch)
+  const isViewingPageProcessing = isProcessing && (
+    processingPageIndex === viewingPageIndex || 
+    processingPageIndices.has(viewingPageIndex)
+  );
 
   // Manual API key verification
   const handleVerifyKey = useCallback(async () => {
@@ -193,27 +211,187 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     processPage(viewingPageIndex);
   }, [processPage, viewingPageIndex]);
 
-  // Auto-processing - processes pages in background without changing view
-  useEffect(() => {
-    if (!isAutoProcessing || isProcessing || !rateLimitReady) return;
+  // Batch process multiple pages concurrently
+  const processBatch = useCallback(async (pageIndices) => {
+    // Use ref as primary guard to prevent concurrent calls
+    if (batchInProgressRef.current) return;
+    if (!canProcess || pageIndices.length === 0) return;
 
-    // Find next unprocessed page
-    const nextUnprocessed = processedImages.findIndex((_, i) => !processedPages.has(i + 1));
+    batchInProgressRef.current = true;
+    setIsProcessing(true);
+    setProcessingPageIndices(new Set(pageIndices));
+    setError(null);
+
+    try {
+      // Prepare batch items
+      const items = pageIndices.map(pageIndex => {
+        const page = processedImages[pageIndex];
+        return {
+          pageIndex,
+          imageData: page.processed || page.original,
+        };
+      });
+
+      const result = await processBatchOCR(items, selectedModel, apiKey);
+
+      if (result.success) {
+        // Check if quota was exceeded (daily limit)
+        if (result.quotaExceeded) {
+          setDailyLimitReached(true);
+          setIsAutoProcessing(false);
+          setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+        }
+        
+        // Process each result
+        result.results.forEach(item => {
+          const pageNum = item.page_index + 1;
+          if (item.success) {
+            setTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
+            setOriginalTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
+            setProcessedPages(prev => new Set([...prev, pageNum]));
+          } else {
+            // Check individual errors for quota issues
+            const errLower = (item.error || '').toLowerCase();
+            if (errLower.includes('quota') || errLower.includes('resource_exhausted')) {
+              setDailyLimitReached(true);
+              setIsAutoProcessing(false);
+              setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+            }
+            console.error(`Page ${pageNum} failed:`, item.error);
+          }
+        });
+        
+        // Mark key as valid since at least some OCR succeeded
+        if (result.successfulCount > 0) {
+          setIsKeyValid(true);
+        }
+        
+        // Update rate limit status
+        const status = await getRateLimitStatus();
+        const slotsAvailable = status.available_slots || 0;
+        setAvailableSlots(slotsAvailable);
+        
+        // Mark ready if we have any slots available
+        // (the useEffect will adjust batch size based on remaining pages and slots)
+        setRateLimitReady(status.ready && slotsAvailable > 0);
+        
+        if (!status.ready || slotsAvailable === 0) {
+          setWaitSeconds(status.wait_seconds || 60);
+        }
+      } else if (result.error === 'rate_limited') {
+        setRateLimitReady(false);
+        setWaitSeconds(result.waitSeconds || 60);
+        setAvailableSlots(result.availableSlots || 0);
+        setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
+      } else if (result.error === 'invalid_api_key') {
+        setIsKeyValid(false);
+        setError('Invalid API key');
+        setIsAutoProcessing(false);
+      } else if (result.error && (result.error.toLowerCase().includes('quota') || result.error.toLowerCase().includes('resource_exhausted'))) {
+        setDailyLimitReached(true);
+        setIsAutoProcessing(false);
+        setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+      } else {
+        setError(result.error || 'Batch processing failed');
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsProcessing(false);
+      setProcessingPageIndices(new Set());
+      batchInProgressRef.current = false;
+    }
+  }, [apiKey, processedImages, selectedModel, canProcess]);
+
+  // Auto-processing - triggers batch processing when conditions are met
+  // Uses a ref-based guard to prevent rapid re-triggers
+  useEffect(() => {
+    // Early exit conditions
+    if (!isAutoProcessing) {
+      setIsWaitingForRateLimit(false);
+      pollRetryCountRef.current = 0;
+      return;
+    }
+    if (batchInProgressRef.current) return;
+    if (dailyLimitReached) return;
+
+    // Find all unprocessed pages
+    const unprocessedIndices = processedImages
+      .map((_, i) => i)
+      .filter(i => !processedPages.has(i + 1));
     
-    if (nextUnprocessed === -1) {
+    if (unprocessedIndices.length === 0) {
       // All pages processed
       setIsAutoProcessing(false);
+      setIsWaitingForRateLimit(false);
+      pollRetryCountRef.current = 0;
       return;
     }
 
-    // Process the next unprocessed page (don't change viewing page)
-    processPage(nextUnprocessed);
-  }, [isAutoProcessing, isProcessing, rateLimitReady, processedPages, processedImages, processPage]);
+    // If rate limited (no slots available), show waiting state and poll for status
+    if (!rateLimitReady) {
+      setIsWaitingForRateLimit(true);
+      
+      // Poll every 2 seconds to check if rate limit has reset
+      const pollId = setInterval(async () => {
+        // Check if we've exceeded max retries (likely daily limit)
+        pollRetryCountRef.current += 1;
+        if (pollRetryCountRef.current > MAX_POLL_RETRIES) {
+          setDailyLimitReached(true);
+          setIsAutoProcessing(false);
+          setIsWaitingForRateLimit(false);
+          setError('Daily rate limit reached. Please try again later or use a different API key.');
+          clearInterval(pollId);
+          return;
+        }
+        
+        try {
+          const status = await getRateLimitStatus();
+          const slotsAvailable = status.available_slots || 0;
+          setAvailableSlots(slotsAvailable);
+          
+          // Update wait seconds from server
+          if (status.wait_seconds !== undefined) {
+            setWaitSeconds(status.wait_seconds);
+          }
+          
+          // Check if we have any slots available
+          if (status.ready && slotsAvailable > 0) {
+            setRateLimitReady(true);
+            setWaitSeconds(0);
+            setIsWaitingForRateLimit(false);
+            pollRetryCountRef.current = 0;
+            clearInterval(pollId);
+          }
+        } catch (e) {
+          console.error('Failed to poll rate limit:', e);
+        }
+      }, 2000);
+      
+      return () => clearInterval(pollId);
+    }
+
+    // Ready to process - reset retry counter and take batch
+    pollRetryCountRef.current = 0;
+    setIsWaitingForRateLimit(false);
+    const actualBatchSize = Math.min(unprocessedIndices.length, batchSize, availableSlots || batchSize);
+    const batchIndices = unprocessedIndices.slice(0, actualBatchSize);
+    
+    // Use a small timeout to prevent synchronous state update loops
+    const timeoutId = setTimeout(() => {
+      if (!batchInProgressRef.current && isAutoProcessing && rateLimitReady) {
+        processBatch(batchIndices);
+      }
+    }, 200);
+
+    return () => clearTimeout(timeoutId);
+  }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, processedImages, processBatch]);
 
   // Handle transcript change
   const handleTranscriptChange = useCallback((value) => {
     setTranscripts((prev) => ({ ...prev, [viewingPageNumber]: value }));
   }, [viewingPageNumber]);
+
 
   // Reset transcript
   const handleResetTranscript = useCallback(() => {
@@ -233,9 +411,20 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     setExporting(null);
   }, [exporting, hasAnyTranscript, transcripts]);
 
-  // Toggle auto processing
+  // Toggle auto processing - properly stops all processes when toggled off
   const handleToggleAutoProcess = useCallback(() => {
-    setIsAutoProcessing((prev) => !prev);
+    setIsAutoProcessing((prev) => {
+      if (prev) {
+        // Stopping - clear all processing states
+        setIsWaitingForRateLimit(false);
+        setIsProcessing(false);
+        setProcessingPageIndices(new Set());
+        batchInProgressRef.current = false;
+        pollRetryCountRef.current = 0;
+        setError(null);
+      }
+      return !prev;
+    });
   }, []);
 
   return (
@@ -258,12 +447,15 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
             isValidating={isValidating}
             onVerifyKey={handleVerifyKey}
             backendOnline={backendOnline}
+            batchSize={batchSize}
+            onBatchSizeChange={setBatchSize}
           />
           <PageThumbnailList
             images={processedImages}
             currentIndex={viewingPageIndex}
             processedPages={processedPages}
             processingPageIndex={processingPageIndex}
+            processingPageIndices={processingPageIndices}
             onPageSelect={goToPage}
           />
         </>
@@ -276,6 +468,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
           isProcessing={isViewingPageProcessing}
           isPageProcessed={isViewingPageProcessed}
           isAutoProcessing={isAutoProcessing}
+          isWaitingForRateLimit={isWaitingForRateLimit}
           rateLimitReady={rateLimitReady}
           waitSeconds={waitSeconds}
           error={error}
