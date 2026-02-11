@@ -370,7 +370,7 @@ export default function PreprocessPage({
   // ========== CROP HANDLERS ==========
 
   /**
-   * Handle crop completion
+   * Handle crop completion for single page
    * Crops are treated as direct edits - saved immediately to working state
    * with full undo support. No special "crop-only" mode needed.
    */
@@ -387,6 +387,34 @@ export default function PreprocessPage({
     setProcessedImages((prev) => {
       const { [currentPage.pageNumber]: removed, ...rest } = prev;
       return rest;
+    });
+  }, [currentPage, pushImageState]);
+
+  /**
+   * Handle batch crop completion (current page + selected pages)
+   * Applies the same crop region to multiple pages at once
+   */
+  const handleBatchCropComplete = useCallback((currentCroppedUrl, cropData, batchResults) => {
+    if (!currentPage) return;
+
+    // Apply to current page
+    pushImageState(currentPage.pageNumber, currentCroppedUrl);
+
+    // Apply to all other selected pages
+    batchResults.forEach(({ pageNumber, croppedDataUrl }) => {
+      pushImageState(pageNumber, croppedDataUrl);
+    });
+
+    setShowCropper(false);
+
+    // Clear processed images for all affected pages
+    setProcessedImages((prev) => {
+      const newProcessed = { ...prev };
+      delete newProcessed[currentPage.pageNumber];
+      batchResults.forEach(({ pageNumber }) => {
+        delete newProcessed[pageNumber];
+      });
+      return newProcessed;
     });
   }, [currentPage, pushImageState]);
 
@@ -854,6 +882,13 @@ export default function PreprocessPage({
           imageSrc={currentImageState}
           onCropComplete={handleCropComplete}
           onCancel={() => setShowCropper(false)}
+          // Multi-page crop support
+          availablePages={selectedPageData.map(page => ({
+            pageNumber: page.pageNumber,
+            thumbnail: imageStates[page.pageNumber]?.current || page.thumbnail,
+          }))}
+          currentPageNumber={currentPage.pageNumber}
+          onBatchCropComplete={handleBatchCropComplete}
         />
       )}
 

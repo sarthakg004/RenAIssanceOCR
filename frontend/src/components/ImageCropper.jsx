@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Crop, Check, X, RotateCcw, Maximize2, Lock, Unlock } from 'lucide-react';
+import { Crop, Check, X, RotateCcw, Maximize2, Lock, Unlock, Copy, ChevronDown, ChevronUp } from 'lucide-react';
 
 /**
  * Mobile-style draggable image cropper
@@ -8,12 +8,17 @@ import { Crop, Check, X, RotateCcw, Maximize2, Lock, Unlock } from 'lucide-react
  * - Drag center to move crop area
  * - Aspect ratio lock option
  * - Dark overlay outside crop area
+ * - Apply same crop to multiple pages
  */
 export default function ImageCropper({
   imageSrc,
   onCropComplete,
   onCancel,
   initialCrop = null,
+  // New props for multi-page support
+  availablePages = [], // Array of { pageNumber, thumbnail } objects
+  currentPageNumber = null,
+  onBatchCropComplete = null, // Callback for applying crop to multiple pages
 }) {
   const containerRef = useRef(null);
   const imageRef = useRef(null);
@@ -35,6 +40,15 @@ export default function ImageCropper({
   const [cropStart, setCropStart] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [aspectLocked, setAspectLocked] = useState(false);
   const [aspectRatio, setAspectRatio] = useState(null);
+  
+  // Multi-page crop state
+  const [showPageSelector, setShowPageSelector] = useState(false);
+  const [selectedPages, setSelectedPages] = useState(new Set()); // Pages to apply crop to
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+  
+  // Other pages available for batch crop (excluding current)
+  const otherPages = availablePages.filter(p => p.pageNumber !== currentPageNumber);
+  const hasMultiplePages = otherPages.length > 0 && onBatchCropComplete;
 
   // Load image and get dimensions
   useEffect(() => {
@@ -211,31 +225,28 @@ export default function ImageCropper({
     }
   }, [isDragging, handleDragMove, handleDragEnd]);
 
-  // Apply crop and return cropped image
-  const handleApplyCrop = async () => {
-    if (!imageRef.current) return;
-
-    // Create canvas and draw cropped region
+  // Helper function to apply crop to a single image
+  const applyCropToImage = async (imgSrc, cropParams) => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
-    // Calculate actual pixel coordinates from percentages
-    const actualX = (crop.x / 100) * imageDimensions.width;
-    const actualY = (crop.y / 100) * imageDimensions.height;
-    const actualWidth = (crop.width / 100) * imageDimensions.width;
-    const actualHeight = (crop.height / 100) * imageDimensions.height;
-
-    canvas.width = actualWidth;
-    canvas.height = actualHeight;
-
-    // Create a temporary image to draw from
     const img = new Image();
     img.crossOrigin = 'anonymous';
     
-    await new Promise((resolve) => {
+    await new Promise((resolve, reject) => {
       img.onload = resolve;
-      img.src = imageSrc;
+      img.onerror = reject;
+      img.src = imgSrc;
     });
+
+    // Calculate actual pixel coordinates from percentages
+    const actualX = (cropParams.x / 100) * img.width;
+    const actualY = (cropParams.y / 100) * img.height;
+    const actualWidth = (cropParams.width / 100) * img.width;
+    const actualHeight = (cropParams.height / 100) * img.height;
+
+    canvas.width = actualWidth;
+    canvas.height = actualHeight;
 
     ctx.drawImage(
       img,
@@ -243,13 +254,84 @@ export default function ImageCropper({
       0, 0, actualWidth, actualHeight
     );
 
-    const croppedDataUrl = canvas.toDataURL('image/png');
-    onCropComplete(croppedDataUrl, {
+    return canvas.toDataURL('image/png');
+  };
+
+  // Apply crop to current image only
+  const handleApplyCrop = async () => {
+    if (!imageRef.current) return;
+
+    const cropData = {
       x: crop.x,
       y: crop.y,
       width: crop.width,
       height: crop.height,
+    };
+
+    const croppedDataUrl = await applyCropToImage(imageSrc, cropData);
+    onCropComplete(croppedDataUrl, cropData);
+  };
+
+  // Apply crop to current + selected pages
+  const handleApplyBatchCrop = async () => {
+    if (!imageRef.current || selectedPages.size === 0) return;
+    
+    setIsBatchProcessing(true);
+
+    const cropData = {
+      x: crop.x,
+      y: crop.y,
+      width: crop.width,
+      height: crop.height,
+    };
+
+    try {
+      // First, apply to current page
+      const currentCroppedUrl = await applyCropToImage(imageSrc, cropData);
+      
+      // Then apply to all selected pages
+      const batchResults = [];
+      for (const pageNum of selectedPages) {
+        const page = availablePages.find(p => p.pageNumber === pageNum);
+        if (page) {
+          const croppedUrl = await applyCropToImage(page.thumbnail, cropData);
+          batchResults.push({
+            pageNumber: pageNum,
+            croppedDataUrl: croppedUrl,
+            cropData,
+          });
+        }
+      }
+
+      // Call the batch callback with all results
+      onBatchCropComplete(currentCroppedUrl, cropData, batchResults);
+    } catch (error) {
+      console.error('Batch crop failed:', error);
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  // Toggle page selection
+  const togglePageSelection = (pageNum) => {
+    setSelectedPages(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(pageNum)) {
+        newSet.delete(pageNum);
+      } else {
+        newSet.add(pageNum);
+      }
+      return newSet;
     });
+  };
+
+  // Select/deselect all pages
+  const toggleSelectAll = () => {
+    if (selectedPages.size === otherPages.length) {
+      setSelectedPages(new Set());
+    } else {
+      setSelectedPages(new Set(otherPages.map(p => p.pageNumber)));
+    }
   };
 
   // Render handle for crop box
@@ -427,6 +509,85 @@ export default function ImageCropper({
         )}
       </div>
 
+      {/* Page selector panel (collapsible) */}
+      {hasMultiplePages && (
+        <div className="bg-gray-800/90 border-t border-gray-700">
+          {/* Toggle header */}
+          <button
+            onClick={() => setShowPageSelector(!showPageSelector)}
+            className="w-full flex items-center justify-between px-6 py-3 hover:bg-gray-700/50 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <Copy className="w-4 h-4 text-blue-400" />
+              <span className="text-sm font-medium text-white">
+                Apply to other pages
+              </span>
+              {selectedPages.size > 0 && (
+                <span className="px-2 py-0.5 bg-blue-500 text-white text-xs font-semibold rounded-full">
+                  {selectedPages.size} selected
+                </span>
+              )}
+            </div>
+            {showPageSelector ? (
+              <ChevronDown className="w-4 h-4 text-gray-400" />
+            ) : (
+              <ChevronUp className="w-4 h-4 text-gray-400" />
+            )}
+          </button>
+
+          {/* Page selection grid */}
+          {showPageSelector && (
+            <div className="px-6 pb-4">
+              {/* Select all button */}
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs text-gray-400">
+                  Select pages to apply the same crop
+                </span>
+                <button
+                  onClick={toggleSelectAll}
+                  className="text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  {selectedPages.size === otherPages.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+
+              {/* Page thumbnails */}
+              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+                {otherPages.map((page) => (
+                  <button
+                    key={page.pageNumber}
+                    onClick={() => togglePageSelection(page.pageNumber)}
+                    className={`relative w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                      selectedPages.has(page.pageNumber)
+                        ? 'border-blue-500 ring-2 ring-blue-500/30'
+                        : 'border-gray-600 hover:border-gray-500'
+                    }`}
+                  >
+                    <img
+                      src={page.thumbnail}
+                      alt={`Page ${page.pageNumber}`}
+                      className="w-full h-full object-cover"
+                    />
+                    {/* Page number overlay */}
+                    <div className="absolute inset-x-0 bottom-0 bg-black/70 py-0.5">
+                      <span className="text-[10px] font-medium text-white">
+                        {page.pageNumber}
+                      </span>
+                    </div>
+                    {/* Checkmark for selected */}
+                    {selectedPages.has(page.pageNumber) && (
+                      <div className="absolute top-1 right-1 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center">
+                        <Check className="w-3 h-3 text-white" />
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Footer with actions */}
       <div className="flex items-center justify-between px-6 py-4 bg-gray-900/80 border-t border-gray-700">
         <p className="text-sm text-gray-400">
@@ -436,18 +597,41 @@ export default function ImageCropper({
         <div className="flex items-center gap-3">
           <button
             onClick={onCancel}
-            className="flex items-center gap-2 px-5 py-2.5 bg-gray-700 text-white font-medium rounded-xl hover:bg-gray-600 transition-colors"
+            disabled={isBatchProcessing}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gray-700 text-white font-medium rounded-xl hover:bg-gray-600 transition-colors disabled:opacity-50"
           >
             <X className="w-4 h-4" />
             Cancel
           </button>
-          <button
-            onClick={handleApplyCrop}
-            className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition-colors shadow-lg"
-          >
-            <Check className="w-4 h-4" />
-            Apply Crop
-          </button>
+          
+          {/* Show batch apply button if pages are selected */}
+          {selectedPages.size > 0 ? (
+            <button
+              onClick={handleApplyBatchCrop}
+              disabled={isBatchProcessing}
+              className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-semibold rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg disabled:opacity-50"
+            >
+              {isBatchProcessing ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" />
+                  Apply to {selectedPages.size + 1} Pages
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={handleApplyCrop}
+              className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-xl hover:bg-blue-700 transition-colors shadow-lg"
+            >
+              <Check className="w-4 h-4" />
+              Apply Crop
+            </button>
+          )}
         </div>
       </div>
     </div>
