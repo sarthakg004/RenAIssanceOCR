@@ -30,6 +30,7 @@ MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB in bytes
 import cv2
 import numpy as np
 import json
+import httpx
 
 from google import genai
 from google.genai import types
@@ -160,6 +161,54 @@ class RateLimiter:
 rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
 
 # ============================================
+# Shared OCR Prompt (used by all providers)
+# ============================================
+
+OCR_PROMPT = """
+    You are performing high-accuracy OCR transcription.
+
+    Transcribe ALL readable text exactly as it appears in the image.
+
+    Core rules:
+
+    * Preserve original line breaks.
+    * Preserve paragraph spacing.
+    * Preserve punctuation and special characters.
+    * Preserve original spelling (do NOT modernize).
+    * Preserve capitalization exactly.
+    * Keep hyphenated line-break words exactly as shown.
+    * Do NOT summarize.
+    * Do NOT explain.
+    * Output only the transcription.
+
+    Layout rules:
+
+    * If text is in multiple columns, transcribe column by column from left to right.
+    * Preserve indentation if visible.
+    * Keep headings and section breaks.
+    * Keep marginal notes or side text on separate lines and prefix them with "[margin] ".
+
+    Context-based reconstruction rules:
+
+    * If a word is partially unclear, use surrounding letters and sentence context to infer the most likely word.
+    * Prefer historically and linguistically plausible words over random guesses.
+    * Use your language knowledge to reconstruct faded or broken characters when confidence is reasonably high.
+    * Do NOT mark a word as illegible if a strong contextual reconstruction is possible.
+
+    Uncertainty handling:
+
+    * If reconstruction is reasonably confident → output the reconstructed word normally.
+    * If multiple interpretations are possible → choose the most contextually likely one.
+    * If text is truly unreadable with no strong contextual clue → use [illegible].
+    * If only one or two characters are unclear but the word is inferable → output the full inferred word.
+
+    Noise handling:
+
+    * Ignore page borders, stains, ornaments, and decorative lines.
+    * Do not include printer marks unless they are clearly text.
+"""
+
+# ============================================
 # Gemini OCR Core
 # ============================================
 
@@ -196,55 +245,11 @@ def get_gemini_client(api_key: str):
     return genai.Client(api_key=api_key)
 
 def gemini_ocr(client, image_bytes: bytes, model_name: str, mime_type: str = "image/png") -> str:
-    prompt = """
-        You are performing high-accuracy OCR transcription.
-
-        Transcribe ALL readable text exactly as it appears in the image.
-
-        Core rules:
-
-        * Preserve original line breaks.
-        * Preserve paragraph spacing.
-        * Preserve punctuation and special characters.
-        * Preserve original spelling (do NOT modernize).
-        * Preserve capitalization exactly.
-        * Keep hyphenated line-break words exactly as shown.
-        * Do NOT summarize.
-        * Do NOT explain.
-        * Output only the transcription.
-
-        Layout rules:
-
-        * If text is in multiple columns, transcribe column by column from left to right.
-        * Preserve indentation if visible.
-        * Keep headings and section breaks.
-        * Keep marginal notes or side text on separate lines and prefix them with "[margin] ".
-
-        Context-based reconstruction rules:
-
-        * If a word is partially unclear, use surrounding letters and sentence context to infer the most likely word.
-        * Prefer historically and linguistically plausible words over random guesses.
-        * Use your language knowledge to reconstruct faded or broken characters when confidence is reasonably high.
-        * Do NOT mark a word as illegible if a strong contextual reconstruction is possible.
-
-        Uncertainty handling:
-
-        * If reconstruction is reasonably confident → output the reconstructed word normally.
-        * If multiple interpretations are possible → choose the most contextually likely one.
-        * If text is truly unreadable with no strong contextual clue → use [illegible].
-        * If only one or two characters are unclear but the word is inferable → output the full inferred word.
-
-        Noise handling:
-
-        * Ignore page borders, stains, ornaments, and decorative lines.
-        * Do not include printer marks unless they are clearly text.
-    """
-
     response = client.models.generate_content(
         model=model_name,
         contents=[
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            prompt
+            OCR_PROMPT
         ],
     )
 
@@ -870,6 +875,482 @@ async def ocr_batch(
         if "API_KEY_INVALID" in error_msg or "401" in error_msg:
             raise HTTPException(status_code=401, detail="Invalid Gemini API key")
         raise HTTPException(status_code=500, detail=error_msg)
+
+
+# ============================================
+# ChatGPT (OpenAI) OCR
+# ============================================
+
+CHATGPT_MODELS = [
+    {
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "description": "Most capable multimodal model, excellent OCR accuracy"
+    },
+    {
+        "id": "gpt-4.1",
+        "name": "GPT-4.1",
+        "description": "Latest GPT-4.1 model with improved performance"
+    },
+    {
+        "id": "gpt-4-turbo",
+        "name": "GPT-4 Turbo",
+        "description": "Fast GPT-4 with vision capabilities"
+    },
+    {
+        "id": "gpt-4o-mini",
+        "name": "GPT-4o Mini",
+        "description": "Smaller, faster, and more affordable"
+    },
+]
+
+CHATGPT_MODEL_IDS = [m["id"] for m in CHATGPT_MODELS]
+CHATGPT_DEFAULT_MODEL = "gpt-4o"
+
+
+def chatgpt_ocr(api_key: str, image_bytes: bytes, model_name: str, mime_type: str = "image/png") -> str:
+    """Perform OCR using OpenAI ChatGPT API with vision"""
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    },
+                    {
+                        "type": "text",
+                        "text": OCR_PROMPT
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 4096,
+    }
+
+    response = httpx.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    result = response.json()
+    return result["choices"][0]["message"]["content"]
+
+
+class ChatGPTOCRRequest(BaseModel):
+    """Request model for ChatGPT OCR endpoint"""
+    image_data: str
+    model: str = CHATGPT_DEFAULT_MODEL
+
+
+@app.get("/api/chatgpt-models")
+async def get_chatgpt_models():
+    """Get list of available ChatGPT models"""
+    return {
+        "models": CHATGPT_MODELS,
+        "default": CHATGPT_DEFAULT_MODEL
+    }
+
+
+@app.post("/api/chatgpt-ocr-json", response_model=OCRResponse)
+async def chatgpt_ocr_page(
+    request: ChatGPTOCRRequest,
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
+    """
+    Process a base64-encoded image with ChatGPT OCR (JSON body)
+
+    Headers:
+        X-API-Key: Your OpenAI API key
+
+    JSON Body:
+        image_data: Base64 encoded image (with or without data URL prefix)
+        model: ChatGPT model name
+    """
+    # Validate model
+    if request.model not in CHATGPT_MODEL_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model. Available models: {CHATGPT_MODEL_IDS}"
+        )
+
+    start_time = time.time()
+
+    try:
+        image_data = request.image_data
+
+        # Parse base64 data
+        if "," in image_data:
+            header, encoded = image_data.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
+        else:
+            encoded = image_data
+            mime_type = "image/png"
+
+        image_bytes = base64.b64decode(encoded)
+
+        # Perform OCR
+        transcript = chatgpt_ocr(x_api_key, image_bytes, request.model, mime_type)
+
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return OCRResponse(
+            success=True,
+            transcript=transcript,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+    except httpx.HTTPStatusError as e:
+        error_msg = str(e)
+        processing_time = int((time.time() - start_time) * 1000)
+
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid OpenAI API key")
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="OpenAI API rate limit exceeded")
+
+        return OCRResponse(
+            success=False,
+            error=error_msg,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return OCRResponse(
+            success=False,
+            error=error_msg,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+
+# ============================================
+# DeepSeek OCR
+# ============================================
+
+DEEPSEEK_MODELS = [
+    {
+        "id": "deepseek-chat",
+        "name": "DeepSeek Chat",
+        "description": "DeepSeek general chat model"
+    },
+    {
+        "id": "deepseek-reasoner",
+        "name": "DeepSeek Reasoner",
+        "description": "DeepSeek reasoning model"
+    },
+]
+
+DEEPSEEK_MODEL_IDS = [m["id"] for m in DEEPSEEK_MODELS]
+DEEPSEEK_DEFAULT_MODEL = "deepseek-chat"
+
+
+def deepseek_ocr(api_key: str, image_bytes: bytes, model_name: str, mime_type: str = "image/png") -> str:
+    """Perform OCR using DeepSeek API (OpenAI-compatible)"""
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    },
+                    {
+                        "type": "text",
+                        "text": OCR_PROMPT
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 4096,
+    }
+
+    response = httpx.post(
+        "https://api.deepseek.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    result = response.json()
+    return result["choices"][0]["message"]["content"]
+
+
+class DeepSeekOCRRequest(BaseModel):
+    """Request model for DeepSeek OCR endpoint"""
+    image_data: str
+    model: str = DEEPSEEK_DEFAULT_MODEL
+
+
+@app.get("/api/deepseek-models")
+async def get_deepseek_models():
+    """Get list of available DeepSeek models"""
+    return {
+        "models": DEEPSEEK_MODELS,
+        "default": DEEPSEEK_DEFAULT_MODEL
+    }
+
+
+@app.post("/api/deepseek-ocr-json", response_model=OCRResponse)
+async def deepseek_ocr_page(
+    request: DeepSeekOCRRequest,
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
+    """
+    Process a base64-encoded image with DeepSeek OCR (JSON body)
+
+    Headers:
+        X-API-Key: Your DeepSeek API key
+
+    JSON Body:
+        image_data: Base64 encoded image (with or without data URL prefix)
+        model: DeepSeek model name
+    """
+    # Validate model
+    if request.model not in DEEPSEEK_MODEL_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model. Available models: {DEEPSEEK_MODEL_IDS}"
+        )
+
+    start_time = time.time()
+
+    try:
+        image_data = request.image_data
+
+        # Parse base64 data
+        if "," in image_data:
+            header, encoded = image_data.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
+        else:
+            encoded = image_data
+            mime_type = "image/png"
+
+        image_bytes = base64.b64decode(encoded)
+
+        # Perform OCR
+        transcript = deepseek_ocr(x_api_key, image_bytes, request.model, mime_type)
+
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return OCRResponse(
+            success=True,
+            transcript=transcript,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+    except httpx.HTTPStatusError as e:
+        error_msg = str(e)
+        processing_time = int((time.time() - start_time) * 1000)
+
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid DeepSeek API key")
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="DeepSeek API rate limit exceeded")
+
+        return OCRResponse(
+            success=False,
+            error=error_msg,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return OCRResponse(
+            success=False,
+            error=error_msg,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+
+# ============================================
+# Qwen OCR
+# ============================================
+
+QWEN_MODELS = [
+    {
+        "id": "qwen-vl-max",
+        "name": "Qwen VL Max",
+        "description": "Most capable Qwen vision-language model"
+    },
+    {
+        "id": "qwen-vl-ocr",
+        "name": "Qwen VL OCR",
+        "description": "Qwen model optimized for OCR tasks"
+    },
+    {
+        "id": "qwen2.5-vl-72b-instruct",
+        "name": "Qwen2.5 VL 72B",
+        "description": "Large Qwen 2.5 vision-language model"
+    },
+    {
+        "id": "qwen2.5-vl-7b-instruct",
+        "name": "Qwen2.5 VL 7B",
+        "description": "Efficient Qwen 2.5 vision model"
+    },
+]
+
+QWEN_MODEL_IDS = [m["id"] for m in QWEN_MODELS]
+QWEN_DEFAULT_MODEL = "qwen-vl-max"
+
+
+def qwen_ocr(api_key: str, image_bytes: bytes, model_name: str, mime_type: str = "image/png") -> str:
+    """Perform OCR using Qwen (DashScope) API (OpenAI-compatible)"""
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{mime_type};base64,{image_b64}"
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    },
+                    {
+                        "type": "text",
+                        "text": OCR_PROMPT
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 4096,
+    }
+
+    response = httpx.post(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    result = response.json()
+    return result["choices"][0]["message"]["content"]
+
+
+class QwenOCRRequest(BaseModel):
+    """Request model for Qwen OCR endpoint"""
+    image_data: str
+    model: str = QWEN_DEFAULT_MODEL
+
+
+@app.get("/api/qwen-models")
+async def get_qwen_models():
+    """Get list of available Qwen models"""
+    return {
+        "models": QWEN_MODELS,
+        "default": QWEN_DEFAULT_MODEL
+    }
+
+
+@app.post("/api/qwen-ocr-json", response_model=OCRResponse)
+async def qwen_ocr_page(
+    request: QwenOCRRequest,
+    x_api_key: str = Header(..., alias="X-API-Key")
+):
+    """
+    Process a base64-encoded image with Qwen OCR (JSON body)
+
+    Headers:
+        X-API-Key: Your DashScope/Qwen API key
+
+    JSON Body:
+        image_data: Base64 encoded image (with or without data URL prefix)
+        model: Qwen model name
+    """
+    # Validate model
+    if request.model not in QWEN_MODEL_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model. Available models: {QWEN_MODEL_IDS}"
+        )
+
+    start_time = time.time()
+
+    try:
+        image_data = request.image_data
+
+        # Parse base64 data
+        if "," in image_data:
+            header, encoded = image_data.split(",", 1)
+            mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
+        else:
+            encoded = image_data
+            mime_type = "image/png"
+
+        image_bytes = base64.b64decode(encoded)
+
+        # Perform OCR
+        transcript = qwen_ocr(x_api_key, image_bytes, request.model, mime_type)
+
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return OCRResponse(
+            success=True,
+            transcript=transcript,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+    except httpx.HTTPStatusError as e:
+        error_msg = str(e)
+        processing_time = int((time.time() - start_time) * 1000)
+
+        if e.response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid Qwen/DashScope API key")
+        if e.response.status_code == 429:
+            raise HTTPException(status_code=429, detail="Qwen API rate limit exceeded")
+
+        return OCRResponse(
+            success=False,
+            error=error_msg,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
+
+    except Exception as e:
+        error_msg = str(e)
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return OCRResponse(
+            success=False,
+            error=error_msg,
+            model_used=request.model,
+            processing_time_ms=processing_time
+        )
 
 
 # ============================================

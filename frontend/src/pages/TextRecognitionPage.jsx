@@ -15,28 +15,73 @@ import {
   exportTranscripts,
   downloadBlob,
 } from '../services/geminiApi';
+import { getChatGPTModels, processChatGPTPageOCR } from '../services/chatgptApi';
+import { getDeepSeekModels, processDeepSeekPageOCR } from '../services/deepseekApi';
+import { getQwenModels, processQwenPageOCR } from '../services/qwenApi';
 
 // Default batch size (safe for 5 req/min limit)
 const DEFAULT_BATCH_SIZE = 4;
+
+// Provider display names
+const PROVIDER_LABELS = {
+  gemini: 'Gemini',
+  chatgpt: 'ChatGPT',
+  deepseek: 'DeepSeek',
+  qwen: 'Qwen',
+};
+
+// Fallback models for each provider when backend is offline
+const FALLBACK_MODELS = {
+  gemini: [
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', description: 'Latest and fastest (recommended)' },
+    { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', description: 'Most capable preview model' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Stable pro model' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable flash model' },
+  ],
+  chatgpt: [
+    { id: 'gpt-4o', name: 'GPT-4o', description: 'Most capable multimodal model' },
+    { id: 'gpt-4.1', name: 'GPT-4.1', description: 'Latest GPT-4.1 model' },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Fast with vision capabilities' },
+    { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Smaller, faster, affordable' },
+  ],
+  deepseek: [
+    { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'General chat model' },
+    { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Reasoning model' },
+  ],
+  qwen: [
+    { id: 'qwen-vl-max', name: 'Qwen VL Max', description: 'Most capable vision model' },
+    { id: 'qwen-vl-ocr', name: 'Qwen VL OCR', description: 'Optimized for OCR tasks' },
+    { id: 'qwen2.5-vl-72b-instruct', name: 'Qwen2.5 VL 72B', description: 'Large vision-language model' },
+    { id: 'qwen2.5-vl-7b-instruct', name: 'Qwen2.5 VL 7B', description: 'Efficient vision model' },
+  ],
+};
+
+const DEFAULT_MODELS = {
+  gemini: 'gemini-3-flash-preview',
+  chatgpt: 'gpt-4o',
+  deepseek: 'deepseek-chat',
+  qwen: 'qwen-vl-max',
+};
 
 /**
  * TextRecognitionPage - Full Viewport OCR Workspace
  * Redesigned with 3-column responsive layout
  * Supports background auto-processing with batch concurrent requests
+ * Now supports multiple providers: gemini, chatgpt, deepseek, qwen
  */
-export default function TextRecognitionPage({ processedImages, onBack, onComplete }) {
+export default function TextRecognitionPage({ provider = 'gemini', processedImages, onBack, onComplete }) {
   // API Configuration
   const [apiKey, setApiKey] = useState('');
   const [isKeyValid, setIsKeyValid] = useState(null);
   const [isValidating, setIsValidating] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODELS[provider] || DEFAULT_MODELS.gemini);
   const [models, setModels] = useState([]);
   const [backendOnline, setBackendOnline] = useState(null);
   const [batchSize, setBatchSize] = useState(DEFAULT_BATCH_SIZE);
 
   // Viewing state - which page user is looking at
   const [viewingPageIndex, setViewingPageIndex] = useState(0);
-  
+
   // Processing state - tracks pages currently being processed
   const [processingPageIndex, setProcessingPageIndex] = useState(null);
   const [processingPageIndices, setProcessingPageIndices] = useState(new Set()); // For batch processing
@@ -44,7 +89,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   const [isAutoProcessing, setIsAutoProcessing] = useState(false);
   const [isWaitingForRateLimit, setIsWaitingForRateLimit] = useState(false); // True when auto-processing is waiting
   const [error, setError] = useState(null);
-  
+
   // Ref to track if batch processing is in progress (prevents multiple batches)
   const batchInProgressRef = useRef(false);
 
@@ -67,26 +112,31 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   // Zoom state - lifted here to persist across page changes
   const [zoomLevel, setZoomLevel] = useState(1);
 
-  // Load models on mount
+  // Load models on mount based on provider
   useEffect(() => {
     async function loadModels() {
       try {
-        const data = await getAvailableModels();
+        let data;
+        if (provider === 'chatgpt') {
+          data = await getChatGPTModels();
+        } else if (provider === 'deepseek') {
+          data = await getDeepSeekModels();
+        } else if (provider === 'qwen') {
+          data = await getQwenModels();
+        } else {
+          data = await getAvailableModels();
+        }
         setModels(data.models);
         setSelectedModel(data.default);
         setBackendOnline(true);
       } catch {
         setBackendOnline(false);
-        setModels([
-          { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', description: 'Latest and fastest (recommended)' },
-          { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', description: 'Most capable preview model' },
-          { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Stable pro model' },
-          { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable flash model' },
-        ]);
+        setModels(FALLBACK_MODELS[provider] || FALLBACK_MODELS.gemini);
+        setSelectedModel(DEFAULT_MODELS[provider] || DEFAULT_MODELS.gemini);
       }
     }
     loadModels();
-  }, []);
+  }, [provider]);
 
   // Initialize transcripts
   useEffect(() => {
@@ -121,14 +171,14 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   const isViewingPageProcessed = processedPages.has(viewingPageNumber);
   const hasAnyTranscript = processedPages.size > 0;
   const canProcess = apiKey && apiKey.length >= 10 && isKeyValid !== false && rateLimitReady;
-  
+
   // Check if the currently viewing page is being processed (single or batch)
   const isViewingPageProcessing = isProcessing && (
-    processingPageIndex === viewingPageIndex || 
+    processingPageIndex === viewingPageIndex ||
     processingPageIndices.has(viewingPageIndex)
   );
 
-  // Manual API key verification
+  // Manual API key verification (simple format check for non-Gemini providers)
   const handleVerifyKey = useCallback(async () => {
     if (!apiKey || apiKey.length < 10) return;
 
@@ -136,10 +186,21 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     setError(null);
 
     try {
-      const result = await verifyApiKey(apiKey);
-      setIsKeyValid(result.valid);
-      if (!result.valid) {
-        setError(result.error || 'Invalid API key');
+      if (provider === 'gemini') {
+        const result = await verifyApiKey(apiKey);
+        setIsKeyValid(result.valid);
+        if (!result.valid) {
+          setError(result.error || 'Invalid API key');
+        }
+      } else {
+        // For non-Gemini providers, do a simple format check
+        // Actual validation happens on first OCR call
+        if (apiKey.length >= 20) {
+          setIsKeyValid(true);
+        } else {
+          setIsKeyValid(false);
+          setError('API key appears too short');
+        }
       }
     } catch (err) {
       setIsKeyValid(false);
@@ -147,7 +208,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     } finally {
       setIsValidating(false);
     }
-  }, [apiKey]);
+  }, [apiKey, provider]);
 
   // Handle API key change - reset validation state
   const handleApiKeyChange = useCallback((value) => {
@@ -167,20 +228,31 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     }
   }, [totalPages]);
 
-  // Process a specific page (used by both manual and auto processing)
+  // Process a specific page using the correct provider API
   const processPage = useCallback(async (pageIndex) => {
     if (!canProcess || isProcessing) return;
 
     const pageNum = pageIndex + 1;
     const page = processedImages[pageIndex];
-    
+
     setProcessingPageIndex(pageIndex);
     setIsProcessing(true);
     setError(null);
 
     try {
       const imageData = page.processed || page.original;
-      const result = await processPageOCR(imageData, selectedModel, apiKey);
+
+      // Call the correct provider's OCR API
+      let result;
+      if (provider === 'chatgpt') {
+        result = await processChatGPTPageOCR(imageData, selectedModel, apiKey);
+      } else if (provider === 'deepseek') {
+        result = await processDeepSeekPageOCR(imageData, selectedModel, apiKey);
+      } else if (provider === 'qwen') {
+        result = await processQwenPageOCR(imageData, selectedModel, apiKey);
+      } else {
+        result = await processPageOCR(imageData, selectedModel, apiKey);
+      }
 
       if (result.success) {
         setTranscripts((prev) => ({ ...prev, [pageNum]: result.transcript }));
@@ -204,7 +276,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
       setIsProcessing(false);
       setProcessingPageIndex(null);
     }
-  }, [apiKey, processedImages, selectedModel, canProcess, isProcessing]);
+  }, [apiKey, processedImages, selectedModel, canProcess, isProcessing, provider]);
 
   // Process the currently viewed page (for manual "Process Page" button)
   const processCurrentPage = useCallback(() => {
@@ -212,6 +284,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
   }, [processPage, viewingPageIndex]);
 
   // Batch process multiple pages concurrently
+  // For non-Gemini providers, process sequentially since they don't have a batch endpoint
   const processBatch = useCallback(async (pageIndices) => {
     // Use ref as primary guard to prevent concurrent calls
     if (batchInProgressRef.current) return;
@@ -223,76 +296,116 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     setError(null);
 
     try {
-      // Prepare batch items
-      const items = pageIndices.map(pageIndex => {
-        const page = processedImages[pageIndex];
-        return {
-          pageIndex,
-          imageData: page.processed || page.original,
-        };
-      });
+      if (provider === 'gemini') {
+        // Gemini has a batch endpoint
+        const items = pageIndices.map(pageIndex => {
+          const page = processedImages[pageIndex];
+          return {
+            pageIndex,
+            imageData: page.processed || page.original,
+          };
+        });
 
-      const result = await processBatchOCR(items, selectedModel, apiKey);
+        const result = await processBatchOCR(items, selectedModel, apiKey);
 
-      if (result.success) {
-        // Check if quota was exceeded (daily limit)
-        if (result.quotaExceeded) {
+        if (result.success) {
+          // Check if quota was exceeded (daily limit)
+          if (result.quotaExceeded) {
+            setDailyLimitReached(true);
+            setIsAutoProcessing(false);
+            setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+          }
+
+          // Process each result
+          result.results.forEach(item => {
+            const pageNum = item.page_index + 1;
+            if (item.success) {
+              setTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
+              setOriginalTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
+              setProcessedPages(prev => new Set([...prev, pageNum]));
+            } else {
+              // Check individual errors for quota issues
+              const errLower = (item.error || '').toLowerCase();
+              if (errLower.includes('quota') || errLower.includes('resource_exhausted')) {
+                setDailyLimitReached(true);
+                setIsAutoProcessing(false);
+                setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+              }
+              console.error(`Page ${pageNum} failed:`, item.error);
+            }
+          });
+
+          // Mark key as valid since at least some OCR succeeded
+          if (result.successfulCount > 0) {
+            setIsKeyValid(true);
+          }
+
+          // Update rate limit status
+          const status = await getRateLimitStatus();
+          const slotsAvailable = status.available_slots || 0;
+          setAvailableSlots(slotsAvailable);
+
+          // Mark ready if we have any slots available
+          setRateLimitReady(status.ready && slotsAvailable > 0);
+
+          if (!status.ready || slotsAvailable === 0) {
+            setWaitSeconds(status.wait_seconds || 60);
+          }
+        } else if (result.error === 'rate_limited') {
+          setRateLimitReady(false);
+          setWaitSeconds(result.waitSeconds || 60);
+          setAvailableSlots(result.availableSlots || 0);
+          setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
+        } else if (result.error === 'invalid_api_key') {
+          setIsKeyValid(false);
+          setError('Invalid API key');
+          setIsAutoProcessing(false);
+        } else if (result.error && (result.error.toLowerCase().includes('quota') || result.error.toLowerCase().includes('resource_exhausted'))) {
           setDailyLimitReached(true);
           setIsAutoProcessing(false);
           setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+        } else {
+          setError(result.error || 'Batch processing failed');
         }
-        
-        // Process each result
-        result.results.forEach(item => {
-          const pageNum = item.page_index + 1;
-          if (item.success) {
-            setTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
-            setOriginalTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
-            setProcessedPages(prev => new Set([...prev, pageNum]));
-          } else {
-            // Check individual errors for quota issues
-            const errLower = (item.error || '').toLowerCase();
-            if (errLower.includes('quota') || errLower.includes('resource_exhausted')) {
-              setDailyLimitReached(true);
-              setIsAutoProcessing(false);
-              setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
-            }
-            console.error(`Page ${pageNum} failed:`, item.error);
-          }
-        });
-        
-        // Mark key as valid since at least some OCR succeeded
-        if (result.successfulCount > 0) {
-          setIsKeyValid(true);
-        }
-        
-        // Update rate limit status
-        const status = await getRateLimitStatus();
-        const slotsAvailable = status.available_slots || 0;
-        setAvailableSlots(slotsAvailable);
-        
-        // Mark ready if we have any slots available
-        // (the useEffect will adjust batch size based on remaining pages and slots)
-        setRateLimitReady(status.ready && slotsAvailable > 0);
-        
-        if (!status.ready || slotsAvailable === 0) {
-          setWaitSeconds(status.wait_seconds || 60);
-        }
-      } else if (result.error === 'rate_limited') {
-        setRateLimitReady(false);
-        setWaitSeconds(result.waitSeconds || 60);
-        setAvailableSlots(result.availableSlots || 0);
-        setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
-      } else if (result.error === 'invalid_api_key') {
-        setIsKeyValid(false);
-        setError('Invalid API key');
-        setIsAutoProcessing(false);
-      } else if (result.error && (result.error.toLowerCase().includes('quota') || result.error.toLowerCase().includes('resource_exhausted'))) {
-        setDailyLimitReached(true);
-        setIsAutoProcessing(false);
-        setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
       } else {
-        setError(result.error || 'Batch processing failed');
+        // For non-Gemini providers: process pages sequentially
+        for (const pageIndex of pageIndices) {
+          const page = processedImages[pageIndex];
+          const imageData = page.processed || page.original;
+          const pageNum = pageIndex + 1;
+
+          try {
+            let result;
+            if (provider === 'chatgpt') {
+              result = await processChatGPTPageOCR(imageData, selectedModel, apiKey);
+            } else if (provider === 'deepseek') {
+              result = await processDeepSeekPageOCR(imageData, selectedModel, apiKey);
+            } else if (provider === 'qwen') {
+              result = await processQwenPageOCR(imageData, selectedModel, apiKey);
+            }
+
+            if (result.success) {
+              setTranscripts(prev => ({ ...prev, [pageNum]: result.transcript }));
+              setOriginalTranscripts(prev => ({ ...prev, [pageNum]: result.transcript }));
+              setProcessedPages(prev => new Set([...prev, pageNum]));
+              setIsKeyValid(true);
+            } else if (result.error === 'rate_limited') {
+              setRateLimitReady(false);
+              setWaitSeconds(result.waitSeconds || 20);
+              setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
+              break; // Stop processing on rate limit
+            } else if (result.error === 'invalid_api_key') {
+              setIsKeyValid(false);
+              setError('Invalid API key');
+              setIsAutoProcessing(false);
+              break;
+            } else {
+              console.error(`Page ${pageNum} failed:`, result.error);
+            }
+          } catch (err) {
+            console.error(`Page ${pageNum} error:`, err.message);
+          }
+        }
       }
     } catch (err) {
       setError(err.message);
@@ -301,7 +414,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
       setProcessingPageIndices(new Set());
       batchInProgressRef.current = false;
     }
-  }, [apiKey, processedImages, selectedModel, canProcess]);
+  }, [apiKey, processedImages, selectedModel, canProcess, provider]);
 
   // Auto-processing - triggers batch processing when conditions are met
   // Uses a ref-based guard to prevent rapid re-triggers
@@ -319,7 +432,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     const unprocessedIndices = processedImages
       .map((_, i) => i)
       .filter(i => !processedPages.has(i + 1));
-    
+
     if (unprocessedIndices.length === 0) {
       // All pages processed
       setIsAutoProcessing(false);
@@ -328,10 +441,10 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
       return;
     }
 
-    // If rate limited (no slots available), show waiting state and poll for status
-    if (!rateLimitReady) {
+    // For Gemini: check rate limits. For other providers: just process.
+    if (provider === 'gemini' && !rateLimitReady) {
       setIsWaitingForRateLimit(true);
-      
+
       // Poll every 2 seconds to check if rate limit has reset
       const pollId = setInterval(async () => {
         // Check if we've exceeded max retries (likely daily limit)
@@ -344,17 +457,17 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
           clearInterval(pollId);
           return;
         }
-        
+
         try {
           const status = await getRateLimitStatus();
           const slotsAvailable = status.available_slots || 0;
           setAvailableSlots(slotsAvailable);
-          
+
           // Update wait seconds from server
           if (status.wait_seconds !== undefined) {
             setWaitSeconds(status.wait_seconds);
           }
-          
+
           // Check if we have any slots available
           if (status.ready && slotsAvailable > 0) {
             setRateLimitReady(true);
@@ -367,25 +480,27 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
           console.error('Failed to poll rate limit:', e);
         }
       }, 2000);
-      
+
       return () => clearInterval(pollId);
     }
 
     // Ready to process - reset retry counter and take batch
     pollRetryCountRef.current = 0;
     setIsWaitingForRateLimit(false);
-    const actualBatchSize = Math.min(unprocessedIndices.length, batchSize, availableSlots || batchSize);
+    const actualBatchSize = provider === 'gemini'
+      ? Math.min(unprocessedIndices.length, batchSize, availableSlots || batchSize)
+      : Math.min(unprocessedIndices.length, batchSize);
     const batchIndices = unprocessedIndices.slice(0, actualBatchSize);
-    
+
     // Use a small timeout to prevent synchronous state update loops
     const timeoutId = setTimeout(() => {
-      if (!batchInProgressRef.current && isAutoProcessing && rateLimitReady) {
+      if (!batchInProgressRef.current && isAutoProcessing && (provider !== 'gemini' || rateLimitReady)) {
         processBatch(batchIndices);
       }
     }, 200);
 
     return () => clearTimeout(timeoutId);
-  }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, processedImages, processBatch]);
+  }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, processedImages, processBatch, provider]);
 
   // Handle transcript change
   const handleTranscriptChange = useCallback((value) => {
@@ -449,6 +564,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
             backendOnline={backendOnline}
             batchSize={batchSize}
             onBatchSizeChange={setBatchSize}
+            provider={provider}
           />
           <PageThumbnailList
             images={processedImages}

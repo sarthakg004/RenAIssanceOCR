@@ -18,6 +18,13 @@ import {
  * SidebarConfig Component
  * API configuration panel with proper async validation
  */
+const PROVIDER_LABELS = {
+  gemini: 'Gemini',
+  chatgpt: 'ChatGPT',
+  deepseek: 'DeepSeek',
+  qwen: 'Qwen',
+};
+
 export default function SidebarConfig({
   apiKey,
   onApiKeyChange,
@@ -30,8 +37,10 @@ export default function SidebarConfig({
   backendOnline,
   batchSize,
   onBatchSizeChange,
+  provider = 'gemini',
 }) {
   const [showKey, setShowKey] = useState(false);
+  const providerLabel = PROVIDER_LABELS[provider] || 'API';
 
   const getKeyStatusBadge = () => {
     if (isValidating) {
@@ -67,7 +76,7 @@ export default function SidebarConfig({
       <div className="px-3 py-2 bg-gradient-to-r from-blue-50/80 to-white border-b border-gray-100">
         <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
           <Key size={16} className="text-blue-600" />
-          API Config
+          {providerLabel} Config
         </h3>
       </div>
 
@@ -86,7 +95,7 @@ export default function SidebarConfig({
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-xs font-medium text-gray-700">
-              API Key
+              {providerLabel} API Key
             </label>
             {getKeyStatusBadge()}
           </div>
@@ -95,7 +104,7 @@ export default function SidebarConfig({
               type={showKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => onApiKeyChange(e.target.value)}
-              placeholder="Enter API key..."
+              placeholder={`Enter ${providerLabel} API key...`}
               className="w-full px-2.5 py-2 pr-16 text-sm border border-gray-200 rounded-lg 
                        focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-400
                        transition-colors bg-gray-50 focus:bg-white"
@@ -195,7 +204,7 @@ export default function SidebarConfig({
             </button>
           </div>
           <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">
-            Pages to process at once. Gemini free tier: 5 req/min.
+            Pages to process at once.{provider === 'gemini' ? ' Gemini free tier: 5 req/min.' : ''}
           </p>
         </div>
       </div>
