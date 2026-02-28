@@ -788,3 +788,48 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 ---
 
 **Built with ❤️ for historical document preservation**
+
+---
+
+## 🚀 Run with Docker (prebuilt images)
+
+You can run the full stack instantly using prebuilt images from Docker Hub. No need to build anything locally!
+
+### 1. Pull the images
+
+```bash
+# Backend (FastAPI)
+docker pull saarthakg004/renaissance-backend:v1.0.0
+
+# Frontend (React + Nginx)
+docker pull saarthakg004/renaissance-frontend:v1.0.0
+```
+
+### 2. Run the backend
+
+```bash
+docker run -d --name renaissance-backend -p 8000:8000 --env-file .env saarthakg004/renaissance-backend:v1.0.0
+```
+- The backend will be available at http://localhost:8000
+- Pass your `.env` file for API keys if needed (see below)
+
+### 3. Run the frontend
+
+```bash
+docker run -d --name renaissance-frontend -p 5173:80 saarthakg004/renaissance-frontend:v1.0.0
+```
+- The frontend will be available at http://localhost:5173
+- It will connect to the backend at `localhost:8000` by default
+
+### 4. Stopping the containers
+
+```bash
+docker stop renaissance-backend renaissance-frontend
+docker rm renaissance-backend renaissance-frontend
+```
+
+### 5. Environment Variables
+- Place your API keys in a `.env` file in the project root (see `.env.example` if available)
+- Pass it to the backend container with `--env-file .env`
+
+---
