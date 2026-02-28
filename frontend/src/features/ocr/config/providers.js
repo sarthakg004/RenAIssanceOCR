@@ -27,10 +27,8 @@ export const FALLBACK_MODELS = {
         { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable flash model' },
     ],
     chatgpt: [
-        { id: 'gpt-4o', name: 'GPT-4o', description: 'Most capable multimodal model' },
-        { id: 'gpt-4.1', name: 'GPT-4.1', description: 'Latest GPT-4.1 model' },
-        { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Fast with vision capabilities' },
-        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: 'Smaller, faster, affordable' },
+        { id: 'gpt-5.2', name: 'GPT-5.2', description: 'Latest and most capable multimodal model' },
+        { id: 'gpt-5-mini', name: 'GPT-5 Mini', description: 'Smaller, faster, and affordable' },
     ],
     deepseek: [
         { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'General chat model' },
@@ -47,7 +45,7 @@ export const FALLBACK_MODELS = {
 // Default model per provider
 export const DEFAULT_MODELS = {
     gemini: 'gemini-3-flash-preview',
-    chatgpt: 'gpt-4o',
+    chatgpt: 'gpt-5.2',
     deepseek: 'deepseek-chat',
     qwen: 'qwen-vl-max',
 };
@@ -87,6 +85,8 @@ export const METHOD_OPTIONS = [
         borderColor: 'border-purple-500',
         accentColor: 'text-purple-600',
         shadowColor: 'shadow-purple-500/20',
+        disabled: true,
+        disabledReason: 'Does not provide API support for images',
     },
     {
         id: 'qwen',
@@ -98,6 +98,8 @@ export const METHOD_OPTIONS = [
         borderColor: 'border-orange-500',
         accentColor: 'text-orange-600',
         shadowColor: 'shadow-orange-500/20',
+        disabled: true,
+        disabledReason: 'Does not provide API support for images',
     },
 ];
 

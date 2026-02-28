@@ -107,6 +107,8 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                 setWaitSeconds((prev) => {
                     if (prev <= 1) {
                         setRateLimitReady(true);
+                        // Clear any rate-limit error so the banner doesn't linger
+                        setError((e) => (e && e.includes('Rate limit') ? null : e));
                         return 0;
                     }
                     return prev - 1;
@@ -206,7 +208,6 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
             } else if (result.error === 'rate_limited') {
                 setRateLimitReady(false);
                 setWaitSeconds(result.waitSeconds || 20);
-                setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
             } else if (result.error === 'invalid_api_key') {
                 setIsKeyValid(false);
                 setError('Invalid API key');
@@ -298,7 +299,6 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                     setRateLimitReady(false);
                     setWaitSeconds(result.waitSeconds || 60);
                     setAvailableSlots(result.availableSlots || 0);
-                    setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
                 } else if (result.error === 'invalid_api_key') {
                     setIsKeyValid(false);
                     setError('Invalid API key');
@@ -328,7 +328,6 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                         } else if (result.error === 'rate_limited') {
                             setRateLimitReady(false);
                             setWaitSeconds(result.waitSeconds || 20);
-                            setError(`Rate limited. Waiting ${result.waitSeconds}s...`);
                             break; // Stop processing on rate limit
                         } else if (result.error === 'invalid_api_key') {
                             setIsKeyValid(false);

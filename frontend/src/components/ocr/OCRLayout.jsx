@@ -39,7 +39,7 @@ export default function OCRLayout({
             <div className="p-1 bg-gradient-to-br from-blue-500 to-indigo-600 rounded text-white">
               <Sparkles size={14} />
             </div>
-            <span className="text-sm font-bold text-gray-700">Gemini OCR</span>
+            <span className="text-sm font-bold text-gray-700">RenAIssance OCR</span>
           </div>
         </div>
 

@@ -105,6 +105,7 @@ function App() {
       ) : currentStep === 5 ? (
         <div className="h-screen w-screen overflow-hidden">
           <TextRecognitionPage
+            provider={detectionProvider || 'gemini'}
             processedImages={
               // Get the final images (preprocessed or original) for selected pages
               selectedPages.map((pageNum) => {
