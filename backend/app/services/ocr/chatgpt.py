@@ -11,29 +11,19 @@ from ...utils.prompt import OCR_PROMPT
 
 CHATGPT_MODELS = [
     {
-        "id": "gpt-4o",
-        "name": "GPT-4o",
-        "description": "Most capable multimodal model, excellent OCR accuracy"
+        "id": "gpt-5.2",
+        "name": "GPT-5.2",
+        "description": "Latest and most capable multimodal model"
     },
     {
-        "id": "gpt-4.1",
-        "name": "GPT-4.1",
-        "description": "Latest GPT-4.1 model with improved performance"
-    },
-    {
-        "id": "gpt-4-turbo",
-        "name": "GPT-4 Turbo",
-        "description": "Fast GPT-4 with vision capabilities"
-    },
-    {
-        "id": "gpt-4o-mini",
-        "name": "GPT-4o Mini",
+        "id": "gpt-5-mini",
+        "name": "GPT-5 Mini",
         "description": "Smaller, faster, and more affordable"
     },
 ]
 
 CHATGPT_MODEL_IDS = [m["id"] for m in CHATGPT_MODELS]
-CHATGPT_DEFAULT_MODEL = "gpt-4o"
+CHATGPT_DEFAULT_MODEL = "gpt-5.2"
 
 
 class ChatGPTProvider(BaseOCRProvider):

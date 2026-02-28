@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 
 # ============================================
-# Gemini OCR Schemas
+# Shared OCR Schemas
 # ============================================
 
 class OCRResponse(BaseModel):
@@ -24,12 +24,6 @@ class RateLimitResponse(BaseModel):
     last_request: Optional[float]
 
 
-class OCRRequest(BaseModel):
-    """Request model for JSON-based OCR endpoint (supports large images)"""
-    image_data: str  # Base64 encoded image with data URL prefix
-    model: str = "gemini-3-flash-preview"
-
-
 class ExportRequest(BaseModel):
     transcripts: dict  # {page_number: transcript_text}
     format: str  # "txt", "docx", "pdf"
@@ -40,6 +34,35 @@ class PreprocessRequest(BaseModel):
     image_data: str  # Base64 encoded image with data URL prefix
     operations: list  # List of {op, params, enabled} dicts
     preview_mode: bool = False  # Use faster algorithms for preview
+
+
+# ============================================
+# Provider-specific OCR Request Schemas
+# (Each carries its own default model)
+# ============================================
+
+class GeminiOCRRequest(BaseModel):
+    """Request model for Gemini OCR JSON endpoint"""
+    image_data: str
+    model: str = "gemini-3-flash-preview"
+
+
+class ChatGPTOCRRequest(BaseModel):
+    """Request model for ChatGPT OCR endpoint"""
+    image_data: str
+    model: str = "gpt-4o"
+
+
+class DeepSeekOCRRequest(BaseModel):
+    """Request model for DeepSeek OCR endpoint"""
+    image_data: str
+    model: str = "deepseek-chat"
+
+
+class QwenOCRRequest(BaseModel):
+    """Request model for Qwen OCR endpoint"""
+    image_data: str
+    model: str = "qwen-vl-max"
 
 
 # ============================================
@@ -73,33 +96,3 @@ class BatchOCRResponse(BaseModel):
     total_processing_time_ms: int
     successful_count: int
     failed_count: int
-
-
-# ============================================
-# ChatGPT OCR Schemas
-# ============================================
-
-class ChatGPTOCRRequest(BaseModel):
-    """Request model for ChatGPT OCR endpoint"""
-    image_data: str
-    model: str = "gpt-4o"
-
-
-# ============================================
-# DeepSeek OCR Schemas
-# ============================================
-
-class DeepSeekOCRRequest(BaseModel):
-    """Request model for DeepSeek OCR endpoint"""
-    image_data: str
-    model: str = "deepseek-chat"
-
-
-# ============================================
-# Qwen OCR Schemas
-# ============================================
-
-class QwenOCRRequest(BaseModel):
-    """Request model for Qwen OCR endpoint"""
-    image_data: str
-    model: str = "qwen-vl-max"

@@ -2,7 +2,12 @@
 RenAIssance OCR Backend Server
 FastAPI server for OCR text recognition using multiple AI providers.
 
-New modular entrypoint — replaces monolithic main.py.
+Modular entrypoint — all business logic is in sub-packages:
+  • app.api.*         — route handlers
+  • app.services.*    — provider implementations (Gemini, ChatGPT, DeepSeek, Qwen)
+  • app.core.*        — config, rate limiter, font registry
+  • app.schemas.*     — Pydantic request / response models
+  • app.utils.*       — shared utilities (OCR prompt)
 """
 
 import os

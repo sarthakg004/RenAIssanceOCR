@@ -7,6 +7,7 @@ import {
     ScanText,
     KeyRound,
     Lock,
+    Ban,
 } from 'lucide-react';
 import { METHOD_OPTIONS, PROVIDER_MAP } from '../config/providers';
 
@@ -73,45 +74,66 @@ export default function TextDetectionPage({
                     {METHOD_OPTIONS.map((method) => {
                         const Icon = method.icon;
                         const isSelected = selectedMethod === method.id;
+                        const isDisabled = method.disabled;
 
                         return (
                             <div
                                 key={method.id}
-                                onClick={() => setSelectedMethod(method.id)}
-                                className={`relative group rounded-2xl border-2 p-5 cursor-pointer transition-all duration-300 ${isSelected
-                                    ? `${method.borderColor} bg-gradient-to-br ${method.lightGradient} shadow-xl ${method.shadowColor} -translate-y-1`
-                                    : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-lg hover:-translate-y-0.5'
+                                onClick={() => !isDisabled && setSelectedMethod(method.id)}
+                                className={`relative group rounded-2xl border-2 p-5 transition-all duration-300 ${isDisabled
+                                    ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                                    : isSelected
+                                        ? `${method.borderColor} bg-gradient-to-br ${method.lightGradient} shadow-xl ${method.shadowColor} -translate-y-1 cursor-pointer`
+                                        : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer'
                                     }`}
                             >
                                 {/* Recommended badge */}
-                                {method.recommended && (
+                                {method.recommended && !isDisabled && (
                                     <div className={`absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 text-[10px] font-bold text-white rounded-full bg-gradient-to-r ${method.gradient} shadow-md`}>
                                         RECOMMENDED
                                     </div>
                                 )}
 
+                                {/* Unavailable badge for disabled */}
+                                {isDisabled && (
+                                    <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 text-[10px] font-bold text-white rounded-full bg-gray-400 shadow-md">
+                                        UNAVAILABLE
+                                    </div>
+                                )}
+
                                 {/* Selection indicator */}
-                                <div
-                                    className={`absolute top-3 right-3 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${isSelected
-                                        ? `border-transparent bg-gradient-to-br ${method.gradient} shadow-sm`
-                                        : 'border-gray-300 bg-white'
-                                        }`}
-                                >
-                                    {isSelected && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
-                                </div>
+                                {!isDisabled && (
+                                    <div
+                                        className={`absolute top-3 right-3 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${isSelected
+                                            ? `border-transparent bg-gradient-to-br ${method.gradient} shadow-sm`
+                                            : 'border-gray-300 bg-white'
+                                            }`}
+                                    >
+                                        {isSelected && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                                    </div>
+                                )}
+
+                                {/* Ban icon for disabled */}
+                                {isDisabled && (
+                                    <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-gray-300 flex items-center justify-center">
+                                        <Ban className="w-3 h-3 text-gray-500" />
+                                    </div>
+                                )}
 
                                 {/* Icon */}
                                 <div
-                                    className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 transition-all duration-300 ${isSelected
-                                        ? `bg-gradient-to-br ${method.gradient} text-white shadow-lg ${method.shadowColor}`
-                                        : `bg-gradient-to-br ${method.lightGradient} ${method.accentColor}`
+                                    className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 transition-all duration-300 ${isDisabled
+                                        ? 'bg-gray-200 text-gray-400'
+                                        : isSelected
+                                            ? `bg-gradient-to-br ${method.gradient} text-white shadow-lg ${method.shadowColor}`
+                                            : `bg-gradient-to-br ${method.lightGradient} ${method.accentColor}`
                                         }`}
                                 >
                                     <Icon className="w-6 h-6" />
                                 </div>
 
                                 {/* Name */}
-                                <h3 className="text-lg font-bold text-gray-800 mb-1.5">
+                                <h3 className={`text-lg font-bold mb-1.5 ${isDisabled ? 'text-gray-400' : 'text-gray-800'}`}>
                                     {method.name}
                                 </h3>
 
@@ -120,12 +142,19 @@ export default function TextDetectionPage({
                                     {method.tagline}
                                 </p>
 
-                                {/* API Key tag */}
-                                <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold ${isSelected ? `${method.accentColor} bg-white/80` : 'text-gray-500 bg-gray-100'
-                                    }`}>
-                                    <KeyRound className="w-3 h-3" />
-                                    API Key Required
-                                </div>
+                                {/* API Key tag or disabled reason */}
+                                {isDisabled ? (
+                                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold text-gray-500 bg-gray-200">
+                                        <Ban className="w-3 h-3" />
+                                        {method.disabledReason}
+                                    </div>
+                                ) : (
+                                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold ${isSelected ? `${method.accentColor} bg-white/80` : 'text-gray-500 bg-gray-100'
+                                        }`}>
+                                        <KeyRound className="w-3 h-3" />
+                                        API Key Required
+                                    </div>
+                                )}
                             </div>
                         );
                     })}
