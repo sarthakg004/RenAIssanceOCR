@@ -1,16 +1,18 @@
 import React, { useState } from 'react';
-import { 
-  ChevronDown, 
-  Sliders, 
-  Sparkles, 
-  Contrast, 
+import {
+  ChevronDown,
+  Sliders,
+  Sparkles,
+  Contrast,
+  Eraser,
+  Layers,
   RotateCcw
 } from 'lucide-react';
 import OperationCard from './OperationCard';
-import { 
-  OPERATION_CATEGORIES, 
-  OPERATIONS, 
-  getOperationsByCategory 
+import {
+  OPERATION_CATEGORIES,
+  OPERATIONS,
+  getOperationsByCategory
 } from '../../config/preprocessOperations';
 
 /**
@@ -29,6 +31,7 @@ const CATEGORY_ICONS = {
   basic: Sliders,
   enhancement: Sparkles,
   binarization: Contrast,
+  cleanup: Eraser,
 };
 
 export default function OperationsSidebar({
@@ -40,11 +43,11 @@ export default function OperationsSidebar({
   isProcessing = false,
   className = '',
 }) {
-  const [expandedCategories, setExpandedCategories] = useState(['basic', 'enhancement', 'binarization']);
+  const [expandedCategories, setExpandedCategories] = useState(['basic', 'enhancement', 'binarization', 'cleanup']);
   const operationsByCategory = getOperationsByCategory();
 
   const toggleCategory = (categoryId) => {
-    setExpandedCategories(prev => 
+    setExpandedCategories(prev =>
       prev.includes(categoryId)
         ? prev.filter(id => id !== categoryId)
         : [...prev, categoryId]
@@ -124,8 +127,8 @@ export default function OperationsSidebar({
                     {enabledCount}
                   </span>
                 )}
-                <ChevronDown 
-                  size={16} 
+                <ChevronDown
+                  size={16}
                   className={`text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
                 />
               </button>

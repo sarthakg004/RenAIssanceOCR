@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
     OCRLayout,
     SidebarConfig,
@@ -73,6 +73,14 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
     // Zoom state - lifted here to persist across page changes
     const [zoomLevel, setZoomLevel] = useState(1);
 
+    // Custom prompt state
+    const [customPrompt, setCustomPrompt] = useState('');
+
+    // Use the same page numbers shown in the Select Pages step
+    const pageLabels = useMemo(() => {
+        return processedImages.map((img) => `${img.pageNumber}`);
+    }, [processedImages]);
+
     // Load models on mount based on provider
     useEffect(() => {
         async function loadModels() {
@@ -90,15 +98,15 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
         loadModels();
     }, [provider]);
 
-    // Initialize transcripts
+    // Initialize transcripts using original page labels as keys
     useEffect(() => {
         const initial = {};
         processedImages.forEach((_, index) => {
-            initial[index + 1] = '';
+            initial[pageLabels[index]] = '';
         });
         setTranscripts(initial);
         setOriginalTranscripts(initial);
-    }, [processedImages]);
+    }, [processedImages, pageLabels]);
 
     // Rate limit countdown
     useEffect(() => {
@@ -120,9 +128,9 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
 
     // Computed values - for the page user is VIEWING
     const viewingPage = processedImages[viewingPageIndex];
-    const viewingPageNumber = viewingPageIndex + 1;
+    const viewingPageLabel = pageLabels[viewingPageIndex];
     const totalPages = processedImages.length;
-    const isViewingPageProcessed = processedPages.has(viewingPageNumber);
+    const isViewingPageProcessed = processedPages.has(viewingPageLabel);
     const hasAnyTranscript = processedPages.size > 0;
     const canProcess = apiKey && apiKey.length >= 10 && isKeyValid !== false && rateLimitReady;
 
@@ -186,7 +194,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
     const processPage = useCallback(async (pageIndex) => {
         if (!canProcess || isProcessing) return;
 
-        const pageNum = pageIndex + 1;
+        const pageLabel = pageLabels[pageIndex];
         const page = processedImages[pageIndex];
 
         setProcessingPageIndex(pageIndex);
@@ -197,12 +205,12 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
             const imageData = page.processed || page.original;
 
             // Call the unified OCR API with provider parameter
-            const result = await processPageOCR(imageData, selectedModel, apiKey, provider);
+            const result = await processPageOCR(imageData, selectedModel, apiKey, provider, customPrompt);
 
             if (result.success) {
-                setTranscripts((prev) => ({ ...prev, [pageNum]: result.transcript }));
-                setOriginalTranscripts((prev) => ({ ...prev, [pageNum]: result.transcript }));
-                setProcessedPages((prev) => new Set([...prev, pageNum]));
+                setTranscripts((prev) => ({ ...prev, [pageLabel]: result.transcript }));
+                setOriginalTranscripts((prev) => ({ ...prev, [pageLabel]: result.transcript }));
+                setProcessedPages((prev) => new Set([...prev, pageLabel]));
                 // Mark key as valid since OCR succeeded
                 setIsKeyValid(true);
             } else if (result.error === 'rate_limited') {
@@ -220,7 +228,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
             setIsProcessing(false);
             setProcessingPageIndex(null);
         }
-    }, [apiKey, processedImages, selectedModel, canProcess, isProcessing, provider]);
+    }, [apiKey, processedImages, selectedModel, canProcess, isProcessing, provider, customPrompt, pageLabels]);
 
     // Process the currently viewed page (for manual "Process Page" button)
     const processCurrentPage = useCallback(() => {
@@ -250,7 +258,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                     };
                 });
 
-                const result = await processBatchOCR(items, selectedModel, apiKey);
+                const result = await processBatchOCR(items, selectedModel, apiKey, customPrompt);
 
                 if (result.success) {
                     // Check if quota was exceeded (daily limit)
@@ -262,11 +270,11 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
 
                     // Process each result
                     result.results.forEach(item => {
-                        const pageNum = item.page_index + 1;
+                        const pageLabel = pageLabels[item.page_index];
                         if (item.success) {
-                            setTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
-                            setOriginalTranscripts(prev => ({ ...prev, [pageNum]: item.transcript }));
-                            setProcessedPages(prev => new Set([...prev, pageNum]));
+                            setTranscripts(prev => ({ ...prev, [pageLabel]: item.transcript }));
+                            setOriginalTranscripts(prev => ({ ...prev, [pageLabel]: item.transcript }));
+                            setProcessedPages(prev => new Set([...prev, pageLabel]));
                         } else {
                             // Check individual errors for quota issues
                             const errLower = (item.error || '').toLowerCase();
@@ -275,7 +283,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                                 setIsAutoProcessing(false);
                                 setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
                             }
-                            console.error(`Page ${pageNum} failed:`, item.error);
+                            console.error(`Page ${pageLabel} failed:`, item.error);
                         }
                     });
 
@@ -315,15 +323,15 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                 for (const pageIndex of pageIndices) {
                     const page = processedImages[pageIndex];
                     const imageData = page.processed || page.original;
-                    const pageNum = pageIndex + 1;
+                    const pageLabel = pageLabels[pageIndex];
 
                     try {
-                        const result = await processPageOCR(imageData, selectedModel, apiKey, provider);
+                        const result = await processPageOCR(imageData, selectedModel, apiKey, provider, customPrompt);
 
                         if (result.success) {
-                            setTranscripts(prev => ({ ...prev, [pageNum]: result.transcript }));
-                            setOriginalTranscripts(prev => ({ ...prev, [pageNum]: result.transcript }));
-                            setProcessedPages(prev => new Set([...prev, pageNum]));
+                            setTranscripts(prev => ({ ...prev, [pageLabel]: result.transcript }));
+                            setOriginalTranscripts(prev => ({ ...prev, [pageLabel]: result.transcript }));
+                            setProcessedPages(prev => new Set([...prev, pageLabel]));
                             setIsKeyValid(true);
                         } else if (result.error === 'rate_limited') {
                             setRateLimitReady(false);
@@ -335,10 +343,10 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                             setIsAutoProcessing(false);
                             break;
                         } else {
-                            console.error(`Page ${pageNum} failed:`, result.error);
+                            console.error(`Page ${pageLabel} failed:`, result.error);
                         }
                     } catch (err) {
-                        console.error(`Page ${pageNum} error:`, err.message);
+                        console.error(`Page ${pageLabel} error:`, err.message);
                     }
                 }
             }
@@ -349,7 +357,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
             setProcessingPageIndices(new Set());
             batchInProgressRef.current = false;
         }
-    }, [apiKey, processedImages, selectedModel, canProcess, provider]);
+    }, [apiKey, processedImages, selectedModel, canProcess, provider, customPrompt, pageLabels]);
 
     // Auto-processing - triggers batch processing when conditions are met
     // Uses a ref-based guard to prevent rapid re-triggers
@@ -366,7 +374,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
         // Find all unprocessed pages
         const unprocessedIndices = processedImages
             .map((_, i) => i)
-            .filter(i => !processedPages.has(i + 1));
+            .filter(i => !processedPages.has(pageLabels[i]));
 
         if (unprocessedIndices.length === 0) {
             // All pages processed
@@ -435,18 +443,18 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
         }, 200);
 
         return () => clearTimeout(timeoutId);
-    }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, processedImages, processBatch, provider]);
+    }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, processedImages, processBatch, provider, pageLabels]);
 
     // Handle transcript change
     const handleTranscriptChange = useCallback((value) => {
-        setTranscripts((prev) => ({ ...prev, [viewingPageNumber]: value }));
-    }, [viewingPageNumber]);
+        setTranscripts((prev) => ({ ...prev, [viewingPageLabel]: value }));
+    }, [viewingPageLabel]);
 
 
     // Reset transcript
     const handleResetTranscript = useCallback(() => {
-        setTranscripts((prev) => ({ ...prev, [viewingPageNumber]: originalTranscripts[viewingPageNumber] }));
-    }, [viewingPageNumber, originalTranscripts]);
+        setTranscripts((prev) => ({ ...prev, [viewingPageLabel]: originalTranscripts[viewingPageLabel] }));
+    }, [viewingPageLabel, originalTranscripts]);
 
     // Export
     const handleExport = useCallback(async (format) => {
@@ -500,6 +508,8 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                         batchSize={batchSize}
                         onBatchSizeChange={setBatchSize}
                         provider={provider}
+                        customPrompt={customPrompt}
+                        onCustomPromptChange={setCustomPrompt}
                     />
                     <PageThumbnailList
                         images={processedImages}
@@ -508,6 +518,7 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                         processingPageIndex={processingPageIndex}
                         processingPageIndices={processingPageIndices}
                         onPageSelect={goToPage}
+                        pageLabels={pageLabels}
                     />
                 </>
             }
@@ -533,13 +544,15 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                     onZoomChange={setZoomLevel}
                     // Show which page is being processed during auto-processing
                     processingPageIndex={processingPageIndex}
+                    pageLabel={viewingPageLabel}
+                    pageLabels={pageLabels}
                 />
             }
             rightPanel={
                 <TranscriptPanel
-                    pageNumber={viewingPageNumber}
-                    transcript={transcripts[viewingPageNumber] || ''}
-                    originalTranscript={originalTranscripts[viewingPageNumber] || ''}
+                    pageNumber={viewingPageLabel}
+                    transcript={transcripts[viewingPageLabel] || ''}
+                    originalTranscript={originalTranscripts[viewingPageLabel] || ''}
                     isProcessing={isViewingPageProcessing}
                     isProcessed={isViewingPageProcessed}
                     hasAnyTranscript={hasAnyTranscript}

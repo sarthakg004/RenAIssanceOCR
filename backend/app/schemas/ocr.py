@@ -45,24 +45,27 @@ class GeminiOCRRequest(BaseModel):
     """Request model for Gemini OCR JSON endpoint"""
     image_data: str
     model: str = "gemini-3-flash-preview"
+    custom_prompt: Optional[str] = None
 
 
 class ChatGPTOCRRequest(BaseModel):
     """Request model for ChatGPT OCR endpoint"""
     image_data: str
     model: str = "gpt-4o"
-
+    custom_prompt: Optional[str] = None
 
 class DeepSeekOCRRequest(BaseModel):
     """Request model for DeepSeek OCR endpoint"""
     image_data: str
     model: str = "deepseek-chat"
+    custom_prompt: Optional[str] = None
 
 
 class QwenOCRRequest(BaseModel):
     """Request model for Qwen OCR endpoint"""
     image_data: str
     model: str = "qwen-vl-max"
+    custom_prompt: Optional[str] = None
 
 
 # ============================================
@@ -79,6 +82,7 @@ class BatchOCRRequest(BaseModel):
     """Request body for batch OCR"""
     items: list[BatchOCRItem]
     model: str = "gemini-3-flash-preview"
+    custom_prompt: Optional[str] = None
 
 
 class BatchOCRResultItem(BaseModel):

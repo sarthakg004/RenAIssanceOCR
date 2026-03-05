@@ -37,6 +37,9 @@ async def get_available_operations():
             "contrast": "Enhance contrast using CLAHE",
             "sharpen": "Sharpen text edges for clearer text",
             "threshold": "Convert to binary (black and white)",
+            "morph": "Morphological operations (open, close, dilate, erode, gradient, tophat, blackhat)",
+            "remove_blobs": "Remove large ink blobs from scanned documents",
+            "remove_noise": "Remove small speckles and scanning dust",
         }
     }
 

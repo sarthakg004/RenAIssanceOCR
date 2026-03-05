@@ -15,6 +15,7 @@ import {
   Info,
   X,
   AlertTriangle,
+  Eraser,
 } from 'lucide-react';
 
 // Import preprocess components
@@ -24,6 +25,7 @@ import {
   BeforeAfterViewer,
   ZoomLensPreview,
   ProgressBarLabeled,
+  ImageEraser,
 } from '../components/preprocess';
 
 // Import OCR components for resizable panels
@@ -110,7 +112,7 @@ function useImageHistory(initialState = null) {
   // Undo - pop from history
   const undo = useCallback(() => {
     if (history.length === 0) return false;
-    
+
     const previousState = history[history.length - 1];
     setHistory((prev) => prev.slice(0, -1));
     setCurrentState(previousState);
@@ -157,32 +159,33 @@ export default function PreprocessPage({
   onProcessedImagesChange,
 }) {
   // ========== STATE ==========
-  
+
   // Current page navigation
   const [currentPageIndex, setCurrentPageIndex] = useState(0);
-  
+
   // Processing state
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [currentProcessingStep, setCurrentProcessingStep] = useState(null);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
-  
+
   // Image state management per page
   // Structure: { pageNumber: { current, original, history } }
   const [imageStates, setImageStates] = useState({});
-  
+
   // Final processed images (output of preprocessing pipeline)
   const [processedImages, setProcessedImages] = useState({});
-  
+
   // UI state
   const [showCropper, setShowCropper] = useState(false);
+  const [showEraser, setShowEraser] = useState(false);
   const [showZoomLens, setShowZoomLens] = useState(false);
   const [showPipelinePanel, setShowPipelinePanel] = useState(true);
   const [showTipBanner, setShowTipBanner] = useState(true);
 
   // ========== DERIVED DATA ==========
-  
-  const selectedPageData = useMemo(() => 
+
+  const selectedPageData = useMemo(() =>
     selectedPages.map((pageNum) => ({
       pageNumber: pageNum,
       ...pages[pageNum - 1],
@@ -191,7 +194,7 @@ export default function PreprocessPage({
   );
 
   const currentPage = selectedPageData[currentPageIndex];
-  
+
   // Initialize image state for a page if not exists
   const getOrCreateImageState = useCallback((pageNumber, originalImage) => {
     if (!imageStates[pageNumber]) {
@@ -203,27 +206,27 @@ export default function PreprocessPage({
     }
     return imageStates[pageNumber];
   }, [imageStates]);
-  
+
   // Get current working image for the active page
   const currentImageState = useMemo(() => {
     if (!currentPage) return null;
     const state = imageStates[currentPage.pageNumber];
     return state?.current || currentPage.thumbnail;
   }, [currentPage, imageStates]);
-  
+
   // Get original image for the active page
   const originalImageState = useMemo(() => {
     if (!currentPage) return null;
     return currentPage.thumbnail;
   }, [currentPage]);
-  
+
   // Check if current page has history (can undo)
   const canUndo = useMemo(() => {
     if (!currentPage) return false;
     const state = imageStates[currentPage.pageNumber];
     return state?.history?.length > 0;
   }, [currentPage, imageStates]);
-  
+
   // Check if current page has been modified from original
   const isModified = useMemo(() => {
     if (!currentPage) return false;
@@ -232,7 +235,7 @@ export default function PreprocessPage({
   }, [currentPage, imageStates]);
 
   // ========== PIPELINE HOOK ==========
-  
+
   const {
     pipeline,
     enabledOperations,
@@ -254,7 +257,7 @@ export default function PreprocessPage({
   });
 
   // ========== EFFECTS ==========
-  
+
   // Sync processed/modified images to parent
   // This includes both preprocessed images AND cropped-only images
   useEffect(() => {
@@ -262,7 +265,7 @@ export default function PreprocessPage({
       // Build a combined map: preprocessed images take priority, 
       // but include cropped images that weren't preprocessed
       const combinedImages = { ...processedImages };
-      
+
       // Add cropped images that don't have a preprocessed version
       selectedPageData.forEach(page => {
         const pageNum = page.pageNumber;
@@ -274,13 +277,13 @@ export default function PreprocessPage({
           }
         }
       });
-      
+
       onProcessedImagesChange(combinedImages);
     }
   }, [processedImages, imageStates, selectedPageData, onProcessedImagesChange]);
 
   // ========== IMAGE STATE HANDLERS ==========
-  
+
   /**
    * Push a new image state to history and update current
    * This is the core state management function that ensures:
@@ -295,16 +298,16 @@ export default function PreprocessPage({
         original: pages[pageNumber - 1]?.thumbnail,
         history: [],
       };
-      
+
       // Don't push if same as current
       if (currentState.current === newImageData) {
         return prev;
       }
-      
+
       // Limit history size
       const MAX_HISTORY = 10;
       const newHistory = [...currentState.history, currentState.current];
-      
+
       return {
         ...prev,
         [pageNumber]: {
@@ -315,19 +318,19 @@ export default function PreprocessPage({
       };
     });
   }, [pages]);
-  
+
   /**
    * Undo last image modification
    */
   const handleUndo = useCallback(() => {
     if (!currentPage) return;
-    
+
     setImageStates((prev) => {
       const state = prev[currentPage.pageNumber];
       if (!state || state.history.length === 0) return prev;
-      
+
       const previousImage = state.history[state.history.length - 1];
-      
+
       return {
         ...prev,
         [currentPage.pageNumber]: {
@@ -337,20 +340,20 @@ export default function PreprocessPage({
         },
       };
     });
-    
+
     // Also clear processed image since source changed
     setProcessedImages((prev) => {
       const { [currentPage.pageNumber]: removed, ...rest } = prev;
       return rest;
     });
   }, [currentPage]);
-  
+
   /**
    * Reset current page to original image
    */
   const handleResetImage = useCallback(() => {
     if (!currentPage) return;
-    
+
     setImageStates((prev) => ({
       ...prev,
       [currentPage.pageNumber]: {
@@ -359,7 +362,7 @@ export default function PreprocessPage({
         history: [],
       },
     }));
-    
+
     // Clear processed image
     setProcessedImages((prev) => {
       const { [currentPage.pageNumber]: removed, ...rest } = prev;
@@ -379,7 +382,7 @@ export default function PreprocessPage({
 
     // Push cropped image to state (saves history for undo)
     pushImageState(currentPage.pageNumber, croppedDataUrl);
-    
+
     setShowCropper(false);
 
     // Clear processed image since source changed
@@ -389,6 +392,23 @@ export default function PreprocessPage({
       return rest;
     });
   }, [currentPage, pushImageState]);
+
+  /**
+   * Handle eraser batch save — push erased images to history for all modified pages
+   */
+  const handleEraserSave = useCallback((results) => {
+    // results is { [pageNumber]: dataUrl } for each modified page
+    Object.entries(results).forEach(([pageNum, dataUrl]) => {
+      const pn = Number(pageNum);
+      pushImageState(pn, dataUrl);
+      // Clear processed image since source changed
+      setProcessedImages((prev) => {
+        const { [pn]: removed, ...rest } = prev;
+        return rest;
+      });
+    });
+    setShowEraser(false);
+  }, [pushImageState]);
 
   /**
    * Handle batch crop completion (current page + selected pages)
@@ -435,7 +455,7 @@ export default function PreprocessPage({
 
     try {
       const pipelineConfig = buildPipelineConfig();
-      
+
       // IMPORTANT: Use current working image state, not original
       const sourceImage = currentImageState;
 
@@ -447,13 +467,13 @@ export default function PreprocessPage({
       }
 
       const result = await preprocessImage(sourceImage, pipelineConfig);
-      
+
       // Save the preprocessed result
       setProcessedImages((prev) => ({
         ...prev,
         [currentPage.pageNumber]: result,
       }));
-      
+
       setProcessingProgress(100);
     } catch (error) {
       console.error('Processing failed:', error);
@@ -489,7 +509,7 @@ export default function PreprocessPage({
         // Use each page's current working image state
         const pageState = imageStates[page.pageNumber];
         const sourceImage = pageState?.current || page.thumbnail;
-        
+
         const result = await preprocessImage(sourceImage, pipelineConfig);
         results[page.pageNumber] = result;
       }
@@ -506,7 +526,7 @@ export default function PreprocessPage({
   }, [isProcessing, getActivePipeline, buildPipelineConfig, selectedPageData, imageStates]);
 
   // ========== NAVIGATION HANDLERS ==========
-  
+
   const handlePrevPage = () => {
     setCurrentPageIndex((prev) => Math.max(0, prev - 1));
   };
@@ -516,7 +536,7 @@ export default function PreprocessPage({
   };
 
   // ========== RESET HANDLER ==========
-  
+
   const handleResetAll = useCallback(() => {
     resetPipeline();
     setProcessedImages({});
@@ -524,11 +544,11 @@ export default function PreprocessPage({
   }, [resetPipeline]);
 
   // ========== COMPUTED VALUES ==========
-  
+
   const activePipelineCount = getActivePipeline().length;
   const hasProcessedImages = Object.keys(processedImages).length > 0;
   const currentPageProcessed = currentPage && processedImages[currentPage.pageNumber];
-  
+
   // Check if any page has been modified (cropped) from its original
   const hasModifiedImages = useMemo(() => {
     return selectedPageData.some(page => {
@@ -536,7 +556,7 @@ export default function PreprocessPage({
       return state?.current && state.current !== page.thumbnail;
     });
   }, [selectedPageData, imageStates]);
-  
+
   // Allow proceeding if there are processed images OR modified (cropped) images
   const canProceed = hasProcessedImages || hasModifiedImages;
 
@@ -563,7 +583,7 @@ export default function PreprocessPage({
                   Preprocessing Studio
                 </h1>
                 <p className="text-xs text-gray-500">
-                  {selectedPages.length} page{selectedPages.length > 1 ? 's' : ''} • 
+                  {selectedPages.length} page{selectedPages.length > 1 ? 's' : ''} •
                   {activePipelineCount} operation{activePipelineCount !== 1 ? 's' : ''} active
                 </p>
               </div>
@@ -578,8 +598,8 @@ export default function PreprocessPage({
                   batchProgress.total > 0
                     ? `Processing page ${batchProgress.current} of ${batchProgress.total}`
                     : currentProcessingStep
-                    ? `Running: ${currentProcessingStep}`
-                    : 'Processing...'
+                      ? `Running: ${currentProcessingStep}`
+                      : 'Processing...'
                 }
                 progress={processingProgress}
                 variant="primary"
@@ -630,11 +650,10 @@ export default function PreprocessPage({
             <button
               onClick={onNext}
               disabled={!canProceed}
-              className={`flex items-center gap-2 px-4 sm:px-5 py-2 font-semibold rounded-xl transition-all ${
-                canProceed
-                  ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-md hover:shadow-lg hover:-translate-y-0.5'
-                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-              }`}
+              className={`flex items-center gap-2 px-4 sm:px-5 py-2 font-semibold rounded-xl transition-all ${canProceed
+                ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-md hover:shadow-lg hover:-translate-y-0.5'
+                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                }`}
             >
               <span className="hidden sm:inline">Next</span>
               <ArrowRight className="w-4 h-4" />
@@ -653,7 +672,7 @@ export default function PreprocessPage({
           minRightWidth={200}
           maxRightWidth={380}
           minCenterWidth={400}
-          
+
           /* ========== LEFT PANEL - Operations Sidebar ========== */
           leftPanel={
             <div className="h-full border-r border-gray-200 overflow-hidden bg-white/50">
@@ -682,7 +701,7 @@ export default function PreprocessPage({
                   />
                 </div>
               )}
-              
+
               {/* Page navigation and crop controls */}
               <div className="flex flex-wrap items-center justify-between gap-2 mb-3 flex-shrink-0">
                 {/* Left: Crop and Undo controls */}
@@ -691,26 +710,35 @@ export default function PreprocessPage({
                   <button
                     onClick={() => setShowCropper(true)}
                     disabled={!currentPage}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                      isModified
-                        ? 'bg-orange-100 text-orange-700 hover:bg-orange-200'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${isModified
+                      ? 'bg-orange-100 text-orange-700 hover:bg-orange-200'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
                     title="Crop image - changes are saved immediately"
                   >
                     <Crop className="w-4 h-4" />
                     Crop
                   </button>
 
+                  {/* Eraser button */}
+                  <button
+                    onClick={() => setShowEraser(true)}
+                    disabled={!currentPage}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all bg-gray-100 text-gray-700 hover:bg-gray-200"
+                    title="Erase artifacts - paint white to clean up"
+                  >
+                    <Eraser className="w-4 h-4" />
+                    Eraser
+                  </button>
+
                   {/* Undo button */}
                   <button
                     onClick={handleUndo}
                     disabled={!canUndo}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                      canUndo
-                        ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                    }`}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${canUndo
+                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                      }`}
                     title="Undo last edit"
                   >
                     <Undo2 className="w-4 h-4" />
@@ -728,7 +756,7 @@ export default function PreprocessPage({
                       <span className="hidden sm:inline">Reset</span>
                     </button>
                   )}
-                  
+
                   {/* Modified indicator */}
                   {isModified && (
                     <span className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded hidden lg:inline">
@@ -742,9 +770,8 @@ export default function PreprocessPage({
                   <button
                     onClick={handlePrevPage}
                     disabled={currentPageIndex === 0}
-                    className={`p-1.5 rounded-lg transition-colors ${
-                      currentPageIndex === 0 ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-100'
-                    }`}
+                    className={`p-1.5 rounded-lg transition-colors ${currentPageIndex === 0 ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
                   >
                     <ChevronLeft className="w-5 h-5" />
                   </button>
@@ -754,11 +781,10 @@ export default function PreprocessPage({
                       <button
                         key={page.pageNumber}
                         onClick={() => setCurrentPageIndex(idx)}
-                        className={`relative w-7 h-7 rounded-lg text-xs font-medium transition-all ${
-                          idx === currentPageIndex
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
+                        className={`relative w-7 h-7 rounded-lg text-xs font-medium transition-all ${idx === currentPageIndex
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
                       >
                         {page.pageNumber}
                         {/* Status indicators */}
@@ -775,9 +801,8 @@ export default function PreprocessPage({
                   <button
                     onClick={handleNextPage}
                     disabled={currentPageIndex === selectedPageData.length - 1}
-                    className={`p-1.5 rounded-lg transition-colors ${
-                      currentPageIndex === selectedPageData.length - 1 ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-100'
-                    }`}
+                    className={`p-1.5 rounded-lg transition-colors ${currentPageIndex === selectedPageData.length - 1 ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
                   >
                     <ChevronRight className="w-5 h-5" />
                   </button>
@@ -786,9 +811,8 @@ export default function PreprocessPage({
                 {/* Right: Zoom lens toggle */}
                 <button
                   onClick={() => setShowZoomLens(!showZoomLens)}
-                  className={`p-2 rounded-lg transition-colors ${
-                    showZoomLens ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
+                  className={`p-2 rounded-lg transition-colors ${showZoomLens ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
                   title="Toggle zoom lens"
                 >
                   <Search className="w-4 h-4" />
@@ -816,7 +840,7 @@ export default function PreprocessPage({
                   </span>
                   <span className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-orange-400" />
-                    Modified: {Object.keys(imageStates).filter(k => imageStates[k]?.current !== pages[k-1]?.thumbnail).length}
+                    Modified: {Object.keys(imageStates).filter(k => imageStates[k]?.current !== pages[k - 1]?.thumbnail).length}
                   </span>
                 </div>
                 {currentPage && (
@@ -875,7 +899,7 @@ export default function PreprocessPage({
       </main>
 
       {/* ========== MODALS ========== */}
-      
+
       {/* Image Cropper Modal */}
       {showCropper && currentPage && (
         <ImageCropper
@@ -889,6 +913,19 @@ export default function PreprocessPage({
           }))}
           currentPageNumber={currentPage.pageNumber}
           onBatchCropComplete={handleBatchCropComplete}
+        />
+      )}
+
+      {/* Image Eraser Modal */}
+      {showEraser && currentPage && (
+        <ImageEraser
+          pages={selectedPageData.map(page => ({
+            pageNumber: page.pageNumber,
+            imageSrc: processedImages[page.pageNumber] || imageStates[page.pageNumber]?.current || page.thumbnail,
+          }))}
+          initialPageIndex={currentPageIndex}
+          onSaveAll={handleEraserSave}
+          onCancel={() => setShowEraser(false)}
         />
       )}
 

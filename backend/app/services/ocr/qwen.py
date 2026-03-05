@@ -4,6 +4,7 @@ Qwen OCR Provider — uses httpx to call DashScope API (OpenAI-compatible).
 
 import base64
 import httpx
+from typing import Optional
 
 from .base import BaseOCRProvider
 from ...utils.prompt import OCR_PROMPT
@@ -43,10 +44,11 @@ class QwenProvider(BaseOCRProvider):
     DEFAULT_MODEL = QWEN_DEFAULT_MODEL
     MODEL_IDS = QWEN_MODEL_IDS
 
-    def transcribe(self, api_key: str, image_bytes: bytes, model_name: str, mime_type: str = "image/png") -> str:
+    def transcribe(self, api_key: str, image_bytes: bytes, model_name: str, mime_type: str = "image/png", custom_prompt: Optional[str] = None) -> str:
         """Perform OCR using Qwen (DashScope) API (OpenAI-compatible)"""
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         data_url = f"data:{mime_type};base64,{image_b64}"
+        prompt = custom_prompt if custom_prompt else OCR_PROMPT
 
         payload = {
             "model": model_name,
@@ -60,7 +62,7 @@ class QwenProvider(BaseOCRProvider):
                         },
                         {
                             "type": "text",
-                            "text": OCR_PROMPT
+                            "text": prompt
                         }
                     ]
                 }

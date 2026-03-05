@@ -808,7 +808,7 @@ docker pull saarthakg004/renaissance-frontend:v1.0.0
 ### 2. Run the backend
 
 ```bash
-docker run -d --name renaissance-backend -p 8000:8000 --env-file .env saarthakg004/renaissance-backend:v1.0.0
+docker run -d --name renaissance-backend -p 8000:8000 saarthakg004/renaissance-backend:v1.0.0
 ```
 - The backend will be available at http://localhost:8000
 - Pass your `.env` file for API keys if needed (see below)

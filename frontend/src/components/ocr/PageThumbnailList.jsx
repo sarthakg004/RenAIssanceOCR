@@ -68,6 +68,7 @@ export default function PageThumbnailList({
   processingPageIndex,
   processingPageIndices = new Set(), // Support batch processing
   onPageSelect,
+  pageLabels = null,
 }) {
   return (
     <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
@@ -91,9 +92,10 @@ export default function PageThumbnailList({
               image={img}
               index={index}
               isActive={index === currentIndex}
-              isProcessed={processedPages.has(index + 1)}
+              isProcessed={processedPages.has(pageLabels ? pageLabels[index] : index + 1)}
               isProcessing={index === processingPageIndex || processingPageIndices.has(index)}
               onClick={() => onPageSelect(index)}
+              pageLabel={pageLabels ? pageLabels[index] : index + 1}
             />
           ))}
         </div>
@@ -105,7 +107,7 @@ export default function PageThumbnailList({
 /**
  * ThumbnailItem - Single thumbnail with lazy loading and downscaling
  */
-function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onClick }) {
+function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onClick, pageLabel }) {
   const [thumbnailSrc, setThumbnailSrc] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -157,7 +159,7 @@ function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onCl
     };
   }, [thumbnailSrc]);
 
-  const pageNumber = index + 1;
+  const pageNumber = pageLabel !== undefined ? pageLabel : index + 1;
 
   return (
     <button
