@@ -54,8 +54,8 @@ function App() {
       // Load images directly
       try {
         const loadedPages = await loadImages(files);
-        // Auto-select all images
-        setSelectedPages(loadedPages.map((_, i) => i + 1));
+        // Auto-select all images using their actual pageNumber IDs
+        setSelectedPages(loadedPages.map((p) => p.pageNumber));
         setCurrentStep(3); // Skip page selection for images
       } catch (err) {
         console.error('Failed to load images:', err);
@@ -119,9 +119,9 @@ function App() {
             processedImages={
               // Get the final images (preprocessed or original) for selected pages
               selectedPages.map((pageNum) => {
-                const pageIndex = pageNum - 1;
+                // Find page by pageNumber (may be string like '3_left' or integer)
+                const original = pages.find(p => p.pageNumber === pageNum);
                 const preprocessed = processedImages[pageNum];
-                const original = pages[pageIndex];
                 return {
                   pageNumber: pageNum,
                   originalPageNumber: original?.originalPageNumber || null,

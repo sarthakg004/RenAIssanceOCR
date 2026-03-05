@@ -188,7 +188,7 @@ export default function PreprocessPage({
   const selectedPageData = useMemo(() =>
     selectedPages.map((pageNum) => ({
       pageNumber: pageNum,
-      ...pages[pageNum - 1],
+      ...(pages.find(p => p.pageNumber === pageNum) || {}),
     })),
     [selectedPages, pages]
   );
@@ -293,9 +293,10 @@ export default function PreprocessPage({
    */
   const pushImageState = useCallback((pageNumber, newImageData) => {
     setImageStates((prev) => {
+      const pageData = pages.find(p => p.pageNumber === pageNumber);
       const currentState = prev[pageNumber] || {
-        current: pages[pageNumber - 1]?.thumbnail,
-        original: pages[pageNumber - 1]?.thumbnail,
+        current: pageData?.thumbnail,
+        original: pageData?.thumbnail,
         history: [],
       };
 
@@ -822,8 +823,8 @@ export default function PreprocessPage({
               {/* Image preview - Takes remaining height */}
               <div className="flex-1 min-h-0">
                 <BeforeAfterViewer
-                  originalImage={currentImageState}
-                  processedImage={currentPageProcessed}
+                  originalImage={originalImageState}
+                  processedImage={currentPageProcessed || currentImageState}
                   isProcessing={isProcessing}
                   processingLabel={currentProcessingStep ? `Running: ${currentProcessingStep}` : 'Processing...'}
                   onOpenZoomLens={() => setShowZoomLens(true)}
@@ -840,7 +841,7 @@ export default function PreprocessPage({
                   </span>
                   <span className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-orange-400" />
-                    Modified: {Object.keys(imageStates).filter(k => imageStates[k]?.current !== pages[k - 1]?.thumbnail).length}
+                    Modified: {Object.keys(imageStates).filter(k => { const pg = pages.find(p => String(p.pageNumber) === String(k)); return imageStates[k]?.current !== pg?.thumbnail; }).length}
                   </span>
                 </div>
                 {currentPage && (
@@ -931,8 +932,8 @@ export default function PreprocessPage({
 
       {/* Zoom Lens Preview */}
       <ZoomLensPreview
-        originalImage={currentImageState}
-        processedImage={currentPageProcessed}
+        originalImage={originalImageState}
+        processedImage={currentPageProcessed || currentImageState}
         isOpen={showZoomLens}
         onClose={() => setShowZoomLens(false)}
       />

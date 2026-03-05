@@ -12,8 +12,10 @@ import {
     Lock,
     Info,
     ChevronDown,
+    PenLine,
 } from 'lucide-react';
 import ResizablePanels from './ocr/ResizablePanels';
+import BBoxEditor from './BBoxEditor';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -124,6 +126,11 @@ export default function LayoutAwareDetectionPage({
     const [processingTime, setProcessingTime] = useState(null);
     const [imageLoaded, setImageLoaded] = useState(false);
     const [compositeUrl, setCompositeUrl] = useState(null);
+
+    // ── BBox editor state ──────────────────────────────────
+    const [showBBoxEditor, setShowBBoxEditor] = useState(false);
+    // Track which pages have been manually edited (for thumbnail indicator)
+    const [editedPages, setEditedPages] = useState(new Set());
 
     // ── Process All Pages state ────────────────────────────
     const [processingAll, setProcessingAll] = useState(false);
@@ -510,6 +517,18 @@ export default function LayoutAwareDetectionPage({
                         )}
                     </button>
 
+                    {/* Edit All Boxes Button */}
+                    <button
+                        onClick={() => setShowBBoxEditor(true)}
+                        disabled={isAnyLoading || detectedCount === 0}
+                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${isAnyLoading || detectedCount === 0
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
+                            : 'bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-sm hover:shadow-md active:scale-[0.98]'
+                            }`}
+                    >
+                        <PenLine size={14} /> Edit All Boxes ({detectedCount})
+                    </button>
+
                     {/* Result stats */}
                     {processingTime !== null && !isAnyLoading && (
                         <div className="flex items-center justify-between text-xs px-1">
@@ -547,22 +566,53 @@ export default function LayoutAwareDetectionPage({
                 <div className="flex-1 overflow-y-auto p-2 min-h-0">
                     <div className="grid grid-cols-2 gap-1.5">
                         {availablePages.map((pageNum, idx) => (
-                            <ThumbnailItem
-                                key={pageNum}
-                                image={pages?.[pageNum - 1] || null}
-                                processedSrc={processedImages?.[pageNum] || null}
-                                index={idx}
-                                isActive={idx === viewingPageIndex}
-                                isDetected={pageNum in detectedPages}
-                                onClick={() => goToPage(idx)}
-                                pageLabel={pageNum}
-                            />
+                            <div key={pageNum} className="relative">
+                                <ThumbnailItem
+                                    image={pages?.[pageNum - 1] || null}
+                                    processedSrc={processedImages?.[pageNum] || null}
+                                    index={idx}
+                                    isActive={idx === viewingPageIndex}
+                                    isDetected={pageNum in detectedPages}
+                                    onClick={() => goToPage(idx)}
+                                    pageLabel={pageNum}
+                                />
+                                {/* Edited indicator badge */}
+                                {editedPages.has(pageNum) && (
+                                    <span className="absolute top-1 left-1 px-1 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded shadow-sm leading-none">
+                                        edited
+                                    </span>
+                                )}
+                            </div>
                         ))}
                     </div>
                 </div>
             </div>
         </>
     );
+
+    // ── BBox editor: build pages array from all detected pages ─────────
+    const bboxEditorPages = useMemo(() =>
+        availablePages
+            .filter(pageNum => pageNum in detectedPages)
+            .map(pageNum => ({
+                pageNumber: pageNum,
+                imageSrc: getImageUrl(pageNum),
+                polygons: detectedPages[pageNum] || [],
+            })),
+        [availablePages, detectedPages, getImageUrl]
+    );
+
+    // ── BBox editor save handler — receives all modified pages ──────────
+    const handleBBoxSave = useCallback((results) => {
+        // results: { [pageNumber]: Array<polygon> }
+        setDetectedPages(prev => ({ ...prev, ...results }));
+        setEditedPages(prev => {
+            const next = new Set(prev);
+            Object.keys(results).forEach(k => next.add(Number(k)));
+            return next;
+        });
+        setShowBBoxEditor(false);
+    }, []);
 
     // ════════════════════════════════════════════════════════
     // CENTER PANEL — Image Preview
@@ -591,7 +641,7 @@ export default function LayoutAwareDetectionPage({
                     </button>
                 </div>
 
-                {/* Status */}
+                {/* Status — simplified, no per-page edit button here anymore */}
                 <div className="flex items-center gap-2">
                     {isAnyLoading && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-50 text-teal-600 text-xs font-medium rounded-full animate-pulse">
@@ -602,6 +652,9 @@ export default function LayoutAwareDetectionPage({
                     {isCurrentDetected && !isAnyLoading && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-full">
                             <CheckCircle2 size={12} /> {currentLines.length} lines
+                            {editedPages.has(currentPageNum) && (
+                                <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-semibold">edited</span>
+                            )}
                         </span>
                     )}
                 </div>
@@ -619,7 +672,7 @@ export default function LayoutAwareDetectionPage({
                 )}
 
                 {currentImageUrl && (
-                    <div className="p-4">
+                    <div className="p-4 flex items-center justify-center min-h-full">
                         <img
                             ref={imgRef}
                             src={displayUrl}
@@ -717,6 +770,15 @@ export default function LayoutAwareDetectionPage({
     // ════════════════════════════════════════════════════════
     return (
         <div className="h-full w-full flex flex-col bg-gradient-to-br from-slate-50 via-teal-50/20 to-emerald-50/30 overflow-hidden">
+
+            {/* BBox Editor Modal */}
+            {showBBoxEditor && bboxEditorPages.length > 0 && (
+                <BBoxEditor
+                    pages={bboxEditorPages}
+                    onSave={handleBBoxSave}
+                    onCancel={() => setShowBBoxEditor(false)}
+                />
+            )}
 
             {/* Header */}
             <header className="h-12 bg-white/95 backdrop-blur-md border-b border-gray-200 shrink-0 relative z-10">

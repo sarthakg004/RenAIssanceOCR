@@ -43,7 +43,6 @@ export function usePdfPreview() {
       }
 
       const extractedPages = [];
-      let imageCounter = 1;
 
       for (let i = 0; i < pagesToExtract.length; i++) {
         const pageNum = pagesToExtract[i];
@@ -67,16 +66,16 @@ export function usePdfPreview() {
         if (splitDoublePages && viewport.width > viewport.height * 1.19) {
           // Split into left and right pages
           const halfWidth = Math.floor(viewport.width / 2);
-          
-          // Left page
+
+          // Left page — pageNumber = '3_left'
           const leftCanvas = document.createElement('canvas');
           leftCanvas.width = halfWidth;
           leftCanvas.height = viewport.height;
           const leftCtx = leftCanvas.getContext('2d');
           leftCtx.drawImage(canvas, 0, 0, halfWidth, viewport.height, 0, 0, halfWidth, viewport.height);
-          
+
           extractedPages.push({
-            pageNumber: imageCounter,
+            pageNumber: `${pageNum}_left`,
             originalPageNumber: pageNum,
             thumbnail: leftCanvas.toDataURL('image/png'),
             width: halfWidth,
@@ -84,17 +83,16 @@ export function usePdfPreview() {
             isSplit: true,
             splitSide: 'left',
           });
-          imageCounter++;
 
-          // Right page
+          // Right page — pageNumber = '3_right'
           const rightCanvas = document.createElement('canvas');
           rightCanvas.width = halfWidth;
           rightCanvas.height = viewport.height;
           const rightCtx = rightCanvas.getContext('2d');
           rightCtx.drawImage(canvas, halfWidth, 0, halfWidth, viewport.height, 0, 0, halfWidth, viewport.height);
-          
+
           extractedPages.push({
-            pageNumber: imageCounter,
+            pageNumber: `${pageNum}_right`,
             originalPageNumber: pageNum,
             thumbnail: rightCanvas.toDataURL('image/png'),
             width: halfWidth,
@@ -102,20 +100,18 @@ export function usePdfPreview() {
             isSplit: true,
             splitSide: 'right',
           });
-          imageCounter++;
         } else {
-          // Single page - no split needed
+          // Single page — keep PDF page number as integer
           const thumbnail = canvas.toDataURL('image/png');
 
           extractedPages.push({
-            pageNumber: imageCounter,
+            pageNumber: pageNum,
             originalPageNumber: pageNum,
             thumbnail,
             width: viewport.width,
             height: viewport.height,
             isSplit: false,
           });
-          imageCounter++;
         }
 
         // Update progress
@@ -135,7 +131,7 @@ export function usePdfPreview() {
 
   const loadImages = useCallback(async (files, options = {}) => {
     const { splitDoublePages = true } = options;
-    
+
     setIsLoading(true);
     setError(null);
     setProgress(0);
@@ -143,10 +139,10 @@ export function usePdfPreview() {
 
     try {
       const loadedPages = [];
-      let imageCounter = 1;
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
+        const fileIndex = i + 1; // 1-based file index used as base page number
 
         // Read file as data URL
         const dataUrl = await new Promise((resolve, reject) => {
@@ -168,16 +164,16 @@ export function usePdfPreview() {
         // Check if double page and split if needed
         if (splitDoublePages && imgData.width > imgData.height * 1.19) {
           const halfWidth = Math.floor(imgData.width / 2);
-          
-          // Left page
+
+          // Left page — pageNumber = '1_left'
           const leftCanvas = document.createElement('canvas');
           leftCanvas.width = halfWidth;
           leftCanvas.height = imgData.height;
           const leftCtx = leftCanvas.getContext('2d');
           leftCtx.drawImage(imgData.img, 0, 0, halfWidth, imgData.height, 0, 0, halfWidth, imgData.height);
-          
+
           loadedPages.push({
-            pageNumber: imageCounter,
+            pageNumber: `${fileIndex}_left`,
             thumbnail: leftCanvas.toDataURL('image/png'),
             width: halfWidth,
             height: imgData.height,
@@ -185,17 +181,16 @@ export function usePdfPreview() {
             isSplit: true,
             splitSide: 'left',
           });
-          imageCounter++;
 
-          // Right page
+          // Right page — pageNumber = '1_right'
           const rightCanvas = document.createElement('canvas');
           rightCanvas.width = halfWidth;
           rightCanvas.height = imgData.height;
           const rightCtx = rightCanvas.getContext('2d');
           rightCtx.drawImage(imgData.img, halfWidth, 0, halfWidth, imgData.height, 0, 0, halfWidth, imgData.height);
-          
+
           loadedPages.push({
-            pageNumber: imageCounter,
+            pageNumber: `${fileIndex}_right`,
             thumbnail: rightCanvas.toDataURL('image/png'),
             width: halfWidth,
             height: imgData.height,
@@ -203,17 +198,15 @@ export function usePdfPreview() {
             isSplit: true,
             splitSide: 'right',
           });
-          imageCounter++;
         } else {
           loadedPages.push({
-            pageNumber: imageCounter,
+            pageNumber: fileIndex,
             thumbnail: dataUrl,
             width: imgData.width,
             height: imgData.height,
             fileName: file.name,
             isSplit: false,
           });
-          imageCounter++;
         }
 
         setProgress(Math.round(((i + 1) / files.length) * 100));
