@@ -21,11 +21,10 @@ export default function PageCard({
 
   return (
     <div
-      className={`relative group cursor-pointer rounded-xl overflow-hidden transition-all duration-200 ${
-        isSelected
+      className={`relative group cursor-pointer rounded-xl overflow-hidden transition-all duration-200 ${isSelected
           ? 'ring-4 ring-blue-500 shadow-card-hover scale-[1.02]'
           : 'ring-1 ring-blue-100 hover:ring-blue-300 hover:shadow-card'
-      }`}
+        }`}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -36,9 +35,8 @@ export default function PageCard({
           <img
             src={thumbnail}
             alt={`Page ${pageNumber}`}
-            className={`w-full h-full object-contain transition-transform duration-300 ${
-              isHovered ? 'scale-110' : 'scale-100'
-            }`}
+            className={`w-full h-full object-contain transition-transform duration-300 ${isHovered ? 'scale-110' : 'scale-100'
+              }`}
           />
         ) : (
           <div className="w-full h-full shimmer" />
@@ -46,9 +44,8 @@ export default function PageCard({
 
         {/* Overlay on hover */}
         <div
-          className={`absolute inset-0 bg-blue-900/40 flex items-center justify-center gap-2 transition-opacity duration-200 ${
-            isHovered || isSelected ? 'opacity-100' : 'opacity-0'
-          }`}
+          className={`absolute inset-0 bg-blue-900/40 flex items-center justify-center gap-2 transition-opacity duration-200 ${isHovered || isSelected ? 'opacity-100' : 'opacity-0'
+            }`}
         >
           {/* Preview zoom button */}
           <button
@@ -64,18 +61,16 @@ export default function PageCard({
 
         {/* Selection checkbox */}
         <div
-          className={`absolute top-3 left-3 transition-all duration-200 ${
-            isHovered || isSelected
+          className={`absolute top-3 left-3 transition-all duration-200 ${isHovered || isSelected
               ? 'opacity-100 translate-y-0'
               : 'opacity-0 -translate-y-2'
-          }`}
+            }`}
         >
           <div
-            className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${
-              isSelected
+            className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all ${isSelected
                 ? 'bg-blue-600 border-blue-600'
                 : 'bg-white/90 border-blue-300 hover:border-blue-500'
-            }`}
+              }`}
           >
             {isSelected && <Check className="w-4 h-4 text-white" />}
           </div>
@@ -84,11 +79,12 @@ export default function PageCard({
 
       {/* Page number badge */}
       <div
-        className={`absolute bottom-0 inset-x-0 py-2 text-center text-sm font-medium transition-colors ${
-          isSelected ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'
-        }`}
+        className={`absolute bottom-0 inset-x-0 py-2 text-center text-sm font-medium transition-colors ${isSelected ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'
+          }`}
       >
-        Page {pageNumber}
+        {typeof pageNumber === 'string'
+          ? pageNumber.replace('_left', 'L').replace('_right', 'R')
+          : `Page ${pageNumber}`}
       </div>
     </div>
   );

@@ -20,20 +20,16 @@ export default function PdfPreviewGrid({
 
   const handleSelectPage = useCallback(
     (pageNumber, isRangeSelect) => {
-      const pageIndex = pageNumber - 1;
+      // Find position of this page in the list
+      const pageIndex = pages.findIndex(p => p.pageNumber === pageNumber);
 
       if (isRangeSelect && lastSelectedIndex !== null) {
-        // Range select
+        // Range select by position order
         const start = Math.min(lastSelectedIndex, pageIndex);
         const end = Math.max(lastSelectedIndex, pageIndex);
-        const rangePages = [];
-
-        for (let i = start; i <= end; i++) {
-          rangePages.push(i + 1);
-        }
-
-        const newSelection = new Set([...selectedPages, ...rangePages]);
-        onSelectionChange(Array.from(newSelection));
+        const rangePageNumbers = pages.slice(start, end + 1).map(p => p.pageNumber);
+        const newSelection = Array.from(new Set([...selectedPages, ...rangePageNumbers]));
+        onSelectionChange(newSelection);
       } else {
         // Toggle single selection
         const newSelection = selectedPages.includes(pageNumber)
@@ -43,14 +39,14 @@ export default function PdfPreviewGrid({
         setLastSelectedIndex(pageIndex);
       }
     },
-    [selectedPages, lastSelectedIndex, onSelectionChange]
+    [pages, selectedPages, lastSelectedIndex, onSelectionChange]
   );
 
   const handleSelectAll = () => {
     if (selectedPages.length === pages.length) {
       onSelectionChange([]);
     } else {
-      onSelectionChange(pages.map((_, i) => i + 1));
+      onSelectionChange(pages.map((p) => p.pageNumber));
     }
   };
 
@@ -86,11 +82,10 @@ export default function PdfPreviewGrid({
         <div className="flex items-center gap-4">
           <button
             onClick={handleSelectAll}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-              isAllSelected
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${isAllSelected
                 ? 'bg-blue-600 text-white'
                 : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-            }`}
+              }`}
           >
             {isAllSelected ? (
               <CheckSquare className="w-5 h-5" />
@@ -109,33 +104,30 @@ export default function PdfPreviewGrid({
         <div className="flex items-center gap-2 bg-blue-50 rounded-lg p-1">
           <button
             onClick={() => setGridSize('small')}
-            className={`p-2 rounded-md transition-colors ${
-              gridSize === 'small'
+            className={`p-2 rounded-md transition-colors ${gridSize === 'small'
                 ? 'bg-white text-blue-600 shadow-sm'
                 : 'text-gray-500 hover:text-blue-600'
-            }`}
+              }`}
             title="Small grid"
           >
             <Grid3X3 className="w-5 h-5" />
           </button>
           <button
             onClick={() => setGridSize('medium')}
-            className={`p-2 rounded-md transition-colors ${
-              gridSize === 'medium'
+            className={`p-2 rounded-md transition-colors ${gridSize === 'medium'
                 ? 'bg-white text-blue-600 shadow-sm'
                 : 'text-gray-500 hover:text-blue-600'
-            }`}
+              }`}
             title="Medium grid"
           >
             <LayoutGrid className="w-5 h-5" />
           </button>
           <button
             onClick={() => setGridSize('large')}
-            className={`p-2 rounded-md transition-colors ${
-              gridSize === 'large'
+            className={`p-2 rounded-md transition-colors ${gridSize === 'large'
                 ? 'bg-white text-blue-600 shadow-sm'
                 : 'text-gray-500 hover:text-blue-600'
-            }`}
+              }`}
             title="Large grid"
           >
             <ZoomIn className="w-5 h-5" />
@@ -147,10 +139,10 @@ export default function PdfPreviewGrid({
       <div className={`grid gap-4 ${gridClasses[gridSize]}`}>
         {pages.map((page, index) => (
           <PageCard
-            key={index}
-            pageNumber={index + 1}
+            key={page.pageNumber}
+            pageNumber={page.pageNumber}
             thumbnail={page.thumbnail}
-            isSelected={selectedPages.includes(index + 1)}
+            isSelected={selectedPages.includes(page.pageNumber)}
             onSelect={handleSelectPage}
             onPreview={handlePreview}
           />
@@ -172,7 +164,7 @@ export default function PdfPreviewGrid({
 
           <div className="max-w-4xl max-h-full overflow-auto">
             <img
-              src={pages[previewPage - 1]?.thumbnail}
+              src={pages.find(p => p.pageNumber === previewPage)?.thumbnail}
               alt={`Page ${previewPage}`}
               className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
               onClick={(e) => e.stopPropagation()}
@@ -181,7 +173,7 @@ export default function PdfPreviewGrid({
 
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/20 backdrop-blur-sm px-4 py-2 rounded-full">
             <span className="text-white font-medium">
-              Page {previewPage} of {pages.length}
+              Page {typeof previewPage === 'string' ? previewPage.replace('_left', 'L').replace('_right', 'R') : previewPage} of {pages.length}
             </span>
           </div>
         </div>
