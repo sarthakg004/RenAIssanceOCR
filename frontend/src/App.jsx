@@ -6,6 +6,7 @@ import { SelectPage } from './features/upload';
 import { PreprocessPage } from './features/preprocess';
 import { TextDetectionPage } from './features/ocr';
 import { TextRecognitionPage } from './features/ocr';
+import LayoutAwareDetectionPage from './components/LayoutAwareDetectionPanel';
 import { usePdfPreview } from './hooks/usePdfPreview';
 
 
@@ -100,6 +101,15 @@ function App() {
             onBack={() => goToStep(files[0]?.type === 'application/pdf' ? 2 : 1)}
             onNext={() => goToStep(4)}
             onProcessedImagesChange={setProcessedImages}
+          />
+        </div>
+      ) : currentStep === 6 ? (
+        <div className="h-screen w-screen overflow-hidden flex flex-col">
+          <LayoutAwareDetectionPage
+            pages={pages}
+            selectedPages={selectedPages}
+            processedImages={processedImages}
+            onBack={() => goToStep(4)}
           />
         </div>
       ) : currentStep === 5 ? (
@@ -223,7 +233,11 @@ function App() {
                   onNext={(method, provider) => {
                     setDetectionMethod(method);
                     setDetectionProvider(provider);
-                    goToStep(5);
+                    if (method === 'layout-aware') {
+                      goToStep(6);
+                    } else {
+                      goToStep(5);
+                    }
                   }}
                 />
               )}

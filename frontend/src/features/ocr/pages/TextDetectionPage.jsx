@@ -2,14 +2,27 @@ import React, { useState } from 'react';
 import {
     ArrowLeft,
     ArrowRight,
-    Cpu,
     Check,
     ScanText,
     KeyRound,
-    Lock,
     Ban,
+    Layers,
 } from 'lucide-react';
 import { METHOD_OPTIONS, PROVIDER_MAP } from '../config/providers';
+
+// Layout-Aware OCR card definition (local, not from providers.js)
+const LAYOUT_AWARE_CARD = {
+    id: 'layout-aware',
+    name: 'Layout-Aware',
+    icon: Layers,
+    tagline: 'PaddleOCR layout analysis + line detection pipeline — runs locally on CPU or GPU',
+    gradient: 'from-teal-500 to-emerald-600',
+    lightGradient: 'from-teal-50 to-emerald-50',
+    borderColor: 'border-teal-500',
+    accentColor: 'text-teal-600',
+    shadowColor: 'shadow-teal-500/20',
+    isLocal: true,
+};
 
 export default function TextDetectionPage({
     pages,
@@ -21,6 +34,18 @@ export default function TextDetectionPage({
     const [selectedMethod, setSelectedMethod] = useState('api');
 
     const processedCount = Object.keys(processedImages || {}).length;
+
+    // Merge cloud providers + layout-aware into one list
+    const allMethods = [...METHOD_OPTIONS, LAYOUT_AWARE_CARD];
+
+    const handleContinue = () => {
+        if (selectedMethod === 'layout-aware') {
+            // Route to layout-aware detection page
+            onNext(selectedMethod, 'layout-aware');
+        } else {
+            onNext(selectedMethod, PROVIDER_MAP[selectedMethod] || 'gemini');
+        }
+    };
 
     return (
         <div className="h-full flex flex-col animate-fade-in">
@@ -48,10 +73,10 @@ export default function TextDetectionPage({
                 </div>
 
                 <button
-                    onClick={() => onNext(selectedMethod, PROVIDER_MAP[selectedMethod] || 'gemini')}
+                    onClick={handleContinue}
                     className="btn-primary"
                 >
-                    Continue to OCR
+                    {selectedMethod === 'layout-aware' ? 'Start Detection' : 'Continue to OCR'}
                     <ArrowRight className="w-5 h-5" />
                 </button>
             </div>
@@ -62,16 +87,16 @@ export default function TextDetectionPage({
                 <div className="text-center mb-10">
                     <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-full text-sm font-semibold mb-3 shadow-sm border border-blue-100">
                         <ScanText className="w-4 h-4" />
-                        Choose your OCR engine
+                        Choose your detection method
                     </div>
                     <p className="text-gray-500 max-w-xl mx-auto">
-                        Select an AI provider to extract text from your documents.
+                        Select a cloud AI provider for OCR, or use Layout-Aware detection for local line detection.
                     </p>
                 </div>
 
-                {/* Method cards — 4 in a row */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 max-w-5xl mx-auto mb-10 px-2">
-                    {METHOD_OPTIONS.map((method) => {
+                {/* Method cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5 max-w-6xl mx-auto mb-10 px-2">
+                    {allMethods.map((method) => {
                         const Icon = method.icon;
                         const isSelected = selectedMethod === method.id;
                         const isDisabled = method.disabled;
@@ -94,7 +119,14 @@ export default function TextDetectionPage({
                                     </div>
                                 )}
 
-                                {/* Unavailable badge for disabled */}
+                                {/* Local badge for layout-aware */}
+                                {method.isLocal && (
+                                    <div className={`absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 text-[10px] font-bold text-white rounded-full bg-gradient-to-r ${method.gradient} shadow-md`}>
+                                        LOCAL
+                                    </div>
+                                )}
+
+                                {/* Unavailable badge */}
                                 {isDisabled && (
                                     <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 text-[10px] font-bold text-white rounded-full bg-gray-400 shadow-md">
                                         UNAVAILABLE
@@ -142,11 +174,17 @@ export default function TextDetectionPage({
                                     {method.tagline}
                                 </p>
 
-                                {/* API Key tag or disabled reason */}
+                                {/* Bottom tag */}
                                 {isDisabled ? (
                                     <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold text-gray-500 bg-gray-200">
                                         <Ban className="w-3 h-3" />
                                         {method.disabledReason}
+                                    </div>
+                                ) : method.isLocal ? (
+                                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold ${isSelected ? `${method.accentColor} bg-white/80` : 'text-gray-500 bg-gray-100'
+                                        }`}>
+                                        <Layers className="w-3 h-3" />
+                                        No API Key Needed
                                     </div>
                                 ) : (
                                     <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold ${isSelected ? `${method.accentColor} bg-white/80` : 'text-gray-500 bg-gray-100'
@@ -160,22 +198,8 @@ export default function TextDetectionPage({
                     })}
                 </div>
 
-                {/* Local model teaser — subtle, below the main cards */}
-                <div className="max-w-5xl mx-auto px-2 mb-8">
-                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-gray-50 border border-gray-200/80">
-                        <div className="p-2 bg-gray-200 rounded-lg text-gray-400">
-                            <Cpu className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                            <span className="text-sm font-semibold text-gray-500">Local Model</span>
-                            <span className="text-xs text-gray-400 ml-2">CRAFT + Custom Recognition — offline processing</span>
-                        </div>
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-gray-200 text-gray-500 text-[10px] font-bold rounded-full shrink-0">
-                            <Lock className="w-3 h-3" />
-                            COMING SOON
-                        </span>
-                    </div>
-                </div>
+                {/* Bottom spacer */}
+                <div className="h-8" />
             </div>
         </div>
     );

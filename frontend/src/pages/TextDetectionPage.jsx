@@ -32,9 +32,28 @@ const METHOD_OPTIONS = [
     ],
     pros: ['State-of-the-art accuracy', 'Handles complex layouts', 'Multi-language support'],
     cons: ['Requires API key', 'Rate limited (free tier)', 'Data sent to Google'],
+    recommended: false,
+    badge: 'Cloud',
+    badgeColor: 'bg-gradient-to-r from-blue-600 to-indigo-600',
+  },
+  {
+    id: 'layout-aware',
+    name: 'Layout-Aware Detection',
+    subtitle: 'PaddleOCR Local Pipeline',
+    icon: Server,
+    description:
+      'Two-stage local pipeline: layout detection (PP-DocLayout) finds document regions, then PaddleOCR detects individual text lines within each region. Runs entirely on your machine.',
+    features: [
+      { icon: WifiOff, text: 'Works offline — fully local', highlight: true },
+      { icon: Shield, text: 'Data never leaves your machine' },
+      { icon: Zap, text: 'GPU-accelerated inference' },
+      { icon: Brain, text: 'Layout-aware text line detection' },
+    ],
+    pros: ['No API costs', 'Privacy preserved', 'Accurate layout understanding', 'Works offline'],
+    cons: ['Requires GPU (recommended)', 'Initial model download', 'Heavier resource usage'],
     recommended: true,
     badge: 'Recommended',
-    badgeColor: 'bg-gradient-to-r from-blue-600 to-indigo-600',
+    badgeColor: 'bg-gradient-to-r from-teal-600 to-emerald-600',
   },
   {
     id: 'local',
@@ -65,7 +84,7 @@ export default function TextDetectionPage({
   onBack,
   onNext,
 }) {
-  const [selectedMethod, setSelectedMethod] = useState('api');
+  const [selectedMethod, setSelectedMethod] = useState('layout-aware');
 
   const processedCount = Object.keys(processedImages || {}).length;
 
@@ -76,7 +95,7 @@ export default function TextDetectionPage({
     }
   };
 
-  const canProceed = selectedMethod === 'api';
+  const canProceed = selectedMethod === 'api' || selectedMethod === 'layout-aware';
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -107,14 +126,14 @@ export default function TextDetectionPage({
         </div>
 
         <button
-          onClick={() => onNext(selectedMethod, 'gemini')}
+          onClick={() => onNext(selectedMethod, selectedMethod === 'api' ? 'gemini' : 'paddleocr')}
           disabled={!canProceed}
           className={`btn-primary ${canProceed
               ? ''
               : 'opacity-50 cursor-not-allowed hover:translate-y-0'
             }`}
         >
-          Continue to OCR
+          {selectedMethod === 'layout-aware' ? 'Continue to Detection' : 'Continue to OCR'}
           <ArrowRight className="w-5 h-5" />
         </button>
       </div>
@@ -251,6 +270,53 @@ export default function TextDetectionPage({
             );
           })}
         </div>
+
+        {/* Layout-Aware info card */}
+        {selectedMethod === 'layout-aware' && (
+          <div className="max-w-3xl mx-auto animate-slide-up">
+            <div className="bg-gradient-to-br from-teal-50/80 via-white to-emerald-50/80 backdrop-blur-sm rounded-2xl border border-teal-200/50 p-6 shadow-lg">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-xl text-white shadow-lg shadow-teal-500/30">
+                  <Server className="w-6 h-6" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-gray-800 mb-2">
+                    Layout-Aware Detection Pipeline
+                  </h3>
+                  <p className="text-gray-600 mb-4">
+                    A two-stage local pipeline powered by PaddleOCR. First, a layout model identifies document
+                    regions (text blocks, titles, headers). Then a text detection model finds individual text
+                    lines within each region.
+                  </p>
+
+                  <div className="grid md:grid-cols-3 gap-4">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="text-2xl mb-2">🖥️</div>
+                      <h4 className="font-bold text-gray-800 mb-1">Fully Local</h4>
+                      <p className="text-xs text-gray-500">
+                        Runs on your machine — no internet or API key needed
+                      </p>
+                    </div>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="text-2xl mb-2">⚡</div>
+                      <h4 className="font-bold text-gray-800 mb-1">GPU Recommended</h4>
+                      <p className="text-xs text-gray-500">
+                        Best performance with NVIDIA GPU; CPU fallback available
+                      </p>
+                    </div>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="text-2xl mb-2">🎯</div>
+                      <h4 className="font-bold text-gray-800 mb-1">Layout Aware</h4>
+                      <p className="text-xs text-gray-500">
+                        Understands document structure for precise line detection
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Gemini info card */}
         {selectedMethod === 'api' && (
