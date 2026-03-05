@@ -25,6 +25,12 @@ export const OPERATION_CATEGORIES = [
     icon: 'Contrast',
     description: 'Convert to black and white',
   },
+  {
+    id: 'cleanup',
+    label: 'Cleanup & Morphology',
+    icon: 'Eraser',
+    description: 'Remove artifacts and refine text shapes',
+  },
 ];
 
 // ========== OPERATION DEFINITIONS ==========
@@ -206,6 +212,126 @@ export const OPERATIONS = [
     ],
     defaultParams: { method: 'otsu', blockSize: 15, k: 0.5 },
   },
+
+  // ===== CLEANUP & MORPHOLOGY =====
+  {
+    id: 'morph',
+    name: 'Morphological',
+    category: 'cleanup',
+    tooltip: 'Apply morphological transforms to clean text edges, fill gaps, or remove small artifacts.',
+    controls: [
+      {
+        id: 'operation',
+        label: 'Operation',
+        type: 'select',
+        options: [
+          { value: 'open', label: 'Open (Remove noise)' },
+          { value: 'close', label: 'Close (Fill gaps)' },
+          { value: 'dilate', label: 'Dilate (Thicken)' },
+          { value: 'erode', label: 'Erode (Thin)' },
+          { value: 'gradient', label: 'Gradient (Edge outline)' },
+          { value: 'tophat', label: 'Top Hat (Bright details)' },
+          { value: 'blackhat', label: 'Black Hat (Dark details)' },
+        ],
+        default: 'open',
+      },
+      {
+        id: 'kernelShape',
+        label: 'Kernel Shape',
+        type: 'select',
+        options: [
+          { value: 'ellipse', label: 'Ellipse (Smooth)' },
+          { value: 'rect', label: 'Rectangle (Sharp)' },
+          { value: 'cross', label: 'Cross (Directional)' },
+        ],
+        default: 'ellipse',
+      },
+      {
+        id: 'kernelSize',
+        label: 'Kernel Size',
+        type: 'slider',
+        min: 1,
+        max: 9,
+        step: 1,
+        default: 2,
+      },
+      {
+        id: 'iterations',
+        label: 'Iterations',
+        type: 'slider',
+        min: 1,
+        max: 10,
+        step: 1,
+        default: 1,
+      },
+    ],
+    defaultParams: { operation: 'open', kernelShape: 'ellipse', kernelSize: 2, iterations: 1 },
+  },
+  {
+    id: 'remove_blobs',
+    name: 'Remove Ink Blobs',
+    category: 'cleanup',
+    tooltip: 'Neutralise large ink blobs from scanned pages while preserving adjacent text.',
+    controls: [
+      {
+        id: 'minArea',
+        label: 'Min Blob Area',
+        type: 'slider',
+        min: 500,
+        max: 10000,
+        step: 100,
+        default: 3000,
+        unit: 'px²',
+      },
+      {
+        id: 'minSolidity',
+        label: 'Min Solidity',
+        type: 'slider',
+        min: 0.1,
+        max: 1.0,
+        step: 0.05,
+        default: 0.55,
+      },
+      {
+        id: 'maxAspectRatio',
+        label: 'Max Aspect Ratio',
+        type: 'slider',
+        min: 1.0,
+        max: 10.0,
+        step: 0.5,
+        default: 4.0,
+      },
+      {
+        id: 'erosionRatio',
+        label: 'Erosion Safety',
+        type: 'slider',
+        min: 0.1,
+        max: 0.8,
+        step: 0.05,
+        default: 0.35,
+      },
+    ],
+    defaultParams: { minArea: 3000, minSolidity: 0.55, maxAspectRatio: 4.0, erosionRatio: 0.35 },
+  },
+  {
+    id: 'remove_noise',
+    name: 'Remove Speckles',
+    category: 'cleanup',
+    tooltip: 'Remove tiny scanning speckles and dust particles based on connected-component area.',
+    controls: [
+      {
+        id: 'maxArea',
+        label: 'Max Noise Area',
+        type: 'slider',
+        min: 5,
+        max: 200,
+        step: 5,
+        default: 20,
+        unit: 'px²',
+      },
+    ],
+    defaultParams: { maxArea: 20 },
+  },
 ];
 
 // ========== HELPER FUNCTIONS ==========
@@ -234,7 +360,7 @@ export function getOperationById(id) {
 export function createPipelineStep(operationId, order = 0) {
   const operation = getOperationById(operationId);
   if (!operation) return null;
-  
+
   return {
     id: `${operationId}-${Date.now()}`,
     operationId: operationId,
@@ -262,7 +388,7 @@ export function getRecommendedPipeline() {
  */
 export function shouldShowControl(control, currentParams) {
   if (!control.showWhen) return true;
-  
+
   return Object.entries(control.showWhen).every(([key, value]) => {
     if (Array.isArray(value)) {
       return value.includes(currentParams[key]);

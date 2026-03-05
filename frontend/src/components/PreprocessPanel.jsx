@@ -114,6 +114,20 @@ const OPERATIONS = [
           { value: 'close', label: 'Close (Fill gaps)' },
           { value: 'dilate', label: 'Dilate (Thicken)' },
           { value: 'erode', label: 'Erode (Thin)' },
+          { value: 'gradient', label: 'Gradient (Edge outline)' },
+          { value: 'tophat', label: 'Top Hat (Bright details)' },
+          { value: 'blackhat', label: 'Black Hat (Dark details)' },
+        ],
+      },
+      {
+        name: 'kernelShape',
+        label: 'Kernel Shape',
+        type: 'select',
+        default: 'ellipse',
+        options: [
+          { value: 'ellipse', label: 'Ellipse (Smooth)' },
+          { value: 'rect', label: 'Rectangle (Sharp)' },
+          { value: 'cross', label: 'Cross (Directional)' },
         ],
       },
       {
@@ -121,7 +135,7 @@ const OPERATIONS = [
         label: 'Kernel Size',
         type: 'slider',
         min: 1,
-        max: 5,
+        max: 9,
         default: 2,
       },
       {
@@ -129,8 +143,67 @@ const OPERATIONS = [
         label: 'Iterations',
         type: 'slider',
         min: 1,
-        max: 5,
+        max: 10,
         default: 1,
+      },
+    ],
+  },
+  {
+    name: 'remove_blobs',
+    label: 'Remove Ink Blobs',
+    description: 'Neutralise large ink blobs while preserving adjacent text',
+    controls: [
+      {
+        name: 'minArea',
+        label: 'Min Blob Area (px²)',
+        type: 'slider',
+        min: 500,
+        max: 10000,
+        step: 100,
+        default: 3000,
+      },
+      {
+        name: 'minSolidity',
+        label: 'Min Solidity',
+        type: 'slider',
+        min: 0.1,
+        max: 1.0,
+        step: 0.05,
+        default: 0.55,
+      },
+      {
+        name: 'maxAspectRatio',
+        label: 'Max Aspect Ratio',
+        type: 'slider',
+        min: 1.0,
+        max: 10.0,
+        step: 0.5,
+        default: 4.0,
+      },
+      {
+        name: 'erosionRatio',
+        label: 'Erosion Ratio',
+        type: 'slider',
+        min: 0.1,
+        max: 0.8,
+        step: 0.05,
+        default: 0.35,
+      },
+    ],
+  },
+  {
+    name: 'remove_noise',
+    label: 'Remove Speckle Noise',
+    description: 'Remove tiny scanning speckles and dust particles',
+    controls: [
+      {
+        name: 'maxArea',
+        label: 'Max Noise Area (px²)',
+        type: 'slider',
+        min: 5,
+        max: 200,
+        step: 5,
+        default: 20,
       },
     ],
   },
@@ -255,11 +328,10 @@ export default function PreprocessPanel({
         <button
           onClick={onApply}
           disabled={isProcessing || getEnabledCount() === 0}
-          className={`w-full flex items-center justify-center gap-2 px-6 py-3 font-semibold rounded-xl transition-all ${
-            isProcessing || getEnabledCount() === 0
+          className={`w-full flex items-center justify-center gap-2 px-6 py-3 font-semibold rounded-xl transition-all ${isProcessing || getEnabledCount() === 0
               ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
               : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg'
-          }`}
+            }`}
         >
           {isProcessing ? (
             <>

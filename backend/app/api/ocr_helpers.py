@@ -8,6 +8,7 @@ error handling, and response formatting are defined in one place.
 
 import base64
 import time
+from typing import Optional
 
 from fastapi import HTTPException
 
@@ -116,6 +117,7 @@ def run_ocr(
     image_bytes: bytes,
     model: str,
     mime_type: str,
+    custom_prompt: Optional[str] = None,
 ) -> OCRResponse:
     """
     Call ``provider.transcribe`` and return a standardised ``OCRResponse``.
@@ -128,7 +130,7 @@ def run_ocr(
     start_time = time.time()
 
     try:
-        transcript = provider.transcribe(api_key, image_bytes, model, mime_type)
+        transcript = provider.transcribe(api_key, image_bytes, model, mime_type, custom_prompt)
         processing_time = int((time.time() - start_time) * 1000)
         return OCRResponse(
             success=True,

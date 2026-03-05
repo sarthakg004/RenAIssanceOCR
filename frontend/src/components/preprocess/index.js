@@ -8,3 +8,5 @@ export { default as PipelineStack } from './PipelineStack';
 export { default as BeforeAfterViewer } from './BeforeAfterViewer';
 export { default as ZoomLensPreview } from './ZoomLensPreview';
 export { default as OperationsSidebar } from './OperationsSidebar';
+export { default as ImageEraser } from './ImageEraser';
+

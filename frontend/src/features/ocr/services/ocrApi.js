@@ -101,7 +101,7 @@ export async function verifyApiKey(apiKey) {
 // Single page OCR (per provider)
 // ============================================
 
-export async function processPageOCR(imageData, model, apiKey, provider = 'gemini') {
+export async function processPageOCR(imageData, model, apiKey, provider = 'gemini', customPrompt = '') {
     const endpoints = {
         gemini: '/gemini-ocr-json',
         chatgpt: '/chatgpt-ocr-json',
@@ -125,16 +125,20 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
     }
 
     const endpoint = endpoints[provider] || endpoints.gemini;
+    const requestBody = {
+        image_data: imageData,
+        model: model,
+    };
+    if (customPrompt && customPrompt.trim()) {
+        requestBody.custom_prompt = customPrompt.trim();
+    }
     const response = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             [headerName]: apiKey,
         },
-        body: JSON.stringify({
-            image_data: imageData,
-            model: model,
-        }),
+        body: JSON.stringify(requestBody),
     });
 
     if (response.status === 429) {
@@ -169,7 +173,7 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
 // Batch OCR (Gemini only)
 // ============================================
 
-export async function processBatchOCR(items, model, apiKey) {
+export async function processBatchOCR(items, model, apiKey, customPrompt = '') {
     if (!items || items.length === 0) {
         return { success: false, error: 'No items to process' };
     }
@@ -185,19 +189,24 @@ export async function processBatchOCR(items, model, apiKey) {
             };
         }
 
+        const batchBody = {
+            items: items.map(item => ({
+                page_index: item.pageIndex,
+                image_data: item.imageData,
+            })),
+            model: model,
+        };
+        if (customPrompt && customPrompt.trim()) {
+            batchBody.custom_prompt = customPrompt.trim();
+        }
+
         const response = await fetch(`${API_BASE}/gemini-ocr-batch`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-Gemini-API-Key': apiKey,
             },
-            body: JSON.stringify({
-                items: items.map(item => ({
-                    page_index: item.pageIndex,
-                    image_data: item.imageData,
-                })),
-                model: model,
-            }),
+            body: JSON.stringify(batchBody),
         });
 
         if (response.status === 429) {

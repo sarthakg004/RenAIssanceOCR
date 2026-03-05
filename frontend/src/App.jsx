@@ -114,6 +114,9 @@ function App() {
                 const original = pages[pageIndex];
                 return {
                   pageNumber: pageNum,
+                  originalPageNumber: original?.originalPageNumber || null,
+                  isSplit: original?.isSplit || false,
+                  splitSide: original?.splitSide || null,
                   // Use thumbnail for original (from PDF/image extraction)
                   original: original?.thumbnail || original,
                   // Use preprocessed if available, otherwise fall back to thumbnail

@@ -12,6 +12,10 @@ import {
   Zap,
   Minus,
   Plus,
+  FileText,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
 } from 'lucide-react';
 
 // Provider display labels
@@ -47,9 +51,13 @@ export default function SidebarConfig({
   batchSize,
   onBatchSizeChange,
   provider = 'gemini',
+  customPrompt,
+  onCustomPromptChange,
 }) {
   const providerLabel = PROVIDER_LABELS[provider] || 'API';
   const [showKey, setShowKey] = useState(false);
+  const [promptExpanded, setPromptExpanded] = useState(true);
+  const isCustomPrompt = customPrompt !== null && customPrompt !== undefined && customPrompt !== '';
 
   const getKeyStatusBadge = () => {
     if (isValidating) {
@@ -215,6 +223,89 @@ export default function SidebarConfig({
           <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">
             Pages to process at once.{provider === 'gemini' ? ' Gemini free tier: 5 req/min.' : ''}
           </p>
+        </div>
+
+        {/* Custom Prompt Section */}
+        <div>
+          <button
+            onClick={() => setPromptExpanded(!promptExpanded)}
+            className="w-full flex items-center justify-between text-xs font-medium text-gray-700 mb-1.5 
+                       hover:text-blue-600 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <FileText size={12} className="text-purple-500" />
+              OCR Prompt
+              {isCustomPrompt && (
+                <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-50 text-purple-600 text-[9px] font-semibold rounded-full">
+                  Custom
+                </span>
+              )}
+              {!isCustomPrompt && (
+                <span className="inline-flex items-center px-1.5 py-0.5 bg-gray-100 text-gray-500 text-[9px] font-semibold rounded-full">
+                  Default
+                </span>
+              )}
+            </span>
+            {promptExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+
+          {promptExpanded && (
+            <div className="space-y-2">
+              {/* Toggle between default and custom */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onCustomPromptChange('')}
+                  className={`flex-1 px-2 py-1.5 text-[11px] font-medium rounded-lg border transition-colors ${
+                    !isCustomPrompt
+                      ? 'bg-blue-50 border-blue-200 text-blue-700'
+                      : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  System Default
+                </button>
+                <button
+                  onClick={() => {
+                    if (!isCustomPrompt) onCustomPromptChange(' ');
+                  }}
+                  className={`flex-1 px-2 py-1.5 text-[11px] font-medium rounded-lg border transition-colors ${
+                    isCustomPrompt
+                      ? 'bg-purple-50 border-purple-200 text-purple-700'
+                      : 'bg-white border-gray-200 text-gray-500 hover:bg-gray-50'
+                  }`}
+                >
+                  Custom Prompt
+                </button>
+              </div>
+
+              {isCustomPrompt && (
+                <>
+                  <textarea
+                    value={customPrompt}
+                    onChange={(e) => onCustomPromptChange(e.target.value)}
+                    placeholder="Enter your custom OCR prompt here..."
+                    rows={6}
+                    className="w-full px-2.5 py-2 text-xs border border-gray-200 rounded-lg 
+                             focus:outline-none focus:ring-2 focus:ring-purple-100 focus:border-purple-400
+                             transition-colors bg-gray-50 focus:bg-white resize-y
+                             placeholder:text-gray-400 leading-relaxed"
+                  />
+                  <button
+                    onClick={() => onCustomPromptChange('')}
+                    className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-purple-600 transition-colors"
+                  >
+                    <RotateCcw size={10} />
+                    Reset to System Default
+                  </button>
+                </>
+              )}
+
+              {!isCustomPrompt && (
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  Using the built-in prompt optimized for historical OCR transcription.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

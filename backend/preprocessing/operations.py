@@ -546,6 +546,230 @@ def _sauvola_threshold(
 
 
 # ============================================
+# MORPHOLOGICAL OPERATIONS
+# ============================================
+
+def morph_operations(
+    img: np.ndarray,
+    params: Dict[str, Any],
+    progress: ProgressCallbackType = None
+) -> np.ndarray:
+    """
+    Apply morphological transformations to clean up text and artifacts.
+
+    Supports multiple operations and kernel shapes for fine-grained control.
+
+    Params:
+        operation: 'open', 'close', 'dilate', 'erode', 'gradient',
+                   'tophat', or 'blackhat' (default: 'open')
+        kernelSize: Size of structuring element 1-9 (default: 2)
+        kernelShape: 'ellipse', 'rect', or 'cross' (default: 'ellipse')
+        iterations: Number of times to apply 1-10 (default: 1)
+
+    Returns:
+        Morphologically processed image
+    """
+    if progress:
+        progress(0.1, "Preparing morphological operation")
+
+    operation = params.get("operation", "open")
+    k = max(1, min(9, int(params.get("kernelSize", 2))))
+    shape_name = params.get("kernelShape", "ellipse")
+    iterations = max(1, min(10, int(params.get("iterations", 1))))
+
+    # Select kernel shape
+    shape_map = {
+        "ellipse": cv2.MORPH_ELLIPSE,
+        "rect": cv2.MORPH_RECT,
+        "cross": cv2.MORPH_CROSS,
+    }
+    shape = shape_map.get(shape_name, cv2.MORPH_ELLIPSE)
+    kernel = cv2.getStructuringElement(shape, (k, k))
+
+    if progress:
+        progress(0.3, f"Applying {operation} (k={k}, iter={iterations})")
+
+    # Map operation name to OpenCV constant or direct function
+    morph_ops = {
+        "open": cv2.MORPH_OPEN,
+        "close": cv2.MORPH_CLOSE,
+        "gradient": cv2.MORPH_GRADIENT,
+        "tophat": cv2.MORPH_TOPHAT,
+        "blackhat": cv2.MORPH_BLACKHAT,
+    }
+
+    if operation in morph_ops:
+        result = cv2.morphologyEx(
+            img, morph_ops[operation], kernel, iterations=iterations
+        )
+    elif operation == "dilate":
+        result = cv2.dilate(img, kernel, iterations=iterations)
+    elif operation == "erode":
+        result = cv2.erode(img, kernel, iterations=iterations)
+    else:
+        # Fallback to open
+        result = cv2.morphologyEx(
+            img, cv2.MORPH_OPEN, kernel, iterations=iterations
+        )
+
+    if progress:
+        progress(1.0, "Morphological operation complete")
+
+    return result
+
+
+# ============================================
+# BLOB & NOISE REMOVAL
+# ============================================
+
+def remove_large_blobs(
+    img: np.ndarray,
+    params: Dict[str, Any],
+    progress: ProgressCallbackType = None
+) -> np.ndarray:
+    """
+    Neutralise large ink blobs by filling only their inner core with white.
+
+    Instead of erasing the entire connected component (which risks removing
+    adjacent letters), we classify large components as blobs using three gates
+    (area, solidity, aspect ratio), erode each blob mask inward, and paint
+    only the safe interior core white.
+
+    Params:
+        minArea: Components smaller than this are kept (default: 3000)
+        minSolidity: Compactness threshold 0-1; raise to be more
+                     conservative (default: 0.55)
+        maxAspectRatio: Elongated components (text) are always kept
+                        (default: 4.0)
+        erosionRatio: Fraction of sqrt(area) used as erosion kernel
+                      radius; larger = smaller core removed, safer
+                      (default: 0.35)
+
+    Returns:
+        Cleaned binary image
+    """
+    if progress:
+        progress(0.1, "Preparing blob detection")
+
+    min_area = int(params.get("minArea", 3000))
+    min_solidity = float(params.get("minSolidity", 0.55))
+    max_aspect_ratio = float(params.get("maxAspectRatio", 4.0))
+    erosion_ratio = float(params.get("erosionRatio", 0.35))
+
+    # Convert to grayscale + binary
+    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+
+    # Work on inverted image (blobs = white foreground on black)
+    inverted = cv2.bitwise_not(binary)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        inverted, connectivity=8
+    )
+
+    if progress:
+        progress(0.3, f"Analyzing {num_labels - 1} components")
+
+    result = binary.copy()
+
+    for lbl in range(1, num_labels):
+        area = stats[lbl, cv2.CC_STAT_AREA]
+
+        # Gate 1: small → normal character → skip
+        if area <= min_area:
+            continue
+
+        w = stats[lbl, cv2.CC_STAT_WIDTH]
+        h = stats[lbl, cv2.CC_STAT_HEIGHT]
+        aspect = max(w, h) / max(min(w, h), 1)
+
+        # Gate 2: elongated → text stroke / border → skip
+        if aspect > max_aspect_ratio:
+            continue
+
+        # Gate 3: low solidity → complex text shape → skip
+        component_mask = np.uint8(labels == lbl) * 255
+        contours, _ = cv2.findContours(
+            component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            continue
+
+        hull_area = cv2.contourArea(cv2.convexHull(contours[0]))
+        solidity = float(area) / hull_area if hull_area > 0 else 0.0
+
+        if solidity < min_solidity:
+            continue
+
+        # Confirmed blob → erode inward to get safe inner core
+        k_radius = max(3, int(erosion_ratio * (area ** 0.5)))
+        k_size = 2 * k_radius + 1
+        kern = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (k_size, k_size)
+        )
+        core = cv2.erode(component_mask, kern, iterations=1)
+
+        # Paint the core white (background) in the output
+        result[core == 255] = 255
+
+        if progress:
+            pct = 0.3 + 0.6 * (lbl / max(num_labels - 1, 1))
+            progress(min(pct, 0.9), f"Processing blob {lbl}")
+
+    if progress:
+        progress(1.0, "Blob removal complete")
+
+    return result
+
+
+def remove_small_noise(
+    img: np.ndarray,
+    params: Dict[str, Any],
+    progress: ProgressCallbackType = None
+) -> np.ndarray:
+    """
+    Remove very small connected components (scanning speckles / dust).
+
+    Finds all connected foreground components and discards any whose area
+    is below the threshold, effectively cleaning up scanning artifacts.
+
+    Params:
+        maxArea: Components with area below this are removed (default: 20)
+
+    Returns:
+        Cleaned binary image
+    """
+    if progress:
+        progress(0.1, "Preparing noise detection")
+
+    max_area = max(1, int(params.get("maxArea", 20)))
+
+    # Convert to grayscale + binary
+    gray = img if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+
+    inverted = cv2.bitwise_not(binary)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        inverted, connectivity=8
+    )
+
+    if progress:
+        progress(0.4, f"Filtering {num_labels - 1} components (threshold={max_area})")
+
+    keep_mask = np.zeros_like(inverted)
+    for lbl in range(1, num_labels):
+        area = stats[lbl, cv2.CC_STAT_AREA]
+        if area >= max_area:
+            keep_mask[labels == lbl] = 255
+
+    result = cv2.bitwise_not(keep_mask)
+
+    if progress:
+        progress(1.0, "Small noise removal complete")
+
+    return result
+
+
+# ============================================
 # OPERATION REGISTRY
 # ============================================
 
@@ -557,6 +781,9 @@ OP_REGISTRY = {
     "contrast": clahe_contrast,
     "sharpen": sharpen_image,
     "threshold": threshold_image,
+    "morph": morph_operations,
+    "remove_blobs": remove_large_blobs,
+    "remove_noise": remove_small_noise,
 }
 
 

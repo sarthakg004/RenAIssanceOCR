@@ -9,6 +9,7 @@ import asyncio
 import time
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, Header, Form
+from typing import Optional
 
 from ..core.config import MIN_API_KEY_LENGTH, MAX_BATCH_SIZE
 from ..core.rate_limiter import rate_limiter
@@ -107,6 +108,7 @@ async def get_rate_limit_status():
 async def gemini_ocr_page(
     image: UploadFile = File(...),
     model: str = Form(default="gemini-3-flash-preview"),
+    custom_prompt: Optional[str] = Form(default=None),
     x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
 ):
     """Process a single uploaded image file with Gemini OCR."""
@@ -120,7 +122,7 @@ async def gemini_ocr_page(
     if content_type not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
         content_type = "image/png"
 
-    result = run_ocr(provider, x_gemini_api_key, image_bytes, model, content_type)
+    result = run_ocr(provider, x_gemini_api_key, image_bytes, model, content_type, custom_prompt)
     if result.success:
         rate_limiter.record_request()
     return result
@@ -130,6 +132,7 @@ async def gemini_ocr_page(
 async def gemini_ocr_base64(
     image_data: str = Form(...),
     model: str = Form(default="gemini-3-flash-preview"),
+    custom_prompt: Optional[str] = Form(default=None),
     x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
 ):
     """Process a base64-encoded image with Gemini OCR (form data)."""
@@ -138,7 +141,7 @@ async def gemini_ocr_base64(
     validate_model(model, provider.MODEL_IDS)
 
     image_bytes, mime_type = parse_base64_image(image_data)
-    result = run_ocr(provider, x_gemini_api_key, image_bytes, model, mime_type)
+    result = run_ocr(provider, x_gemini_api_key, image_bytes, model, mime_type, custom_prompt)
     if result.success:
         rate_limiter.record_request()
     return result
@@ -155,7 +158,7 @@ async def gemini_ocr_json(
     validate_model(request.model, provider.MODEL_IDS)
 
     image_bytes, mime_type = parse_base64_image(request.image_data)
-    result = run_ocr(provider, x_gemini_api_key, image_bytes, request.model, mime_type)
+    result = run_ocr(provider, x_gemini_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
     if result.success:
         rate_limiter.record_request()
     return result
@@ -192,7 +195,7 @@ async def gemini_ocr_batch(
             transcript = await asyncio.get_event_loop().run_in_executor(
                 None,
                 lambda ib=image_bytes, mt=mime_type: provider.transcribe(
-                    x_gemini_api_key, ib, request.model, mt
+                    x_gemini_api_key, ib, request.model, mt, request.custom_prompt
                 ),
             )
             return BatchOCRResultItem(
@@ -234,7 +237,7 @@ async def chatgpt_ocr_json(
     provider = _provider("chatgpt")
     validate_model(request.model, provider.MODEL_IDS)
     image_bytes, mime_type = parse_base64_image(request.image_data)
-    return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type)
+    return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -250,7 +253,7 @@ async def deepseek_ocr_json(
     provider = _provider("deepseek")
     validate_model(request.model, provider.MODEL_IDS)
     image_bytes, mime_type = parse_base64_image(request.image_data)
-    return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type)
+    return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -266,4 +269,4 @@ async def qwen_ocr_json(
     provider = _provider("qwen")
     validate_model(request.model, provider.MODEL_IDS)
     image_bytes, mime_type = parse_base64_image(request.image_data)
-    return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type)
+    return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)

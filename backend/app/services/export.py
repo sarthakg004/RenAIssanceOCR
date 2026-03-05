@@ -3,6 +3,7 @@ Export service — builds combined transcripts for export.
 """
 
 import io
+import re
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -14,14 +15,31 @@ from reportlab.lib.units import inch
 from ..core.font_registry import UNICODE_FONT_REGISTERED
 
 
+def _page_sort_key(x: str):
+    """Sort key that handles numeric ('5') and split page keys ('5a', '5b')."""
+    match = re.match(r'^(\d+)(.*)', x)
+    if match:
+        return (int(match.group(1)), match.group(2))
+    return (0, x)
+
+
+def _page_display_label(key: str) -> str:
+    """Convert a page key to a human-readable label.
+    '5' -> 'Page 5', '5a' -> 'Page 5a', '5b' -> 'Page 5b'
+    """
+    return f"Page {key}"
+
+
 def build_combined_transcript(transcripts: dict) -> str:
     """Build combined transcript with page separators"""
-    pages = sorted(transcripts.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+    pages = sorted(transcripts.keys(), key=_page_sort_key)
 
     sections = []
+    separator = '\u2500' * 20
     for page in pages:
         text = transcripts[page]
-        section = f"page_{page}\n{'─' * 20}\n{text}"
+        label = _page_display_label(page)
+        section = f"{label}\n{separator}\n{text}"
         sections.append(section)
 
     return "\n\n".join(sections)
@@ -47,13 +65,13 @@ def build_docx_export(transcripts: dict) -> io.BytesIO:
     doc.add_paragraph()  # Spacer
 
     # Add each page
-    pages = sorted(transcripts.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+    pages = sorted(transcripts.keys(), key=_page_sort_key)
 
     for i, page in enumerate(pages):
         text = transcripts[page]
 
         # Page header
-        heading = doc.add_heading(f"Page {page}", level=1)
+        heading = doc.add_heading(_page_display_label(page), level=1)
 
         # Separator line
         separator = doc.add_paragraph("─" * 40)
@@ -138,13 +156,13 @@ def build_pdf_export(transcripts: dict) -> io.BytesIO:
     story.append(Spacer(1, 20))
 
     # Add each page
-    pages = sorted(transcripts.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+    pages = sorted(transcripts.keys(), key=_page_sort_key)
 
     for page in pages:
         text = transcripts[page]
 
         # Page header
-        story.append(Paragraph(f"Page {page}", page_header_style))
+        story.append(Paragraph(_page_display_label(page), page_header_style))
         story.append(Paragraph("─" * 50, separator_style))
 
         # Page content - escape HTML entities

@@ -145,9 +145,14 @@ export default function PagePreview({
   onZoomChange,
   // Which page is being processed (for showing status during auto-processing)
   processingPageIndex,
+  // Original page labels
+  pageLabel,
+  pageLabels = null,
 }) {
-  const pageNumber = currentIndex + 1;
-  const processingPageNumber = processingPageIndex !== null ? processingPageIndex + 1 : null;
+  const pageNumber = pageLabel || currentIndex + 1;
+  const processingPageNumber = processingPageIndex !== null
+    ? (pageLabels ? pageLabels[processingPageIndex] : processingPageIndex + 1)
+    : null;
   const imageSrc = currentPage?.processed || currentPage?.original;
 
   // Use downscaled image for preview to handle large images

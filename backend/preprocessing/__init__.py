@@ -12,6 +12,9 @@ Operations:
 - contrast: Enhance contrast using CLAHE
 - sharpen: Sharpen text edges
 - threshold: Binarization (Otsu, adaptive, Sauvola)
+- morph: Morphological operations (open, close, dilate, erode, gradient, tophat, blackhat)
+- remove_blobs: Remove large ink blobs from scanned documents
+- remove_noise: Remove small speckles and scanning dust
 """
 
 from .operations import (
@@ -22,6 +25,9 @@ from .operations import (
     clahe_contrast,
     sharpen_image,
     threshold_image,
+    morph_operations,
+    remove_large_blobs,
+    remove_small_noise,
     OP_REGISTRY,
 )
 
@@ -38,6 +44,9 @@ __all__ = [
     'clahe_contrast',
     'sharpen_image',
     'threshold_image',
+    'morph_operations',
+    'remove_large_blobs',
+    'remove_small_noise',
     'OP_REGISTRY',
     # Pipeline
     'run_pipeline',
@@ -47,3 +56,4 @@ __all__ = [
     'ProgressCallback',
     'create_progress_callback',
 ]
+
