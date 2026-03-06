@@ -7,12 +7,17 @@ Two-stage pipeline:
 
 Models are created fresh per call and cleaned up after,
 matching the proven notebook implementation.
+
+Resource requirements
+---------------------
+  GPU mode  : >= 8 GB VRAM recommended (server det/rec models are large).
+  CPU mode  : >= 8 GB RAM recommended; processing is significantly slower.
 """
 
 import gc
 import os
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 
 # Disable Paddle PIR to avoid ConvertPirAttribute2RuntimeAttribute errors
 os.environ["FLAGS_enable_pir_api"] = "0"
@@ -20,9 +25,44 @@ os.environ["FLAGS_enable_pir_in_executor"] = "0"
 
 import cv2
 import numpy as np
+import psutil
 
-import paddle
-from paddleocr import PPStructureV3, PaddleOCR
+# ---------------------------------------------------------------------------
+# Lazy Paddle imports
+# ---------------------------------------------------------------------------
+# paddlepaddle-gpu links against libcuda.so.1 at import time.  If the
+# container starts without GPU access the import raises an ImportError and
+# crashes the whole server before it can serve any request.
+# We import lazily on the first detection call so the server always starts;
+# a clear error is returned to the caller if paddle is unavailable.
+# ---------------------------------------------------------------------------
+_paddle = None
+_PPStructureV3 = None
+_PaddleOCR = None
+_PADDLE_IMPORT_ERROR: str = ""
+
+
+def _ensure_paddle() -> None:
+    """Lazy-import paddle and paddleocr on first call; raises RuntimeError if unavailable."""
+    global _paddle, _PPStructureV3, _PaddleOCR, _PADDLE_IMPORT_ERROR
+    if _paddle is not None:
+        return
+    try:
+        import paddle as _p
+        from paddleocr import PPStructureV3 as _S, PaddleOCR as _O
+        _paddle = _p
+        _PPStructureV3 = _S
+        _PaddleOCR = _O
+    except Exception as exc:
+        _PADDLE_IMPORT_ERROR = str(exc)
+        raise RuntimeError(
+            f"PaddlePaddle failed to load: {exc}. "
+            "Start the container with GPU access: docker run --gpus all ... "
+            "and ensure CUDA 12.6 drivers are installed on the host. "
+            "GPU paddle install: "
+            "pip install paddlepaddle-gpu==3.3.0 "
+            "-i https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+        ) from exc
 
 
 # ---- constants (match working notebook) ----
@@ -33,6 +73,104 @@ SCORE_THRESH   = 0.5
 UPSCALE_MIN_H  = 60
 NMS_IOU_THRESH = 0.3
 GAP_MULTIPLIER = 2.0
+
+# ---- resource thresholds ----
+MIN_GPU_VRAM_GB  = 8.0   # Minimum GPU VRAM recommended for server models
+MIN_RAM_GB       = 8.0   # Minimum system RAM recommended for CPU mode
+LOW_RAM_GB       = 4.0   # RAM below this value is considered critically low
+
+
+# ==============================================================
+# Resource Check
+# ==============================================================
+
+def check_system_resources(use_gpu: bool) -> Dict[str, Any]:
+    """
+    Check available GPU VRAM and system RAM.
+
+    Returns a dict with:
+      ``warnings``          : list[str]  — human-readable warnings (may be empty)
+      ``gpu_available``     : bool       — whether a CUDA GPU is detected
+      ``gpu_vram_gb``       : float      — total VRAM of device 0 (0 if no GPU)
+      ``gpu_vram_free_gb``  : float      — free VRAM on device 0 (0 if no GPU)
+      ``available_ram_gb``  : float      — currently free system RAM
+      ``total_ram_gb``      : float      — total system RAM
+    """
+    warnings: List[str] = []
+
+    # --- GPU ---
+    gpu_available    = False
+    gpu_vram_gb      = 0.0
+    gpu_vram_free_gb = 0.0
+
+    try:
+        if _paddle is not None:
+            gpu_available = bool(_paddle.device.is_compiled_with_cuda())
+        if gpu_available:
+            props = _paddle.device.cuda.get_device_properties(0)
+            gpu_vram_gb = props.total_memory / (1024 ** 3)
+            reserved_bytes = _paddle.device.cuda.memory_reserved(0)
+            gpu_vram_free_gb = max(0.0, gpu_vram_gb - reserved_bytes / (1024 ** 3))
+    except Exception:
+        pass
+
+    if use_gpu:
+        if not gpu_available:
+            warnings.append(
+                "GPU not available in this environment. "
+                "Running on CPU instead — this is much slower and requires >= 8 GB RAM."
+            )
+        elif gpu_vram_gb < MIN_GPU_VRAM_GB:
+            warnings.append(
+                f"WARNING: GPU VRAM is {gpu_vram_gb:.1f} GB, but a minimum of "
+                f"{MIN_GPU_VRAM_GB:.0f} GB is recommended for the server-class models "
+                "(PP-DocLayout_plus-L + PP-OCRv5_server_det). "
+                "You may experience out-of-memory errors or degraded performance."
+            )
+        elif gpu_vram_free_gb < 4.0:
+            warnings.append(
+                f"WARNING: Only {gpu_vram_free_gb:.1f} GB of VRAM is currently free. "
+                "Other processes may be consuming GPU memory. "
+                "Consider freeing GPU memory before running detection."
+            )
+
+    # --- System RAM ---
+    mem = psutil.virtual_memory()
+    total_ram_gb     = mem.total     / (1024 ** 3)
+    available_ram_gb = mem.available / (1024 ** 3)
+
+    if available_ram_gb < LOW_RAM_GB:
+        warnings.append(
+            f"CRITICAL: Only {available_ram_gb:.1f} GB of RAM is available "
+            f"(total: {total_ram_gb:.1f} GB). "
+            "The system may freeze or be killed by the OOM killer during detection. "
+            f"At least {MIN_RAM_GB:.0f} GB of free RAM is strongly recommended."
+        )
+    elif not use_gpu and available_ram_gb < MIN_RAM_GB:
+        warnings.append(
+            f"WARNING: Running on CPU with only {available_ram_gb:.1f} GB of free RAM. "
+            f"At least {MIN_RAM_GB:.0f} GB RAM is recommended for CPU-mode detection "
+            "with server-class models. Processing may be very slow."
+        )
+
+    return {
+        "warnings":          warnings,
+        "gpu_available":     gpu_available,
+        "gpu_vram_gb":       gpu_vram_gb,
+        "gpu_vram_free_gb":  gpu_vram_free_gb,
+        "available_ram_gb":  available_ram_gb,
+        "total_ram_gb":      total_ram_gb,
+    }
+
+
+def _free_memory():
+    """Aggressively free Python + GPU memory."""
+    gc.collect()
+    try:
+        if _paddle is not None and _paddle.device.is_compiled_with_cuda():
+            _paddle.device.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 # ==============================================================
@@ -200,12 +338,23 @@ def _merge_into_lines(raw_boxes, img_w, img_h, gap_multiplier=GAP_MULTIPLIER):
     med_w = float(np.median(widths))
     h_thresh  = 0.5 * med_h
     gap_limit = gap_multiplier * med_w
-    MIN_W, MIN_H, MAX_H = 10.0, 10.0, 3.0 * med_h
+    MIN_W, MIN_H, MAX_H = 10.0, 10.0, 6.0 * med_h
+
+    print(f"[_merge_into_lines] {len(raw_boxes)} raw boxes | "
+          f"med_h={med_h:.1f} med_w={med_w:.1f} | "
+          f"h_thresh={h_thresh:.1f} gap_limit={gap_limit:.1f} MAX_H={MAX_H:.1f} | "
+          f"img_w={img_w} img_h={img_h}")
+    print(f"[_merge_into_lines] height stats: "
+          f"min={heights.min():.1f} p25={float(np.percentile(heights,25)):.1f} "
+          f"p50={med_h:.1f} p75={float(np.percentile(heights,75)):.1f} max={heights.max():.1f}")
+    print(f"[_merge_into_lines] sample box bounds (first 3): "
+          f"{[b[:4] for b in bounds[:3]]}")
 
     filtered = [
         (b, bnd) for b, bnd in zip(raw_boxes, bounds)
         if bnd[6] >= MIN_W and MIN_H <= bnd[7] <= MAX_H
     ]
+    print(f"[_merge_into_lines] after h/w filter: {len(filtered)} boxes remain")
     if not filtered:
         return []
     filtered.sort(key=lambda x: x[1][5])
@@ -248,17 +397,82 @@ def _merge_into_lines(raw_boxes, img_w, img_h, gap_multiplier=GAP_MULTIPLIER):
     return merged
 
 
-def _filter_boxes_by_page_size(boxes, img_h, img_w, min_area_fraction=0.0001):
-    page_area = img_h * img_w
-    min_area = min_area_fraction * page_area
+def _filter_boxes_by_page_size(boxes, img_h, img_w):
+    """
+    Filter text-line boxes using text-size-aware thresholds derived from the
+    median box height.  This avoids the page-area-based threshold that failed
+    for large scans (e.g. 6048×4536) where ``page_area * 0.0001`` was far
+    larger than any individual text-line bounding box.
+    """
+    if not boxes:
+        return []
+
+    heights = np.array(
+        [float(np.asarray(b, dtype=np.float32)[:, 1].max()
+               - np.asarray(b, dtype=np.float32)[:, 1].min())
+         for b in boxes],
+        dtype=np.float32,
+    )
+    median_height = float(np.median(heights))
+
+    min_area   = max(20.0,  median_height * median_height * 0.5)
+    min_width  = max(5.0,   median_height * 0.5)
+    min_height = max(5.0,   median_height * 0.5)
+
+    print(f"[_filter_boxes_by_page_size] img_h={img_h} img_w={img_w} "
+          f"boxes={len(boxes)} median_height={median_height:.1f} "
+          f"min_area={min_area:.1f} min_width={min_width:.1f} "
+          f"min_height={min_height:.1f}")
+
     kept = []
-    for box in boxes:
-        pts = np.asarray(box, dtype=np.float32)
-        w = float(pts[:, 0].max() - pts[:, 0].min())
-        h = float(pts[:, 1].max() - pts[:, 1].min())
-        if w * h >= min_area:
+    for i, box in enumerate(boxes):
+        pts  = np.asarray(box, dtype=np.float32)
+        w    = float(pts[:, 0].max() - pts[:, 0].min())
+        h    = float(pts[:, 1].max() - pts[:, 1].min())
+        area = w * h
+        print(f"  BOX BEFORE FILTER: width={w:.1f} height={h:.1f} area={area:.1f}")
+        keep = (w >= min_width) and (h >= min_height) and (area >= min_area)
+        print(f"  box[{i}]: x=[{pts[:,0].min():.0f},{pts[:,0].max():.0f}] "
+              f"y=[{pts[:,1].min():.0f},{pts[:,1].max():.0f}] "
+              f"w={w:.1f} h={h:.1f} area={area:.1f} "
+              f"({'KEEP' if keep else 'DROP'})")
+        if keep:
             kept.append(box)
     return kept
+
+
+# ==============================================================
+# Debug Visualisation
+# ==============================================================
+
+def _save_debug_image(
+    image: np.ndarray,
+    boxes,
+    path: str,
+    color=(0, 255, 0),
+    thickness: int = 2,
+) -> None:
+    """
+    Draw *boxes* on a copy of *image* and save to *path*.
+
+    *boxes* may be:
+    - a list of 4-point np.ndarray / lists  (polygon format)
+    - a list of dicts with a ``'bbox'`` key  ([x1,y1,x2,y2] format)
+    """
+    dir_part = os.path.dirname(path)
+    if dir_part:
+        os.makedirs(dir_part, exist_ok=True)
+
+    vis = image.copy()
+    for box in boxes:
+        if isinstance(box, dict):
+            x1, y1, x2, y2 = [int(c) for c in box["bbox"]]
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, thickness)
+        else:
+            pts = np.asarray(box, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(vis, [pts], True, color, thickness)
+    cv2.imwrite(path, vis)
+    print(f"[debug] saved {path} ({len(boxes)} boxes)")
 
 
 # ==============================================================
@@ -274,19 +488,37 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
     print(f"[detect_layout] image={image.shape}, resized={resized.shape}, "
           f"scale={scale:.3f}, model={model_name}, device={device}")
 
-    pipeline = PPStructureV3(
-        layout_detection_model_name=model_name,
-        device=device,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_table_recognition=False,
-        use_formula_recognition=False,
-        use_chart_recognition=False,
-        use_seal_recognition=False,
-        use_region_detection=False,
-    )
+    _ensure_paddle()  # raises RuntimeError if paddle/CUDA not available
+    pipeline = None
+    try:
+        _free_memory()  # clear any lingering allocations before loading model
+        pipeline = _PPStructureV3(
+            layout_detection_model_name=model_name,
+            device=device,
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_table_recognition=False,
+            use_formula_recognition=False,
+            use_chart_recognition=False,
+            use_seal_recognition=False,
+            use_region_detection=False,
+        )
 
-    results = pipeline.predict(input=resized)
+        results = pipeline.predict(input=resized)
+    except (MemoryError, RuntimeError) as exc:
+        # RuntimeError is raised by PaddlePaddle on GPU OOM
+        _free_memory()
+        if pipeline is not None:
+            try:
+                del pipeline
+            except Exception:
+                pass
+        raise RuntimeError(
+            f"Out-of-memory during layout detection ({device.upper()}). "
+            "Ensure at least 8 GB GPU VRAM is available for GPU mode, "
+            "or at least 8 GB free RAM for CPU mode. "
+            f"Original error: {exc}"
+        ) from exc
 
     layout_boxes = []
     for res in results:
@@ -313,7 +545,7 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
 
     # Cleanup — free GPU memory
     del pipeline, results
-    gc.collect()
+    _free_memory()
 
     return layout_boxes
 
@@ -326,21 +558,34 @@ def detect_text_lines(image: np.ndarray, layout: list,
                       score_thresh: float = SCORE_THRESH,
                       upscale_min_h: int = UPSCALE_MIN_H,
                       nms_iou_thresh: float = NMS_IOU_THRESH,
-                      gap_multiplier: float = GAP_MULTIPLIER) -> list:
+                      gap_multiplier: float = GAP_MULTIPLIER,
+                      debug_dir: str = "") -> list:
     """Detect line-level bounding boxes for all text regions."""
 
     print(f"[detect_text_lines] image={image.shape}, "
           f"{len(layout)} layout regions, det_model={det_model_name}")
 
-    ocr = PaddleOCR(
-        text_detection_model_name=det_model_name,
-        text_recognition_model_name="PP-OCRv5_server_rec",
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        device=device,
-        lang="en",
-    )
+    _ensure_paddle()  # raises RuntimeError if paddle/CUDA not available
+    ocr = None
+    try:
+        _free_memory()  # clear any lingering allocations before loading model
+        ocr = _PaddleOCR(
+            text_detection_model_name=det_model_name,
+            text_recognition_model_name="PP-OCRv5_server_rec",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            device=device,
+            lang="en",
+        )
+    except (MemoryError, RuntimeError) as exc:
+        _free_memory()
+        raise RuntimeError(
+            f"Out-of-memory while loading text-detection model ({device.upper()}). "
+            "Ensure at least 8 GB GPU VRAM is available for GPU mode, "
+            "or at least 8 GB free RAM for CPU mode. "
+            f"Original error: {exc}"
+        ) from exc
 
     img_h, img_w = image.shape[:2]
     all_raw, all_scores = [], []
@@ -376,10 +621,26 @@ def detect_text_lines(image: np.ndarray, layout: list,
         ox = x1e - region_padding
         oy = y1e - region_padding
 
-        crop_results = ocr.predict(padded)
+        try:
+            crop_results = ocr.predict(padded)
+        except (MemoryError, RuntimeError) as exc:
+            del padded
+            if ocr is not None:
+                try:
+                    del ocr
+                except Exception:
+                    pass
+            _free_memory()
+            raise RuntimeError(
+                f"Out-of-memory during text-line detection on region {region['bbox']} "
+                f"({device.upper()}). "
+                "Ensure at least 8 GB GPU VRAM (GPU mode) or 8 GB free RAM (CPU mode). "
+                f"Original error: {exc}"
+            ) from exc
         del padded
 
         n = 0
+        _logged_raw = 0
         for res in crop_results:
             polys  = res.get("dt_polys",  [])
             scores = res.get("dt_scores", [1.0] * len(polys))
@@ -387,9 +648,18 @@ def detect_text_lines(image: np.ndarray, layout: list,
                 if score < score_thresh:
                     continue
                 arr = np.array(poly, dtype=np.float32)
+                # Log first 2 raw polys per region (before transform)
+                if _logged_raw < 2:
+                    print(f"    [raw poly {_logged_raw}] shape={arr.shape} "
+                          f"raw_coords={arr.tolist()} sc={sc} ox={ox} oy={oy}")
                 arr /= sc
                 arr[:, 0] += ox
                 arr[:, 1] += oy
+                if _logged_raw < 2:
+                    print(f"    [raw poly {_logged_raw}] after_transform: "
+                          f"x=[{arr[:,0].min():.0f},{arr[:,0].max():.0f}] "
+                          f"y=[{arr[:,1].min():.0f},{arr[:,1].max():.0f}]")
+                    _logged_raw += 1
                 if arr[:, 0].max() < x1e or arr[:, 0].min() > x2e:
                     continue
                 if arr[:, 1].max() < y1e or arr[:, 1].min() > y2e:
@@ -404,10 +674,37 @@ def detect_text_lines(image: np.ndarray, layout: list,
 
     print(f"[detect_text_lines] total raw boxes: {len(all_raw)}")
 
+    if debug_dir:
+        _save_debug_image(
+            image, all_raw,
+            os.path.join(debug_dir, "page_raw_text_boxes.png"),
+            color=(0, 0, 255),
+        )
+
     # NMS dedup
     keep_idx = _nms(all_raw, all_scores, iou_thresh=nms_iou_thresh)
     all_raw = [all_raw[i] for i in keep_idx]
     print(f"[detect_text_lines] after NMS: {len(all_raw)}")
+
+    if debug_dir:
+        _save_debug_image(
+            image, all_raw,
+            os.path.join(debug_dir, "page_after_nms.png"),
+            color=(0, 165, 255),
+        )
+
+    # Log coordinate sanity-check before merging
+    if all_raw:
+        print(f"[detect_text_lines] coordinate sanity: "
+              f"img_w={img_w} img_h={img_h}")
+        for idx, b in enumerate(all_raw[:5]):
+            pts = np.asarray(b, dtype=np.float32)
+            bw = float(pts[:, 0].max() - pts[:, 0].min())
+            bh = float(pts[:, 1].max() - pts[:, 1].min())
+            print(f"  [pre-merge box {idx}] "
+                  f"x=[{pts[:,0].min():.0f},{pts[:,0].max():.0f}] "
+                  f"y=[{pts[:,1].min():.0f},{pts[:,1].max():.0f}] "
+                  f"w={bw:.1f} h={bh:.1f} area={bw*bh:.1f}")
 
     # Merge to lines
     merged = _merge_into_lines(all_raw, img_w, img_h, gap_multiplier=gap_multiplier)
@@ -418,9 +715,16 @@ def detect_text_lines(image: np.ndarray, layout: list,
     print(f"[detect_text_lines] after page filter: {len(merged)} "
           f"(removed {before - len(merged)})")
 
+    if debug_dir:
+        _save_debug_image(
+            image, merged,
+            os.path.join(debug_dir, "page_final_lines.png"),
+            color=(0, 255, 0),
+        )
+
     # Cleanup
     del ocr
-    gc.collect()
+    _free_memory()
 
     return merged
 
@@ -440,16 +744,60 @@ def run_layout_aware_detection(
     upscale_min_h: int = UPSCALE_MIN_H,
     nms_iou_thresh: float = NMS_IOU_THRESH,
     gap_multiplier: float = GAP_MULTIPLIER,
-) -> List[List[List[float]]]:
+    debug_dir: str = "",
+) -> Tuple[List[List[List[float]]], List[str]]:
     """
     Full pipeline: layout detection -> text line detection.
-    Returns list of 4-point polygons in page coordinates.
+
+    Returns
+    -------
+    lines            : list of 4-point polygons in page coordinates
+    resource_warnings: list of human-readable resource warning strings
+                       (may be empty); these should be surfaced to the user
+                       so they understand GPU/RAM requirements.
     """
+    # ---- Ensure paddle is importable; auto-downgrade GPU→CPU if needed ----
+    cuda_compiled = False
+    try:
+        _ensure_paddle()
+        cuda_compiled = bool(_paddle.device.is_compiled_with_cuda())
+    except RuntimeError as _load_err:
+        if use_gpu:
+            use_gpu = False
+            print(f"[run_layout_aware_detection] Paddle failed to load — "
+                  f"forcing CPU (will likely be slow): {_load_err}")
+
+    if use_gpu and not cuda_compiled:
+        use_gpu = False
+        print(
+            "[run_layout_aware_detection] WARNING: use_gpu=True requested but "
+            "PaddlePaddle is not compiled with CUDA. "
+            "Falling back to CPU automatically."
+        )
+
     device = "gpu" if use_gpu else "cpu"
+
+    # ---- Resource check ------------------------------------------------
+    res_info = check_system_resources(use_gpu)
+    resource_warnings: List[str] = res_info["warnings"]
+
+    # Inject the CUDA-not-compiled warning at the top of the list so it is
+    # the first thing the caller/user sees.
+    if not cuda_compiled and device == "cpu":
+        cuda_warning = (
+            "GPU was requested but PaddlePaddle in this environment is CPU-only "
+            "(not compiled with CUDA). Running on CPU instead. "
+            "To enable GPU acceleration, CUDA 12.6 driver on the host is required "
+            "and the container must be started with --gpus all. Install GPU paddle: "
+            "pip install paddlepaddle-gpu==3.3.0 "
+            "-i https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+        )
+        resource_warnings.insert(0, cuda_warning)
+
     print(f"\n{'='*60}")
     print(f"[run_layout_aware_detection] START")
     print(f"  image shape : {image.shape}")
-    print(f"  device      : {device}")
+    print(f"  device      : {device}  (cuda_compiled={cuda_compiled})")
     print(f"  layout_model: {layout_model_name}")
     print(f"  det_model   : {det_model_name}")
     print(f"  region_padding : {region_padding}")
@@ -458,6 +806,12 @@ def run_layout_aware_detection(
     print(f"  upscale_min_h  : {upscale_min_h}")
     print(f"  nms_iou_thresh : {nms_iou_thresh}")
     print(f"  gap_multiplier : {gap_multiplier}")
+    print(f"  gpu_available  : {res_info['gpu_available']}  "
+          f"vram={res_info['gpu_vram_gb']:.1f} GB  free={res_info['gpu_vram_free_gb']:.1f} GB")
+    print(f"  ram_available  : {res_info['available_ram_gb']:.1f} GB  "
+          f"total={res_info['total_ram_gb']:.1f} GB")
+    for w in resource_warnings:
+        print(f"  [RESOURCE WARNING] {w}")
     print(f"{'='*60}")
 
     t0 = time.time()
@@ -468,7 +822,14 @@ def run_layout_aware_detection(
 
     if not layout:
         print("[run_layout_aware_detection] No layout regions found!")
-        return []
+        return [], resource_warnings
+
+    if debug_dir:
+        _save_debug_image(
+            image, layout,
+            os.path.join(debug_dir, "page_layout_boxes.png"),
+            color=(255, 0, 0),
+        )
 
     text_regions = [r for r in layout if r["label"] in TEXT_LABELS]
     print(f"\n[run_layout_aware_detection] "
@@ -476,7 +837,7 @@ def run_layout_aware_detection(
 
     if not text_regions:
         print("[run_layout_aware_detection] No TEXT regions in layout!")
-        return []
+        return [], resource_warnings
 
     # Stage 2
     merged = detect_text_lines(image, layout, device=device,
@@ -486,7 +847,8 @@ def run_layout_aware_detection(
                                score_thresh=score_thresh,
                                upscale_min_h=upscale_min_h,
                                nms_iou_thresh=nms_iou_thresh,
-                               gap_multiplier=gap_multiplier)
+                               gap_multiplier=gap_multiplier,
+                               debug_dir=debug_dir)
 
     lines = [box.tolist() for box in merged]
 
@@ -494,8 +856,7 @@ def run_layout_aware_detection(
     print(f"\n[run_layout_aware_detection] DONE — "
           f"{len(lines)} lines in {elapsed:.1f}s")
 
-    gc.collect()
-    if paddle.device.is_compiled_with_cuda():
-        paddle.device.cuda.empty_cache()
+    _free_memory()
 
-    return lines
+    return lines, resource_warnings
+

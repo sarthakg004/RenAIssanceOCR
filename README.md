@@ -604,14 +604,31 @@ TextRecognitionPage (state: apiKey, model, transcripts, zoom, autoProcess…)
 
 ## 🚀 Getting Started
 
-### Prerequisites
+There are **two ways** to run the application: using **Docker** (recommended — zero dependency conflicts) or setting up the local development environment manually.
+
+---
+
+### 🐳 Option A — Docker (Recommended)
+
+Docker is the easiest and most reliable way to run RenAIssance because:
+- All Python/Node dependencies are pre-installed inside the images.
+- The backend CUDA runtime environment is correctly configured.
+- A named volume preserves downloaded PaddleOCR model weights across restarts.
+
+See the full **[Docker Guide](#-docker-guide)** below for step-by-step instructions, GPU vs CPU setup, and troubleshooting.
+
+---
+
+### 💻 Option B — Local Development
+
+#### Prerequisites
 
 - **Node.js** ≥ 18.x
 - **Python** ≥ 3.10
 - **npm** or **yarn**
 - A **Gemini API Key** ([Google AI Studio](https://aistudio.google.com/app/apikey)) or **OpenAI API Key** ([OpenAI Platform](https://platform.openai.com/api-keys))
 
-### Installation
+#### Installation
 
 ```bash
 # 1. Clone the repository
@@ -629,7 +646,7 @@ cd ../frontend
 npm install
 ```
 
-### Running the Application
+#### Running the Application
 
 **Terminal 1 — Backend (port 8000):**
 
@@ -791,45 +808,364 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ---
 
-## 🚀 Run with Docker (prebuilt images)
+## 🐳 Docker Guide
 
-You can run the full stack instantly using prebuilt images from Docker Hub. No need to build anything locally!
+This section covers everything you need to run RenAIssance with Docker, including GPU acceleration, CPU-only fallback, building images locally, and host system compatibility requirements.
 
-### 1. Pull the images
+---
+
+### Host System Requirements
+
+| Requirement | Minimum | Notes |
+|-------------|---------|-------|
+| **Docker Engine** | ≥ 24.0 | `docker --version` to verify |
+| **Docker Compose** | v2 plugin (`docker compose`) | Comes bundled with Docker Desktop and Docker Engine ≥ 23 |
+| **OS** | Linux (Ubuntu 22.04+) / macOS / Windows (WSL2) | See per-platform notes below |
+| **RAM** | ≥ 8 GB | PaddleOCR models require ~4 GB on first load |
+| **Disk space** | ≥ 15 GB free | Images + model weights (~6 GB) |
+
+#### GPU Support (Optional but Recommended)
+
+The backend image is built on **`nvidia/cuda:12.6.3-runtime-ubuntu24.04`** and supports GPU inference via PaddleOCR.
+
+| GPU Requirement | Minimum |
+|----------------|---------|
+| **NVIDIA GPU** | Any CUDA-capable card |
+| **NVIDIA driver** | ≥ 560 (supports CUDA 12.6) — run `nvidia-smi` |
+| **NVIDIA Container Toolkit** | Must be installed on the *host* |
+
+Install the NVIDIA Container Toolkit on Ubuntu:
 
 ```bash
-# Backend (FastAPI)
-docker pull saarthakg004/renaissance-backend:v1.0.0
+# Add NVIDIA apt repository
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
-# Frontend (React + Nginx)
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+
+# Restart the Docker daemon to pick up the new runtime
+sudo systemctl restart docker
+```
+
+Verify NVIDIA runtime is available:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+```
+
+> **macOS / Windows:** NVIDIA GPUs are not supported inside Docker on these platforms. Use the CPU-only configuration described below.
+
+---
+
+### Quick Start — docker compose (Recommended)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/sarthakg004/RenAIssanceOCR.git
+cd RenAIssance
+
+# 2. Build and start all services
+docker compose up --build
+```
+
+The first run will:
+1. Build the backend image (compiles Python deps, downloads PaddleOCR model weights into the image — ~10–15 min on first build).
+2. Build the frontend image (Node build → Nginx).
+3. Start both containers.
+
+Once running:
+- **Frontend:** http://localhost:5173
+- **Backend API:** http://localhost:8000
+- **Health check:** http://localhost:8000/api/health
+
+> **Tip:** Add `-d` to run in detached (background) mode:
+> ```bash
+> docker compose up --build -d
+> ```
+
+---
+
+### CPU-Only Mode (No NVIDIA GPU)
+
+The default `docker-compose.yml` requests GPU access via the `deploy.resources.reservations.devices` block. On machines without an NVIDIA GPU or NVIDIA Container Toolkit, this will cause an error.
+
+**Solution — override the compose file for CPU-only:**
+
+Create a file named `docker-compose.cpu.yml` in the project root:
+
+```yaml
+services:
+  backend:
+    deploy:
+      resources:
+        reservations:
+          devices: []   # Remove GPU reservation
+```
+
+Then start with the override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build
+```
+
+Or, to permanently make the `docker-compose.yml` CPU-compatible, remove (or comment out) the `deploy` block:
+
+```yaml
+# Comment out or delete this block if you have no NVIDIA GPU:
+# deploy:
+#   resources:
+#     reservations:
+#       devices:
+#         - driver: nvidia
+#           count: all
+#           capabilities: [gpu]
+```
+
+> **Note:** OCR processing will still work in CPU mode — it will be slower for layout detection.
+
+---
+
+### Using Prebuilt Images from Docker Hub
+
+If you don't want to build locally, use the prebuilt images:
+
+```bash
+docker pull saarthakg004/renaissance-backend:v1.0.0
 docker pull saarthakg004/renaissance-frontend:v1.0.0
 ```
 
-### 2. Run the backend
+Create a `docker-compose.prebuilt.yml` using the remote images:
+
+```yaml
+version: "3.8"
+
+services:
+  backend:
+    image: saarthakg004/renaissance-backend:v1.0.0
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PADDLE_PDX_MODEL_CACHE_HOME=/paddle_models
+    volumes:
+      - paddle_models:/paddle_models
+    # Remove the deploy block below if you have no NVIDIA GPU:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    image: saarthakg004/renaissance-frontend:v1.0.0
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  paddle_models:
+```
+
+Then run:
 
 ```bash
-docker run -d --name renaissance-backend -p 8000:8000 saarthakg004/renaissance-backend:v1.0.0
+docker compose -f docker-compose.prebuilt.yml up -d
 ```
-- The backend will be available at http://localhost:8000
-- Pass your `.env` file for API keys if needed (see below)
 
-### 3. Run the frontend
+---
+
+### Running Containers Individually (without Compose)
+
+#### Backend
 
 ```bash
-docker run -d --name renaissance-frontend -p 5173:80 saarthakg004/renaissance-frontend:v1.0.0
-```
-- The frontend will be available at http://localhost:5173
-- It will connect to the backend at `localhost:8000` by default
+# With GPU:
+docker run -d \
+  --name renaissance-backend \
+  --gpus all \
+  -p 8000:8000 \
+  -v paddle_models:/paddle_models \
+  -e PYTHONUNBUFFERED=1 \
+  -e PADDLE_PDX_MODEL_CACHE_HOME=/paddle_models \
+  saarthakg004/renaissance-backend:v1.0.0
 
-### 4. Stopping the containers
+# Without GPU (CPU only):
+docker run -d \
+  --name renaissance-backend \
+  -p 8000:8000 \
+  -v paddle_models:/paddle_models \
+  -e PYTHONUNBUFFERED=1 \
+  -e PADDLE_PDX_MODEL_CACHE_HOME=/paddle_models \
+  saarthakg004/renaissance-backend:v1.0.0
+```
+
+#### Frontend
 
 ```bash
-docker stop renaissance-backend renaissance-frontend
-docker rm renaissance-backend renaissance-frontend
+docker run -d \
+  --name renaissance-frontend \
+  -p 5173:80 \
+  saarthakg004/renaissance-frontend:v1.0.0
 ```
 
-### 5. Environment Variables
-- Place your API keys in a `.env` file in the project root (see `.env.example` if available)
-- Pass it to the backend container with `--env-file .env`
+---
+
+### Passing API Keys via Environment Variables
+
+API keys are normally entered in the browser UI. However, you can also pre-populate them via environment variables or an `.env` file:
+
+1. Create a `.env` file in the project root:
+
+```env
+# .env
+GEMINI_API_KEY=your_gemini_key_here
+OPENAI_API_KEY=your_openai_key_here
+```
+
+2. Pass it to the backend container:
+
+```bash
+# With docker compose — uncomment in docker-compose.yml:
+# env_file:
+#   - .env
+
+# Or with docker run:
+docker run -d --name renaissance-backend \
+  --gpus all \
+  -p 8000:8000 \
+  -v paddle_models:/paddle_models \
+  --env-file .env \
+  saarthakg004/renaissance-backend:v1.0.0
+```
+
+---
+
+### PaddleOCR Model Volume
+
+PaddleOCR downloads model weights (~3–4 GB) on first use. These are stored in the `paddle_models` named Docker volume so they persist across container restarts and image updates.
+
+```bash
+# Inspect the volume
+docker volume inspect paddle_models
+
+# Remove the volume (deletes downloaded models — they will re-download on next start)
+docker volume rm paddle_models
+```
+
+---
+
+### Building Images Locally
+
+To rebuild both images from scratch (e.g., after modifying the source code):
+
+```bash
+# Build and start
+docker compose up --build
+
+# Build only (without starting)
+docker compose build
+
+# Build a single service
+docker compose build backend
+docker compose build frontend
+```
+
+> **First backend build warning:** The build downloads PaddleOCR model weights at image build time — this can take 10–20 minutes depending on your network connection. Subsequent builds reuse Docker layer cache and are much faster.
+
+---
+
+### Managing Containers
+
+```bash
+# View running containers and their status
+docker compose ps
+
+# View backend logs (live follow)
+docker compose logs -f backend
+
+# View frontend logs
+docker compose logs -f frontend
+
+# Stop all containers (keep images and volumes)
+docker compose stop
+
+# Stop and remove containers (keep images and volumes)
+docker compose down
+
+# Stop and remove containers AND volumes (deletes downloaded models)
+docker compose down -v
+
+# Restart a single service
+docker compose restart backend
+```
+
+---
+
+### Health Checks
+
+Both services include Docker health checks:
+
+- **Backend:** polls `http://localhost:8000/api/health` every 30 s; 3 retries before marking unhealthy.
+- **Frontend:** Nginx serves a static SPA; Docker considers it healthy once Nginx is up.
+
+Check health status:
+
+```bash
+docker compose ps
+# Look for "healthy" / "starting" / "unhealthy" in the STATUS column
+
+# Or with docker inspect:
+docker inspect renaissance-backend --format='{{.State.Health.Status}}'
+```
+
+---
+
+### Platform-Specific Notes
+
+#### Linux (Ubuntu 20.04+)
+Fully supported. GPU acceleration works natively when the NVIDIA Container Toolkit is installed.
+
+#### macOS (Apple Silicon / Intel)
+- GPU pass-through is **not supported** — use CPU-only mode.
+- Docker Desktop is required; Docker Engine does not run natively on macOS.
+- Performance may be slower than Linux due to the virtualization layer.
+- The backend CUDA image will fall back to CPU automatically.
+
+#### Windows (WSL2 + Docker Desktop)
+- GPU pass-through **is** supported with WSL2 backend + NVIDIA GPU + latest Docker Desktop.
+- Install the NVIDIA GPU driver for WSL: [NVIDIA WSL Driver Guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
+- Ensure Docker Desktop is set to use the **WSL2 backend** (Settings → General → Use WSL2 based engine).
+- Run all commands from inside a WSL2 terminal, not PowerShell.
+
+---
+
+### Docker Troubleshooting
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `no matching manifest for linux/arm64` | Wrong image arch | Use `--platform linux/amd64` flag with docker run/pull |
+| `failed to create shim task: ... no such file` on GPU | NVIDIA runtime not configured | Install NVIDIA Container Toolkit and restart Docker |
+| `Error response from daemon: could not select device driver "nvidia"` | Toolkit installed but daemon not restarted | `sudo systemctl restart docker` |
+| Backend container exits immediately | Python crash at startup | Check logs: `docker compose logs backend` |
+| `paddle_models` volume fills up | Multiple model downloads | `docker volume rm paddle_models` and restart to re-download cleanly |
+| Frontend shows "Cannot connect to backend" | Backend not ready yet | Wait for backend healthcheck to pass; the frontend depends on it |
+| Port 8000 already in use | Another service using the port | Change mapping to `-p 8001:8000` and update the frontend's API base URL |
+| Build fails on `pip install paddlepaddle-gpu` | PaddlePaddle index unreachable | Check your network/proxy; the build fetches from `paddlepaddle.org.cn` |
+| Slow first startup (1–3 min) | Models loading from disk | Normal — PaddleOCR loads model weights into memory on first request |
 
 ---
