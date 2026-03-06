@@ -22,7 +22,9 @@ env:
   FRONTEND_IMAGE: saarthakg004/renaissance-frontend
 
 jobs:
-  # ── Compute next v3.x version and push the git tag ─────────
+  # ── Compute next v3.x version (no tag push yet) ────────────
+  # The git tag is only created AFTER both images build successfully.
+  # This prevents a failed build from consuming a version number.
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -55,21 +57,6 @@ jobs:
 
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
           echo "Computed next version: $NEXT"
-
-      - name: Create and push version tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Use the token-authenticated remote so the push succeeds
-          git remote set-url origin \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}"
-
-          git tag "${{ steps.semver.outputs.version }}"
-          git push origin "${{ steps.semver.outputs.version }}"
-          echo "Pushed tag ${{ steps.semver.outputs.version }}"
 
   # ── Build backend ───────────────────────────────────────────
   build-backend:
@@ -133,12 +120,43 @@ jobs:
           cache-to:   type=gha,scope=frontend,mode=max
           provenance: false
 
-  # ── Summary ─────────────────────────────────────────────────
+  # ── Tag + Summary (only runs when BOTH builds succeed) ──────
+  # Creating the git tag here ensures a failed build never wastes
+  # a version number — re-running the workflow will recompute the
+  # same version and retry the tag push.
   summary:
     runs-on: ubuntu-latest
     needs: [version, build-backend, build-frontend]
     if: always()
     steps:
+      - name: Checkout (for tag push)
+        if: needs.build-backend.result == 'success' && needs.build-frontend.result == 'success'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push version tag
+        if: needs.build-backend.result == 'success' && needs.build-frontend.result == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch --tags --force
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Authenticate remote with token
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}"
+
+          # Only push the tag if it does not already exist
+          if git rev-parse "${{ needs.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "Tag ${{ needs.version.outputs.version }} already exists — skipping."
+          else
+            git tag "${{ needs.version.outputs.version }}"
+            git push origin "${{ needs.version.outputs.version }}"
+            echo "Pushed tag ${{ needs.version.outputs.version }}"
+          fi
+
       - name: Build summary
         run: |
           echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
