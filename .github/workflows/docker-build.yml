@@ -1,8 +1,8 @@
 # ============================================================
 # RenAIssance — Docker Build & Push
 # Builds backend + frontend in parallel
-# Tags: image:vX.Y and image:latest
-# Versioning: auto-increments minor (v1.0 → v1.1 → v1.2)
+# Versioning: v3.0 → v3.1 → v3.2 → ... (ignores v1, v2)
+# Tags pushed: image:v3.x  and  image:latest
 # ============================================================
 
 name: Docker Build & Push
@@ -13,49 +13,63 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write   # required to create and push git tags
+
 env:
   DOCKERHUB_USERNAME: saarthakg004
-  BACKEND_IMAGE: saarthakg004/renaissance-backend
+  BACKEND_IMAGE:  saarthakg004/renaissance-backend
   FRONTEND_IMAGE: saarthakg004/renaissance-frontend
 
 jobs:
-  # ── Compute next semantic version ──────────────────────────
+  # ── Compute next v3.x version and push the git tag ─────────
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.semver.outputs.version }}
     steps:
-      - name: Checkout
+      - name: Checkout (full history + all tags)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Compute next version
+      - name: Compute next v3.x version
         id: semver
         run: |
-          # Fetch all tags
-          git fetch --tags
+          git fetch --tags --force
 
-          # Find latest vMAJOR.MINOR tag
-          LATEST=$(git tag --list 'v*.*' | sort -V | tail -n1)
+          # Only consider tags that match exactly v3.<number> — ignore v1, v2, etc.
+          LATEST=$(git tag --list 'v3.*' \
+            | grep -E '^v3\.[0-9]+$' \
+            | sort -V \
+            | tail -n1)
 
           if [ -z "$LATEST" ]; then
-            NEXT="v1.0"
+            # No v3.x tag exists yet → start the series
+            NEXT="v3.0"
           else
-            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
-            MINOR=$(echo "$LATEST" | cut -d. -f2)
-            NEXT="v${MAJOR}.$((MINOR + 1))"
+            # Extract the minor number with awk and increment
+            MINOR=$(echo "$LATEST" | awk -F'.' '{print $2}')
+            NEXT="v3.$((MINOR + 1))"
           fi
 
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "Next version: $NEXT"
+          echo "Computed next version: $NEXT"
 
-      - name: Create and push tag
+      - name: Create and push version tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Use the token-authenticated remote so the push succeeds
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}"
+
           git tag "${{ steps.semver.outputs.version }}"
           git push origin "${{ steps.semver.outputs.version }}"
+          echo "Pushed tag ${{ steps.semver.outputs.version }}"
 
   # ── Build backend ───────────────────────────────────────────
   build-backend:
