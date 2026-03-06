@@ -6,14 +6,16 @@
 # ---- Stage 1: Build ----
 FROM node:20-alpine AS builder
 
-ENV NODE_ENV=production
+# Do NOT set NODE_ENV=production here — vite and other build tools
+# live in devDependencies and must be installed for the build to succeed.
+# NODE_ENV=production is set only in the runtime stage.
 
 WORKDIR /app
 
 # Copy manifests first — layer cache for npm install
 COPY package.json package-lock.json ./
 
-# Clean install (uses lockfile exactly)
+# Install ALL dependencies (including devDeps) needed for the build
 RUN npm ci --prefer-offline --no-audit --no-fund
 
 # Copy source and build
@@ -24,6 +26,8 @@ RUN npm run build
 
 # ---- Stage 2: Serve ----
 FROM nginx:1.27-alpine AS runtime
+
+ENV NODE_ENV=production
 
 # Remove default config
 RUN rm /etc/nginx/conf.d/default.conf
