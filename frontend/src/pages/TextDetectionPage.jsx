@@ -1,111 +1,28 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   ArrowLeft,
   ArrowRight,
-  Cloud,
-  Cpu,
-  Zap,
-  Shield,
-  Server,
-  Wifi,
-  WifiOff,
-  Check,
   ScanText,
+  Server,
+  WifiOff,
+  Shield,
+  Zap,
   Brain,
-  Sparkles,
-  ExternalLink,
 } from 'lucide-react';
 
-const METHOD_OPTIONS = [
-  {
-    id: 'api',
-    name: 'Gemini API',
-    subtitle: 'Google AI Vision',
-    icon: Sparkles,
-    description:
-      'Use Google\'s Gemini multimodal AI for text extraction. Excellent accuracy on both printed and handwritten documents with advanced language understanding.',
-    features: [
-      { icon: Zap, text: 'Fast processing', highlight: true },
-      { icon: Shield, text: 'Excellent accuracy on all text types' },
-      { icon: Wifi, text: 'Requires internet connection' },
-      { icon: Brain, text: 'Advanced AI understanding' },
-    ],
-    pros: ['State-of-the-art accuracy', 'Handles complex layouts', 'Multi-language support'],
-    cons: ['Requires API key', 'Rate limited (free tier)', 'Data sent to Google'],
-    recommended: false,
-    badge: 'Cloud',
-    badgeColor: 'bg-gradient-to-r from-blue-600 to-indigo-600',
-  },
-  {
-    id: 'layout-aware',
-    name: 'Layout-Aware Detection',
-    subtitle: 'PaddleOCR Local Pipeline',
-    icon: Server,
-    description:
-      'Two-stage local pipeline: layout detection (PP-DocLayout) finds document regions, then PaddleOCR detects individual text lines within each region. Runs entirely on your machine.',
-    features: [
-      { icon: WifiOff, text: 'Works offline — fully local', highlight: true },
-      { icon: Shield, text: 'Data never leaves your machine' },
-      { icon: Zap, text: 'GPU-accelerated inference' },
-      { icon: Brain, text: 'Layout-aware text line detection' },
-    ],
-    pros: ['No API costs', 'Privacy preserved', 'Accurate layout understanding', 'Works offline'],
-    cons: ['Requires GPU (recommended)', 'Initial model download', 'Heavier resource usage'],
-    recommended: true,
-    badge: 'Recommended',
-    badgeColor: 'bg-gradient-to-r from-teal-600 to-emerald-600',
-  },
-  {
-    id: 'local',
-    name: 'Local Model',
-    subtitle: 'CRAFT + Custom Recognition',
-    icon: Cpu,
-    description:
-      'Use our trained CRAFT model for text detection combined with a custom recognition model. Optimized for historical and handwritten documents.',
-    features: [
-      { icon: WifiOff, text: 'Works offline', highlight: true },
-      { icon: Shield, text: 'Data stays on your machine' },
-      { icon: Brain, text: 'Custom trained for historical docs' },
-      { icon: Server, text: 'Requires GPU (recommended)' },
-    ],
-    pros: ['No usage costs', 'Privacy preserved', 'Tuned for your documents'],
-    cons: ['Requires local GPU', 'Initial model download', 'May be slower'],
-    recommended: false,
-    badge: 'Coming Soon',
-    badgeColor: 'bg-gray-500',
-    disabled: true,
-  },
-];
-
 export default function TextDetectionPage({
-  pages,
-  selectedPages,
   processedImages,
   onBack,
   onNext,
 }) {
-  const [selectedMethod, setSelectedMethod] = useState('layout-aware');
-
   const processedCount = Object.keys(processedImages || {}).length;
-
-  const handleMethodSelect = (methodId) => {
-    const method = METHOD_OPTIONS.find(m => m.id === methodId);
-    if (!method?.disabled) {
-      setSelectedMethod(methodId);
-    }
-  };
-
-  const canProceed = selectedMethod === 'api' || selectedMethod === 'layout-aware';
+  const canProceed = processedCount > 0;
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-4">
-          <button
-            onClick={onBack}
-            className="btn-ghost"
-          >
+          <button onClick={onBack} className="btn-ghost">
             <ArrowLeft className="w-5 h-5" />
             Back
           </button>
@@ -126,272 +43,66 @@ export default function TextDetectionPage({
         </div>
 
         <button
-          onClick={() => onNext(selectedMethod, selectedMethod === 'api' ? 'gemini' : 'paddleocr')}
+          onClick={() => onNext('layout-aware', 'paddleocr')}
           disabled={!canProceed}
           className={`btn-primary ${canProceed
-              ? ''
-              : 'opacity-50 cursor-not-allowed hover:translate-y-0'
+            ? ''
+            : 'opacity-50 cursor-not-allowed hover:translate-y-0'
             }`}
         >
-          {selectedMethod === 'layout-aware' ? 'Continue to Detection' : 'Continue to OCR'}
+          Detect Text
           <ArrowRight className="w-5 h-5" />
         </button>
       </div>
 
-      {/* Main content */}
       <div className="flex-1 overflow-y-auto">
-        {/* Intro */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-full text-sm font-semibold mb-4 shadow-sm border border-blue-100">
             <ScanText className="w-4 h-4" />
-            Choose your text detection method
+            Layout-aware detection
           </div>
           <p className="text-gray-500 max-w-2xl mx-auto text-lg">
-            Select how you want to detect and recognize text in your documents.
-            We recommend using the Gemini API for best results.
+            Detection runs with the local layout-aware pipeline for clean line-level bounding boxes.
           </p>
         </div>
 
-        {/* Method cards */}
-        <div className="grid md:grid-cols-2 gap-6 max-w-5xl mx-auto mb-8">
-          {METHOD_OPTIONS.map((method) => {
-            const Icon = method.icon;
-            const isSelected = selectedMethod === method.id;
-            const isDisabled = method.disabled;
-
-            return (
-              <div
-                key={method.id}
-                onClick={() => handleMethodSelect(method.id)}
-                className={`relative p-6 rounded-2xl border-2 transition-all duration-300 ${isDisabled
-                    ? 'border-gray-200 bg-gray-50/80 cursor-not-allowed opacity-70'
-                    : isSelected
-                      ? 'border-blue-500 bg-gradient-to-br from-blue-50/80 to-indigo-50/80 shadow-xl shadow-blue-500/10 -translate-y-1'
-                      : 'border-gray-200 bg-white/80 backdrop-blur-sm hover:border-blue-300 hover:shadow-lg hover:-translate-y-0.5 cursor-pointer'
-                  }`}
-              >
-                {/* Badge */}
-                <div
-                  className={`absolute -top-3 left-6 px-4 py-1.5 text-xs font-bold text-white rounded-full shadow-md ${method.badgeColor}`}
-                >
-                  {method.badge}
-                </div>
-
-                {/* Selection indicator */}
-                <div
-                  className={`absolute top-4 right-4 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${isDisabled
-                      ? 'border-gray-300 bg-gray-100'
-                      : isSelected
-                        ? 'border-blue-600 bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md shadow-blue-500/30'
-                        : 'border-gray-300 bg-white'
-                    }`}
-                >
-                  {isSelected && !isDisabled && <Check className="w-4 h-4 text-white" strokeWidth={3} />}
-                </div>
-
-                {/* Header */}
-                <div className="flex items-start gap-4 mb-4 mt-2">
-                  <div
-                    className={`p-3 rounded-xl transition-all duration-300 ${isDisabled
-                        ? 'bg-gray-200 text-gray-400'
-                        : isSelected
-                          ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-500/30'
-                          : 'bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-600'
-                      }`}
-                  >
-                    <Icon className="w-7 h-7" />
-                  </div>
-                  <div>
-                    <h3 className={`text-xl font-bold ${isDisabled ? 'text-gray-500' : 'text-gray-800'}`}>
-                      {method.name}
-                    </h3>
-                    <p className={`text-sm ${isDisabled ? 'text-gray-400' : 'text-gray-500'}`}>
-                      {method.subtitle}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Description */}
-                <p className={`mb-4 ${isDisabled ? 'text-gray-400' : 'text-gray-600'}`}>
-                  {method.description}
+        <div className="max-w-3xl mx-auto animate-slide-up">
+          <div className="bg-gradient-to-br from-teal-50/80 via-white to-emerald-50/80 backdrop-blur-sm rounded-2xl border border-teal-200/50 p-6 shadow-lg">
+            <div className="flex items-start gap-4">
+              <div className="p-3 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-xl text-white shadow-lg shadow-teal-500/30">
+                <Server className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-gray-800 mb-2">
+                  Layout-Aware Detection Pipeline
+                </h3>
+                <p className="text-gray-600 mb-4">
+                  Two-stage local pipeline: layout model finds regions and text detector extracts line boxes inside each region.
                 </p>
 
-                {/* Features */}
-                <div className="space-y-2 mb-4">
-                  {method.features.map((feature, idx) => {
-                    const FeatureIcon = feature.icon;
-                    return (
-                      <div
-                        key={idx}
-                        className={`flex items-center gap-2 text-sm ${isDisabled
-                            ? 'text-gray-400'
-                            : feature.highlight
-                              ? 'text-blue-600 font-semibold'
-                              : 'text-gray-600'
-                          }`}
-                      >
-                        <FeatureIcon className="w-4 h-4" />
-                        {feature.text}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Pros & Cons */}
-                <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-100">
-                  <div>
-                    <p className={`text-xs font-bold mb-2 ${isDisabled ? 'text-gray-400' : 'text-green-600'}`}>
-                      PROS
-                    </p>
-                    <ul className="space-y-1">
-                      {method.pros.map((pro, idx) => (
-                        <li key={idx} className={`text-xs flex items-start gap-1.5 ${isDisabled ? 'text-gray-400' : 'text-gray-600'}`}>
-                          <span className={`mt-0.5 ${isDisabled ? 'text-gray-400' : 'text-green-500'}`}>✓</span>
-                          {pro}
-                        </li>
-                      ))}
-                    </ul>
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm">
+                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2"><WifiOff className="w-4 h-4 text-teal-600" /> Fully local</p>
+                    <p className="text-xs text-gray-500 mt-1">No API keys and no cloud dependency.</p>
                   </div>
-                  <div>
-                    <p className={`text-xs font-bold mb-2 ${isDisabled ? 'text-gray-400' : 'text-amber-600'}`}>
-                      CONS
-                    </p>
-                    <ul className="space-y-1">
-                      {method.cons.map((con, idx) => (
-                        <li key={idx} className={`text-xs flex items-start gap-1.5 ${isDisabled ? 'text-gray-400' : 'text-gray-600'}`}>
-                          <span className={`mt-0.5 ${isDisabled ? 'text-gray-400' : 'text-amber-500'}`}>•</span>
-                          {con}
-                        </li>
-                      ))}
-                    </ul>
+                  <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm">
+                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2"><Shield className="w-4 h-4 text-teal-600" /> Private processing</p>
+                    <p className="text-xs text-gray-500 mt-1">Images stay on your machine during detection.</p>
+                  </div>
+                  <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm">
+                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2"><Zap className="w-4 h-4 text-teal-600" /> Fast inference</p>
+                    <p className="text-xs text-gray-500 mt-1">GPU acceleration is used when available.</p>
+                  </div>
+                  <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm">
+                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2"><Brain className="w-4 h-4 text-teal-600" /> Layout aware</p>
+                    <p className="text-xs text-gray-500 mt-1">Handles complex page structure reliably.</p>
                   </div>
                 </div>
               </div>
-            );
-          })}
+            </div>
+          </div>
         </div>
 
-        {/* Layout-Aware info card */}
-        {selectedMethod === 'layout-aware' && (
-          <div className="max-w-3xl mx-auto animate-slide-up">
-            <div className="bg-gradient-to-br from-teal-50/80 via-white to-emerald-50/80 backdrop-blur-sm rounded-2xl border border-teal-200/50 p-6 shadow-lg">
-              <div className="flex items-start gap-4">
-                <div className="p-3 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-xl text-white shadow-lg shadow-teal-500/30">
-                  <Server className="w-6 h-6" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-800 mb-2">
-                    Layout-Aware Detection Pipeline
-                  </h3>
-                  <p className="text-gray-600 mb-4">
-                    A two-stage local pipeline powered by PaddleOCR. First, a layout model identifies document
-                    regions (text blocks, titles, headers). Then a text detection model finds individual text
-                    lines within each region.
-                  </p>
-
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="text-2xl mb-2">🖥️</div>
-                      <h4 className="font-bold text-gray-800 mb-1">Fully Local</h4>
-                      <p className="text-xs text-gray-500">
-                        Runs on your machine — no internet or API key needed
-                      </p>
-                    </div>
-                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="text-2xl mb-2">⚡</div>
-                      <h4 className="font-bold text-gray-800 mb-1">GPU Recommended</h4>
-                      <p className="text-xs text-gray-500">
-                        Best performance with NVIDIA GPU; CPU fallback available
-                      </p>
-                    </div>
-                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-teal-100 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="text-2xl mb-2">🎯</div>
-                      <h4 className="font-bold text-gray-800 mb-1">Layout Aware</h4>
-                      <p className="text-xs text-gray-500">
-                        Understands document structure for precise line detection
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Gemini info card */}
-        {selectedMethod === 'api' && (
-          <div className="max-w-3xl mx-auto animate-slide-up">
-            <div className="bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/80 backdrop-blur-sm rounded-2xl border border-blue-200/50 p-6 shadow-lg">
-              <div className="flex items-start gap-4">
-                <div className="p-3 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl text-white shadow-lg shadow-blue-500/30">
-                  <Sparkles className="w-6 h-6" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-800 mb-2">
-                    About Gemini API
-                  </h3>
-                  <p className="text-gray-600 mb-4">
-                    Google's Gemini is a powerful multimodal AI that excels at understanding
-                    and extracting text from images, including handwritten documents and
-                    complex layouts.
-                  </p>
-
-                  <div className="grid md:grid-cols-3 gap-4">
-                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="text-2xl mb-2">🔑</div>
-                      <h4 className="font-bold text-gray-800 mb-1">API Key Required</h4>
-                      <p className="text-xs text-gray-500">
-                        Get your free API key from Google AI Studio
-                      </p>
-                    </div>
-                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="text-2xl mb-2">⚡</div>
-                      <h4 className="font-bold text-gray-800 mb-1">Rate Limited</h4>
-                      <p className="text-xs text-gray-500">
-                        Free tier: ~15 requests/minute with cooldown
-                      </p>
-                    </div>
-                    <div className="bg-white/80 backdrop-blur-sm rounded-xl p-4 border border-blue-100 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="text-2xl mb-2">🎯</div>
-                      <h4 className="font-bold text-gray-800 mb-1">High Accuracy</h4>
-                      <p className="text-xs text-gray-500">
-                        State-of-the-art on document understanding
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Local model info (shown when local method selected) */}
-        {selectedMethod === 'local' && (
-          <div className="max-w-3xl mx-auto animate-slide-up">
-            <div className="bg-gradient-to-br from-gray-50 to-gray-100/80 backdrop-blur-sm rounded-2xl border border-gray-300 p-6 shadow-lg">
-              <div className="flex items-start gap-4">
-                <div className="p-3 bg-gray-400 rounded-xl text-white">
-                  <Cpu className="w-6 h-6" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-600 mb-2">
-                    Local Model - Coming Soon
-                  </h3>
-                  <p className="text-gray-500 mb-4">
-                    We're working on integrating CRAFT text detection with a custom
-                    recognition model optimized for historical documents. This will
-                    allow offline processing with no API costs.
-                  </p>
-                  <p className="text-sm text-gray-400">
-                    Stay tuned for updates!
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Bottom spacer */}
         <div className="h-8" />
       </div>
     </div>

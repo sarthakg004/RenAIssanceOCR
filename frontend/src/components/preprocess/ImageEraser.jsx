@@ -12,6 +12,11 @@ import {
     ChevronRight,
 } from 'lucide-react';
 
+/** Shorten split-page labels so they fit in small buttons: "2_left" → "2L" */
+function shortPageLabel(pageNumber) {
+    return String(pageNumber).replace('_left', 'L').replace('_right', 'R');
+}
+
 /**
  * ImageEraser - Full-screen modal eraser with multi-page support
  *
@@ -464,17 +469,19 @@ export default function ImageEraser({
                         <ChevronLeft size={18} />
                     </button>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 overflow-x-auto max-w-xs">
                         {pages.map((page, idx) => (
                             <button
                                 key={page.pageNumber}
                                 onClick={() => goToPage(idx)}
-                                className={`relative w-7 h-7 rounded-lg text-xs font-medium transition-all ${idx === currentIdx
+                                className={`relative shrink-0 min-w-[2rem] px-1.5 h-7 rounded-lg text-xs font-medium transition-all ${
+                                    idx === currentIdx
                                         ? 'bg-blue-600 text-white shadow-sm'
                                         : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
-                                    }`}
+                                }`}
+                                title={`Page ${page.pageNumber}`}
                             >
-                                {page.pageNumber}
+                                {shortPageLabel(page.pageNumber)}
                                 {modifiedPages.has(page.pageNumber) && (
                                     <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-400 rounded-full border-2 border-gray-800" />
                                 )}
@@ -493,7 +500,7 @@ export default function ImageEraser({
 
                 {/* Right: page info */}
                 <span className="text-xs text-gray-500">
-                    Page {currentPage?.pageNumber} • {currentIdx + 1}/{pages.length}
+                    Page {shortPageLabel(currentPage?.pageNumber)} • {currentIdx + 1}/{pages.length}
                 </span>
             </div>
         </div>

@@ -8,7 +8,7 @@ import { GripVertical } from 'lucide-react';
 export default function ResizablePanels({
   leftPanel,
   centerPanel,
-  rightPanel,
+  rightPanel = null,
   defaultLeftWidth = 260,
   defaultRightWidth = 340,
   minLeftWidth = 200,
@@ -17,6 +17,7 @@ export default function ResizablePanels({
   maxRightWidth = 500,
   minCenterWidth = 300,
 }) {
+  const hasRight = Boolean(rightPanel);
   const containerRef = useRef(null);
   const [leftWidth, setLeftWidth] = useState(defaultLeftWidth);
   const [rightWidth, setRightWidth] = useState(defaultRightWidth);
@@ -43,7 +44,8 @@ export default function ResizablePanels({
   // Calculate center width
   const gapWidth = 8; // gap-2 = 0.5rem = 8px
   const resizerWidth = 12; // width of resizer handles
-  const centerWidth = containerWidth - leftWidth - rightWidth - (gapWidth * 2) - (resizerWidth * 2);
+  const rightTotalWidth = hasRight ? rightWidth + gapWidth + resizerWidth : 0;
+  const centerWidth = containerWidth - leftWidth - rightTotalWidth - gapWidth - resizerWidth;
 
   // Left resizer drag handlers
   const handleLeftMouseDown = useCallback((e) => {
@@ -150,38 +152,42 @@ export default function ResizablePanels({
         {centerPanel}
       </div>
 
-      {/* Right Resizer */}
-      <div
-        onMouseDown={handleRightMouseDown}
-        onDoubleClick={handleRightDoubleClick}
-        className={`
-          flex-shrink-0 w-3 flex items-center justify-center cursor-col-resize
-          group hover:bg-blue-100 transition-colors rounded mx-0.5
-          ${isDraggingRight ? 'bg-blue-200' : 'bg-transparent'}
-        `}
-        title="Drag to resize, double-click to reset"
-      >
-        <div className={`
-          w-1 h-12 rounded-full transition-all
-          ${isDraggingRight ? 'bg-blue-500' : 'bg-gray-300 group-hover:bg-blue-400'}
-        `}>
-          <GripVertical 
-            size={12} 
-            className={`
-              mt-4 -ml-0.5 transition-colors
-              ${isDraggingRight ? 'text-blue-600' : 'text-gray-400 group-hover:text-blue-500'}
-            `} 
-          />
+      {/* Right Resizer — only when right panel exists */}
+      {hasRight && (
+        <div
+          onMouseDown={handleRightMouseDown}
+          onDoubleClick={handleRightDoubleClick}
+          className={`
+            flex-shrink-0 w-3 flex items-center justify-center cursor-col-resize
+            group hover:bg-blue-100 transition-colors rounded mx-0.5
+            ${isDraggingRight ? 'bg-blue-200' : 'bg-transparent'}
+          `}
+          title="Drag to resize, double-click to reset"
+        >
+          <div className={`
+            w-1 h-12 rounded-full transition-all
+            ${isDraggingRight ? 'bg-blue-500' : 'bg-gray-300 group-hover:bg-blue-400'}
+          `}>
+            <GripVertical 
+              size={12} 
+              className={`
+                mt-4 -ml-0.5 transition-colors
+                ${isDraggingRight ? 'text-blue-600' : 'text-gray-400 group-hover:text-blue-500'}
+              `} 
+            />
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Right Panel */}
-      <div 
-        className="flex-shrink-0 min-h-0 overflow-hidden"
-        style={{ width: rightWidth }}
-      >
-        {rightPanel}
-      </div>
+      {/* Right Panel — only when present */}
+      {hasRight && (
+        <div 
+          className="flex-shrink-0 min-h-0 overflow-hidden"
+          style={{ width: rightWidth }}
+        >
+          {rightPanel}
+        </div>
+      )}
 
       {/* Drag overlay to prevent selection */}
       {(isDraggingLeft || isDraggingRight) && (
