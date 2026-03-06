@@ -9,6 +9,22 @@ services:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      # PaddleX / PaddleOCR model cache — persisted in the named volume below
+      # so models are downloaded only once across container restarts.
+      - PADDLE_PDX_MODEL_CACHE_HOME=/paddle_models
+    volumes:
+      # Persist PaddleOCR / PaddleX model downloads across container restarts.
+      # First run downloads the required models; every subsequent run reuses them.
+      - paddle_models:/paddle_models
+    # GPU access — requires NVIDIA Container Toolkit on the host
+    # and CUDA 13.0 drivers.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     # Uncomment below if you have a .env file with API keys
     # env_file:
     #   - .env
@@ -29,3 +45,8 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  # Named volume for PaddleOCR / PaddleX model weights.
+  # Models are downloaded on the first run and reused on every subsequent run.
+  paddle_models:

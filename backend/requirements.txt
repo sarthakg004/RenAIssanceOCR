@@ -1,6 +1,6 @@
 # ============================================================
 # RenAIssance OCR Backend — Python dependencies
-# Pinned for reproducibility with Python 3.11
+# Pinned for Python 3.11 + Ubuntu 24.04 + CUDA 12.6
 # ============================================================
 
 # --- Web framework ---
@@ -9,7 +9,7 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.12
 pydantic==2.10.4
 
-# --- HTTP client (ChatGPT, DeepSeek, Qwen providers) ---
+# --- HTTP client ---
 httpx==0.28.1
 
 # --- AI / OCR providers ---
@@ -23,16 +23,19 @@ reportlab==4.2.5
 # --- Image processing ---
 Pillow==11.1.0
 opencv-python-headless==4.10.0.84
-numpy==1.26.4
+# numpy 1.24.4: required exactly by paddlex 3.0.0 (Python < 3.12).
+# Also satisfies paddlepaddle-gpu>=1.21 and opencv-python-headless>=1.23.5.
+numpy==1.24.4
 
 # --- Utilities ---
 python-dotenv==1.0.1
+psutil==6.1.0
 
-# --- PDF parsing (export service) ---
+# --- PDF parsing ---
 PyMuPDF==1.25.1
 
-# --- Layout-aware detection (optional heavy deps) ---
-# Comment these out if not using layout detection feature
-# to significantly reduce image size (~3 GB saved)
-paddlepaddle==3.0.0
-paddleocr==2.10.0
+# --- Layout-aware GPU detection ---
+# Requires: NVIDIA driver >= 560 (CUDA 12.6) on host, --gpus all on docker run
+# Installed from the PaddlePaddle cu126 index via Dockerfile --extra-index-url.
+paddlepaddle-gpu==3.3.0
+paddleocr==3.0.0
