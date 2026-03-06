@@ -1,28 +1,38 @@
-# Web framework
-fastapi==0.134.0
-uvicorn==0.41.0
-python-multipart==0.0.6
-pydantic==2.12.5
+# ============================================================
+# RenAIssance OCR Backend — Python dependencies
+# Pinned for reproducibility with Python 3.11
+# ============================================================
 
-# HTTP client (ChatGPT, DeepSeek, Qwen providers)
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+pydantic==2.10.4
+
+# --- HTTP client (ChatGPT, DeepSeek, Qwen providers) ---
 httpx==0.28.1
 
-# AI / OCR provider
+# --- AI / OCR providers ---
 google-genai==1.0.0
-protobuf==7.34.0
+protobuf==5.29.2
 
-# Document export
-python-docx==1.1.0
-reportlab==4.1.0
+# --- Document export ---
+python-docx==1.1.2
+reportlab==4.2.5
 
-# Image processing
-Pillow>=10.2.0
-opencv-python-headless==4.13.0.92
-numpy==2.4.2
+# --- Image processing ---
+Pillow==11.1.0
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
 
-# Utilities
-python-dotenv>=1.0.0
+# --- Utilities ---
+python-dotenv==1.0.1
 
-# Layout-aware PaddleOCR detection
-paddlepaddle
-paddleocr>=3.0.0
+# --- PDF parsing (export service) ---
+PyMuPDF==1.25.1
+
+# --- Layout-aware detection (optional heavy deps) ---
+# Comment these out if not using layout detection feature
+# to significantly reduce image size (~3 GB saved)
+paddlepaddle==3.0.0
+paddleocr==2.10.0

@@ -9,10 +9,20 @@ import {
     Layers,
     Image as ImageIcon,
     FileText,
-    Lock,
     Info,
     ChevronDown,
     PenLine,
+    ArrowUp,
+    ArrowDown,
+    Split,
+    Link2,
+    Sparkles,
+    Cpu,
+    Download,
+    FileText as FileTextIcon,
+    FileJson,
+    FileType,
+    RefreshCw,
 } from 'lucide-react';
 import ResizablePanels from './ocr/ResizablePanels';
 import BBoxEditor from './BBoxEditor';
@@ -61,6 +71,44 @@ const PARAM_DEFS = [
     { key: 'gap_multiplier', label: 'Gap Multiplier', unit: '×', min: 0.5, max: 5.0, step: 0.5, type: 'float', tooltip: 'Gap threshold multiplier for line merging' },
 ];
 
+function shortPageLabel(pageKey) {
+    return String(pageKey).replace('_left', 'L').replace('_right', 'R');
+}
+
+function getPageBaseNumber(pageKey) {
+    const value = String(pageKey).toLowerCase();
+    const match = value.match(/(\d+)/);
+    return match ? Number(match[1]) : null;
+}
+
+function getPageSide(pageKey) {
+    const value = String(pageKey).toLowerCase();
+    if (value.includes('left') || value.endsWith('l')) return 'left';
+    if (value.includes('right') || value.endsWith('r')) return 'right';
+    return null;
+}
+
+function resolveTranscriptKey(transcript, pageKey) {
+    if (!transcript) return null;
+    const keys = Object.keys(transcript);
+    const asString = String(pageKey);
+    if (asString in transcript) return asString;
+
+    const targetNum = getPageBaseNumber(asString);
+    const targetSide = getPageSide(asString);
+
+    if (targetNum == null) return null;
+
+    const exactSideKey = keys.find((k) => {
+        const keyNum = getPageBaseNumber(k);
+        const keySide = getPageSide(k);
+        return keyNum === targetNum && keySide === targetSide;
+    });
+    if (exactSideKey) return exactSideKey;
+
+    return keys.find((k) => getPageBaseNumber(k) === targetNum) || null;
+}
+
 
 // ─── Thumbnail Item ─────────────────────────────────────────
 function ThumbnailItem({ image, index, isActive, isDetected, onClick, pageLabel, processedSrc }) {
@@ -107,7 +155,15 @@ export default function LayoutAwareDetectionPage({
     pages,
     selectedPages,
     processedImages,
+    transcript = {},
     onBack,
+    datasetMode = false,
+    onDatasetNext,
+    onNext = null,
+    // Persistence props — restored when navigating back from export
+    initialDetectedPages = {},
+    initialAlignmentByPage = {},
+    onStateChange,
 }) {
     // ── Model selection ────────────────────────────────────
     const [selectedDetModel, setSelectedDetModel] = useState('PP-OCRv5_server_det');
@@ -120,7 +176,7 @@ export default function LayoutAwareDetectionPage({
     // ── UI state ───────────────────────────────────────────
     const [viewingPageIndex, setViewingPageIndex] = useState(0);
     const [loading, setLoading] = useState(false);
-    const [detectedPages, setDetectedPages] = useState({});
+    const [detectedPages, setDetectedPages] = useState(() => initialDetectedPages);
     const [error, setError] = useState(null);
     const [warning, setWarning] = useState(null);
     const [processingTime, setProcessingTime] = useState(null);
@@ -135,8 +191,24 @@ export default function LayoutAwareDetectionPage({
     // ── Process All Pages state ────────────────────────────
     const [processingAll, setProcessingAll] = useState(false);
     const [processAllProgress, setProcessAllProgress] = useState(null);
+    const cancelProcessingRef = useRef(false);
+
+    // ── Alignment state (dataset mode) ─────────────────────
+    const [alignmentByPage, setAlignmentByPage] = useState(() => initialAlignmentByPage);
+
+    // ── Hover state for bidirectional highlight ─────────────
+    const [hoveredBoxIndex, setHoveredBoxIndex] = useState(null);
+    const [hoveredLineIndex, setHoveredLineIndex] = useState(null);
 
     const imgRef = useRef(null);
+    // Tracks which pages have already been seeded so the seed effect never
+    // overwrites alignment that already exists (avoids stale-closure re-fire).
+    const seededPages = useRef(new Set());
+
+    // ── Persist detection + alignment state to parent whenever it changes ──
+    useEffect(() => {
+        if (onStateChange) onStateChange({ pages: detectedPages, alignment: alignmentByPage });
+    }, [detectedPages, alignmentByPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Derived data ───────────────────────────────────────
     const availablePages = useMemo(() => selectedPages || [], [selectedPages]);
@@ -146,15 +218,148 @@ export default function LayoutAwareDetectionPage({
     const currentLines = detectedPages[currentPageNum] || [];
     const isCurrentDetected = currentPageNum in detectedPages;
     const detectedCount = Object.keys(detectedPages).length;
+    const transcriptKeyForCurrentPage = resolveTranscriptKey(transcript, currentPageNum);
+
+    const currentAlignmentRows = alignmentByPage[currentPageNum] || [];
+
+    // Sort detected boxes top → bottom using the midpoint-Y of the top edge.
+    // For rotated boxes the top edge midpoint is more stable than the single min-Y corner.
+    // Algorithm: sort the 4 polygon vertices by Y, take the two with smallest Y,
+    // their average Y is the sort key.
+    const sortedBoxIndices = useMemo(() => {
+        return currentLines
+            .map((poly, idx) => {
+                const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                const topMidY = (byY[0][1] + byY[1][1]) / 2;
+                return { idx, topMidY };
+            })
+            .sort((a, b) => a.topMidY - b.topMidY)
+            .map(item => item.idx);
+    }, [currentLines]);
 
     const getImageUrl = useCallback((pageNum) => {
         if (processedImages?.[pageNum]) return processedImages[pageNum];
-        const idx = pageNum - 1;
-        if (pages?.[idx]) return pages[idx].thumbnail;
-        return null;
+        // Use find-by-pageNumber so split pages ("1_left", "1_right") resolve correctly
+        const page = pages?.find(p => p.pageNumber === pageNum);
+        return page?.thumbnail || null;
     }, [pages, processedImages]);
 
     const currentImageUrl = getImageUrl(currentPageNum);
+
+    useEffect(() => {
+        if (!isCurrentDetected) return;
+        // Only seed once per page — skip if already seeded or already has rows
+        // (handleBBoxSave manages alignment after that point).
+        if (seededPages.current.has(currentPageNum)) return;
+
+        const transcriptKey = resolveTranscriptKey(transcript, currentPageNum);
+        const transcriptLines = transcriptKey ? (transcript[transcriptKey] || []) : [];
+
+        // One row per transcript line; boxIndex = original polygon index of the
+        // corresponding sorted box (null if there are fewer boxes than lines).
+        const initialRows = transcriptLines.map((line, index) => ({
+            id: `${currentPageNum}-${index}-${Date.now()}`,
+            text: line,
+            boxIndex: index < sortedBoxIndices.length ? sortedBoxIndices[index] : null,
+        }));
+
+        seededPages.current.add(currentPageNum);
+        setAlignmentByPage((prev) => ({
+            ...prev,
+            [currentPageNum]: initialRows,
+        }));
+    }, [isCurrentDetected, currentPageNum, sortedBoxIndices, transcript]);
+
+    // Reset hover state when navigating pages
+    useEffect(() => {
+        setHoveredBoxIndex(null);
+        setHoveredLineIndex(null);
+    }, [viewingPageIndex]);
+
+    const updateAlignmentRows = useCallback((pageNum, updater) => {
+        setAlignmentByPage((prev) => {
+            const oldRows = prev[pageNum] || [];
+            const nextRows = updater(oldRows);
+            return { ...prev, [pageNum]: nextRows };
+        });
+    }, []);
+
+    const updateLineText = useCallback((lineIndex, value) => {
+        updateAlignmentRows(currentPageNum, (rows) => rows.map((row, idx) => (
+            idx === lineIndex ? { ...row, text: value } : row
+        )));
+    }, [currentPageNum, updateAlignmentRows]);
+
+    // Re-pair existing text lines with the current sorted box order.
+    // This is useful after manually editing / moving boxes in the BBox editor
+    // or after any structural change to the detected boxes.
+    const realignCurrentPage = useCallback(() => {
+        setAlignmentByPage(prev => {
+            const existingRows = prev[currentPageNum] || [];
+            const texts = existingRows.map(r => r.text);
+            const newRows = texts.map((text, i) => ({
+                id: `${currentPageNum}-${i}-${Date.now()}`,
+                text,
+                boxIndex: i < sortedBoxIndices.length ? sortedBoxIndices[i] : null,
+            }));
+            return { ...prev, [currentPageNum]: newRows };
+        });
+    }, [currentPageNum, sortedBoxIndices]);
+
+    const assignBoxToLine = useCallback((lineIndex, boxIndexValue) => {
+        const parsed = boxIndexValue === '' ? null : Number(boxIndexValue);
+        updateAlignmentRows(currentPageNum, (rows) => rows.map((row, idx) => (
+            idx === lineIndex ? { ...row, boxIndex: Number.isNaN(parsed) ? null : parsed } : row
+        )));
+    }, [currentPageNum, updateAlignmentRows]);
+
+    const moveLine = useCallback((lineIndex, direction) => {
+        updateAlignmentRows(currentPageNum, (rows) => {
+            const targetIndex = lineIndex + direction;
+            if (targetIndex < 0 || targetIndex >= rows.length) return rows;
+            const next = [...rows];
+            const temp = next[lineIndex];
+            next[lineIndex] = next[targetIndex];
+            next[targetIndex] = temp;
+            return next;
+        });
+    }, [currentPageNum, updateAlignmentRows]);
+
+    const mergeLineWithNext = useCallback((lineIndex) => {
+        updateAlignmentRows(currentPageNum, (rows) => {
+            if (lineIndex < 0 || lineIndex >= rows.length - 1) return rows;
+            const current = rows[lineIndex];
+            const next = rows[lineIndex + 1];
+            const merged = {
+                ...current,
+                text: `${current.text} ${next.text}`.trim(),
+                boxIndex: current.boxIndex ?? next.boxIndex ?? null,
+            };
+            return [...rows.slice(0, lineIndex), merged, ...rows.slice(lineIndex + 2)];
+        });
+    }, [currentPageNum, updateAlignmentRows]);
+
+    const splitLine = useCallback((lineIndex) => {
+        updateAlignmentRows(currentPageNum, (rows) => {
+            if (lineIndex < 0 || lineIndex >= rows.length) return rows;
+            const row = rows[lineIndex];
+            const words = row.text.split(/\s+/).filter(Boolean);
+            if (words.length < 2) return rows;
+
+            const splitAt = Math.ceil(words.length / 2);
+            const first = words.slice(0, splitAt).join(' ');
+            const second = words.slice(splitAt).join(' ');
+
+            const firstRow = { ...row, text: first };
+            const secondRow = {
+                id: `${row.id}-split-${Date.now()}`,
+                text: second,
+                boxIndex: null,
+            };
+
+            return [...rows.slice(0, lineIndex), firstRow, secondRow, ...rows.slice(lineIndex + 1)];
+        });
+    }, [currentPageNum, updateAlignmentRows]);
 
     // ── Helper: update one tuning param ────────────────────
     const updateParam = useCallback((key, value) => {
@@ -195,15 +400,21 @@ export default function LayoutAwareDetectionPage({
                 // Draw original image
                 ctx.drawImage(img, 0, 0, w, h);
 
-                // Draw bounding boxes
-                ctx.strokeStyle = '#22c55e';
                 ctx.lineWidth = Math.max(2, Math.round(Math.max(w, h) / 500));
                 ctx.lineJoin = 'round';
-                ctx.fillStyle = 'rgba(34,197,94,0.08)';
 
                 let drawn = 0;
-                for (const poly of currentLines) {
+                for (let i = 0; i < currentLines.length; i++) {
+                    const poly = currentLines[i];
                     if (!poly || poly.length < 3) continue;
+
+                    const isHovered = hoveredBoxIndex === i;
+                    ctx.strokeStyle = isHovered ? '#f97316' : '#22c55e';
+                    ctx.fillStyle = isHovered ? 'rgba(249,115,22,0.25)' : 'rgba(34,197,94,0.08)';
+                    ctx.lineWidth = isHovered
+                        ? Math.max(3, Math.round(Math.max(w, h) / 300))
+                        : Math.max(2, Math.round(Math.max(w, h) / 500));
+
                     ctx.beginPath();
                     ctx.moveTo(poly[0][0], poly[0][1]);
                     for (let k = 1; k < poly.length; k++) {
@@ -230,12 +441,14 @@ export default function LayoutAwareDetectionPage({
         img.src = currentImageUrl;
 
         return () => { cancelled = true; };
-    }, [currentImageUrl, currentLines]);
+    }, [currentImageUrl, currentLines, hoveredBoxIndex]);
 
     // Reset image display state on page change only
     useEffect(() => {
         setImageLoaded(false);
         setCompositeUrl(null);
+        setHoveredBoxIndex(null);
+        setHoveredLineIndex(null);
     }, [viewingPageIndex]);
 
     const displayUrl = compositeUrl || currentImageUrl;
@@ -330,10 +543,12 @@ export default function LayoutAwareDetectionPage({
         const alreadyDetected = new Set(Object.keys(detectedPages).map(Number));
 
         try {
+            cancelProcessingRef.current = false;
             for (let i = 0; i < total; i++) {
+                if (cancelProcessingRef.current) break;
                 const pageNum = availablePages[i];
                 setProcessAllProgress({ current: i + 1, total });
-                setViewingPageIndex(i);
+                // Do NOT force viewingPageIndex — user can navigate freely while processing
 
                 // Skip already detected pages
                 if (alreadyDetected.has(pageNum)) continue;
@@ -379,7 +594,7 @@ export default function LayoutAwareDetectionPage({
     // LEFT SIDEBAR
     // ════════════════════════════════════════════════════════
     const leftSidebar = (
-        <>
+        <div className="h-full overflow-y-auto space-y-2 pr-0.5 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent">
             {/* Parameters Card */}
             <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm shrink-0">
                 <div className="px-3 py-2 bg-gradient-to-r from-teal-50/80 to-white border-b border-gray-100">
@@ -405,7 +620,7 @@ export default function LayoutAwareDetectionPage({
                             <select
                                 value={selectedLayoutModel}
                                 onChange={(e) => setSelectedLayoutModel(e.target.value)}
-                                disabled={isAnyLoading}
+                                disabled={loading}
                                 className="w-full appearance-none px-2.5 py-1.5 bg-gray-50 rounded-lg text-xs text-gray-700 font-medium border border-gray-200 focus:border-teal-400 focus:ring-1 focus:ring-teal-200 outline-none pr-7 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {LAYOUT_MODELS.map(m => (
@@ -423,7 +638,7 @@ export default function LayoutAwareDetectionPage({
                             <select
                                 value={selectedDetModel}
                                 onChange={(e) => setSelectedDetModel(e.target.value)}
-                                disabled={isAnyLoading}
+                                disabled={loading}
                                 className="w-full appearance-none px-2.5 py-1.5 bg-gray-50 rounded-lg text-xs text-gray-700 font-medium border border-gray-200 focus:border-teal-400 focus:ring-1 focus:ring-teal-200 outline-none pr-7 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {DETECTION_MODELS.map(m => (
@@ -467,7 +682,7 @@ export default function LayoutAwareDetectionPage({
                                         min={p.min}
                                         max={p.max}
                                         step={p.step}
-                                        disabled={isAnyLoading}
+                                        disabled={loading}
                                         className="flex-1 min-w-0 px-2 py-1 bg-white rounded border border-gray-200 text-xs text-gray-700 font-mono focus:border-teal-400 focus:ring-1 focus:ring-teal-200 outline-none disabled:opacity-50"
                                     />
                                     {p.unit && (
@@ -477,7 +692,7 @@ export default function LayoutAwareDetectionPage({
                             ))}
                             <button
                                 onClick={() => setTuningParams({ ...DEFAULT_PARAMS })}
-                                disabled={isAnyLoading}
+                                disabled={loading}
                                 className="text-[11px] text-teal-600 hover:text-teal-700 font-medium px-2 py-0.5 disabled:opacity-50"
                             >
                                 Reset to defaults
@@ -488,8 +703,8 @@ export default function LayoutAwareDetectionPage({
                     {/* Detect This Page Button */}
                     <button
                         onClick={handleDetect}
-                        disabled={isAnyLoading || !currentImageUrl}
-                        className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-white transition-all duration-200 ${isAnyLoading || !currentImageUrl
+                        disabled={loading || !currentImageUrl}
+                        className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-white transition-all duration-200 ${loading || !currentImageUrl
                             ? 'bg-gray-300 cursor-not-allowed'
                             : 'bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-600 hover:to-emerald-700 shadow-md hover:shadow-lg active:scale-[0.98]'
                             }`}
@@ -501,27 +716,38 @@ export default function LayoutAwareDetectionPage({
                         )}
                     </button>
 
-                    {/* Process All Pages Button */}
+                    {/* Process All Pages Button + Cancel */}
+                    <div className="flex gap-1">
                     <button
                         onClick={handleDetectAll}
-                        disabled={isAnyLoading || availablePages.length === 0}
-                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${isAnyLoading || availablePages.length === 0
+                        disabled={processingAll || loading || availablePages.length === 0}
+                        className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${processingAll || loading || availablePages.length === 0
                             ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
                             : 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 shadow-sm hover:shadow-md active:scale-[0.98]'
                             }`}
                     >
                         {processingAll ? (
-                            <><Loader2 size={14} className="animate-spin" /> Processing {processAllProgress?.current}/{processAllProgress?.total}…</>
+                            <><Loader2 size={14} className="animate-spin" /> {processAllProgress?.current}/{processAllProgress?.total}…</>
                         ) : (
-                            <><Layers size={14} /> Process All Pages ({totalPages})</>
+                            <><Layers size={14} /> All ({totalPages})</>
                         )}
                     </button>
+                    {processingAll && (
+                        <button
+                            onClick={() => { cancelProcessingRef.current = true; }}
+                            className="px-2.5 py-2 rounded-lg text-xs font-bold bg-red-100 text-red-600 hover:bg-red-200 border border-red-200 transition-colors"
+                            title="Cancel batch processing"
+                        >
+                            ✕
+                        </button>
+                    )}
+                    </div>
 
-                    {/* Edit All Boxes Button */}
+                    {/* Edit All Boxes Button — available even during batch */}
                     <button
                         onClick={() => setShowBBoxEditor(true)}
-                        disabled={isAnyLoading || detectedCount === 0}
-                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${isAnyLoading || detectedCount === 0
+                        disabled={loading || detectedCount === 0}
+                        className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${loading || detectedCount === 0
                             ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
                             : 'bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-sm hover:shadow-md active:scale-[0.98]'
                             }`}
@@ -530,7 +756,7 @@ export default function LayoutAwareDetectionPage({
                     </button>
 
                     {/* Result stats */}
-                    {processingTime !== null && !isAnyLoading && (
+                    {processingTime !== null && !loading && (
                         <div className="flex items-center justify-between text-xs px-1">
                             <span className="flex items-center gap-1 text-emerald-600 font-semibold">
                                 <CheckCircle2 size={13} /> {currentLines.length} lines
@@ -553,7 +779,7 @@ export default function LayoutAwareDetectionPage({
             </div>
 
             {/* Page Thumbnails */}
-            <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col flex-1 min-h-0">
+            <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden">
                 <div className="px-3 py-2 bg-gradient-to-r from-teal-50/80 to-white border-b border-gray-100 flex items-center justify-between shrink-0">
                     <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
                         <ImageIcon size={16} className="text-teal-600" />
@@ -563,18 +789,18 @@ export default function LayoutAwareDetectionPage({
                         {detectedCount}/{totalPages}
                     </span>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 min-h-0">
+                <div className="p-2">
                     <div className="grid grid-cols-2 gap-1.5">
                         {availablePages.map((pageNum, idx) => (
                             <div key={pageNum} className="relative">
                                 <ThumbnailItem
-                                    image={pages?.[pageNum - 1] || null}
+                                    image={pages?.find(p => p.pageNumber === pageNum) || null}
                                     processedSrc={processedImages?.[pageNum] || null}
                                     index={idx}
                                     isActive={idx === viewingPageIndex}
                                     isDetected={pageNum in detectedPages}
                                     onClick={() => goToPage(idx)}
-                                    pageLabel={pageNum}
+                                    pageLabel={shortPageLabel(pageNum)}
                                 />
                                 {/* Edited indicator badge */}
                                 {editedPages.has(pageNum) && (
@@ -587,7 +813,7 @@ export default function LayoutAwareDetectionPage({
                     </div>
                 </div>
             </div>
-        </>
+        </div>
     );
 
     // ── BBox editor: build pages array from all detected pages ─────────
@@ -606,13 +832,69 @@ export default function LayoutAwareDetectionPage({
     const handleBBoxSave = useCallback((results) => {
         // results: { [pageNumber]: Array<polygon> }
         setDetectedPages(prev => ({ ...prev, ...results }));
+
+        // Fully recompute alignment for every page whose polygon list changed.
+        // Algorithm:
+        //   1. Sort new polygons top→bottom by midpoint-Y of the two topmost vertices.
+        //   2. Collect the current text lines in their existing display order.
+        //      - If alignment already exists for the page, use those row texts.
+        //      - Otherwise fall back to the raw transcript lines.
+        //   3. Re-pair: text[i] ↔ sortedIdx[i].  Extra texts get boxIndex=null.
+        //      Extra boxes (more boxes than texts) get a blank row at the end.
+        // This preserves any manual text edits while fixing the sort order.
+        setAlignmentByPage(prevAlignment => {
+            const next = { ...prevAlignment };
+
+            Object.entries(results).forEach(([pageNumStr, newPolygons]) => {
+                const pageNum = Number(pageNumStr);
+
+                // Step 1 — re-sort polygon indices top→bottom
+                const sortedIdxs = newPolygons
+                    .map((poly, idx) => {
+                        const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                        const topMidY = (byY[0][1] + byY[1][1]) / 2;
+                        return { idx, topMidY };
+                    })
+                    .sort((a, b) => a.topMidY - b.topMidY)
+                    .map(item => item.idx);
+
+                // Step 2 — gather text lines (existing edits, else raw transcript)
+                const existingRows = prevAlignment[pageNum];
+                let texts;
+                if (existingRows && existingRows.length > 0) {
+                    texts = existingRows.map(r => r.text);
+                } else {
+                    const tk = resolveTranscriptKey(transcript, pageNum);
+                    texts = tk ? (transcript[tk] || []) : [];
+                }
+
+                // Step 3 — rebuild rows: one row per text line, re-paired with
+                // the new sort order.  Never create extra blank rows for extra
+                // boxes — the alignment panel is text-driven, not box-driven.
+                // If there are MORE boxes than texts, extra boxes are simply
+                // unassigned (no row).  If there are MORE texts than boxes,
+                // those extra texts keep boxIndex=null (shown as "unassigned").
+                const newRows = texts.map((text, i) => ({
+                    id: `${pageNum}-${i}-${Date.now()}`,
+                    text,
+                    boxIndex: i < sortedIdxs.length ? sortedIdxs[i] : null,
+                }));
+
+                next[pageNum] = newRows;
+                // Mark as seeded so the seed effect won't overwrite this on re-render.
+                seededPages.current.add(pageNum);
+            });
+
+            return next;
+        });
+
         setEditedPages(prev => {
             const next = new Set(prev);
             Object.keys(results).forEach(k => next.add(Number(k)));
             return next;
         });
         setShowBBoxEditor(false);
-    }, []);
+    }, [transcript]);
 
     // ════════════════════════════════════════════════════════
     // CENTER PANEL — Image Preview
@@ -630,7 +912,7 @@ export default function LayoutAwareDetectionPage({
                         <ChevronLeft size={18} />
                     </button>
                     <span className="font-semibold text-gray-800 text-sm min-w-[80px] text-center">
-                        {currentPageNum} / {totalPages}
+                        {shortPageLabel(currentPageNum)} / {totalPages}
                     </span>
                     <button
                         onClick={() => goToPage(viewingPageIndex + 1)}
@@ -646,10 +928,10 @@ export default function LayoutAwareDetectionPage({
                     {isAnyLoading && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-50 text-teal-600 text-xs font-medium rounded-full animate-pulse">
                             <Loader2 size={12} className="animate-spin" />
-                            {processingAll ? `${processAllProgress?.current}/${processAllProgress?.total}` : 'Detecting…'}
+                            {processingAll ? `batch: ${processAllProgress?.current}/${processAllProgress?.total}` : 'Detecting…'}
                         </span>
                     )}
-                    {isCurrentDetected && !isAnyLoading && (
+                    {isCurrentDetected && !loading && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-full">
                             <CheckCircle2 size={12} /> {currentLines.length} lines
                             {editedPages.has(currentPageNum) && (
@@ -674,6 +956,7 @@ export default function LayoutAwareDetectionPage({
                 {currentImageUrl && (
                     <div className="p-4 flex items-center justify-center min-h-full">
                         <img
+                            key={`${currentPageNum}-${displayUrl?.slice(-20)}`}
                             ref={imgRef}
                             src={displayUrl}
                             alt={`Page ${currentPageNum}`}
@@ -686,84 +969,304 @@ export default function LayoutAwareDetectionPage({
                 )}
             </div>
 
-            {/* Loading overlay */}
-            {isAnyLoading && (
+            {/* Loading overlay — only for single-page detection; batch shows a badge in the header */}
+            {loading && (
                 <div className="absolute inset-0 bg-teal-500/10 backdrop-blur-sm flex items-center justify-center z-20 pointer-events-none">
-                    <div className="bg-white rounded-xl shadow-lg px-5 py-3 text-center pointer-events-auto">
+                    <div className="bg-white rounded-xl shadow-lg px-5 py-3 text-center">
                         <Loader2 size={28} className="animate-spin text-teal-600 mx-auto mb-2" />
-                        <p className="text-sm font-medium text-gray-700">
-                            {processingAll
-                                ? `Processing page ${processAllProgress?.current} of ${processAllProgress?.total}…`
-                                : 'Detecting lines…'}
-                        </p>
+                        <p className="text-sm font-medium text-gray-700">Detecting lines…</p>
                     </div>
+                </div>
+            )}
+            {/* Non-blocking batch progress badge */}
+            {processingAll && processAllProgress && (
+                <div className="absolute top-2 right-2 z-20 flex items-center gap-2 bg-blue-600/90 text-white text-xs font-semibold px-3 py-1.5 rounded-full shadow-lg backdrop-blur-sm pointer-events-none">
+                    <Loader2 size={12} className="animate-spin" />
+                    Processing {processAllProgress.current}/{processAllProgress.total}…
                 </div>
             )}
         </div>
     );
 
+    const alignedTranscriptByPage = useMemo(() => {
+        const result = {};
+        Object.keys(alignmentByPage).forEach((pageNum) => {
+            const rows = alignmentByPage[pageNum] || [];
+            result[pageNum] = rows.map((row) => row.text).filter((txt) => txt && txt.trim().length > 0);
+        });
+        return result;
+    }, [alignmentByPage]);
+
     // ════════════════════════════════════════════════════════
-    // RIGHT PANEL — Transcript (Coming Soon)
+    // RIGHT PANEL — Step 4 Alignment
     // ════════════════════════════════════════════════════════
     const rightPanel = (
         <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
-            {/* Header */}
             <div className="px-3 py-2 bg-gradient-to-r from-teal-50/80 via-white to-emerald-50/50 border-b border-gray-100/80 flex items-center justify-between shrink-0">
                 <h3 className="font-bold text-gray-800 flex items-center gap-2 text-sm">
                     <div className="p-1 bg-gradient-to-br from-teal-500 to-emerald-600 rounded-lg text-white">
                         <FileText size={12} />
                     </div>
-                    <span>Transcript</span>
-                    {isCurrentDetected && (
-                        <span className="text-xs text-gray-400 font-normal">#{currentPageNum}</span>
-                    )}
+                    <span>Step 4 — Alignment</span>
                 </h3>
+                <span className="text-xs text-gray-500 font-medium">Page {shortPageLabel(currentPageNum)}</span>
             </div>
 
-            {/* OCR Model selector */}
-            <div className="px-3 py-3 border-b border-gray-100 shrink-0">
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">OCR Model</label>
-                <div className="relative">
-                    <select
-                        disabled
-                        className="w-full appearance-none px-2.5 py-1.5 bg-gray-50 rounded-lg text-xs text-gray-400 font-medium border border-gray-200 outline-none pr-7 cursor-not-allowed"
+            <div className="px-3 py-2 border-b border-gray-100 shrink-0 flex items-center justify-between text-xs text-gray-500">
+                <span>Detected: {isCurrentDetected ? `${currentLines.length} boxes` : 'Pending'}</span>
+                <span>Transcript: {transcriptKeyForCurrentPage ? `${(transcript[transcriptKeyForCurrentPage] || []).length} lines` : 'Not matched'}</span>
+            </div>
+
+            <div className="flex-1 overflow-y-auto min-h-0 p-2.5 space-y-1.5 bg-gradient-to-br from-gray-50/50 to-gray-100/20">
+                {!isCurrentDetected && (
+                    <div className="text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2">
+                        Detect this page first to align lines.
+                    </div>
+                )}
+
+                {isCurrentDetected && !transcriptKeyForCurrentPage && (
+                    <div className="text-xs text-amber-700 bg-amber-50 rounded-lg border border-amber-200 px-3 py-2">
+                        No transcript page matched for {shortPageLabel(currentPageNum)}.
+                    </div>
+                )}
+
+                {isCurrentDetected && currentAlignmentRows.map((row, lineIndex) => {
+                    const assignedBoxIdx = row.boxIndex;
+                    const isBoxHovered = assignedBoxIdx !== null && assignedBoxIdx !== undefined && hoveredBoxIndex === assignedBoxIdx;
+                    const isLineHovered = hoveredLineIndex === lineIndex;
+                    const isHighlighted = isBoxHovered || isLineHovered;
+                    const isUnassigned = assignedBoxIdx === null || assignedBoxIdx === undefined;
+
+                    return (
+                        <div
+                            key={row.id}
+                            className={`rounded-lg border p-2.5 space-y-1.5 shadow-sm transition-colors cursor-pointer ${
+                                isHighlighted
+                                    ? 'bg-orange-50 border-orange-300 shadow-orange-100'
+                                    : 'bg-white border-gray-200 hover:border-teal-300 hover:bg-teal-50/30'
+                            }`}
+                            onMouseEnter={() => {
+                                setHoveredLineIndex(lineIndex);
+                                if (assignedBoxIdx !== null && assignedBoxIdx !== undefined) {
+                                    setHoveredBoxIndex(assignedBoxIdx);
+                                }
+                            }}
+                            onMouseLeave={() => {
+                                setHoveredLineIndex(null);
+                                setHoveredBoxIndex(null);
+                            }}
+                        >
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5">
+                                    <span className={`text-[11px] font-semibold ${isHighlighted ? 'text-orange-600' : 'text-gray-500'}`}>
+                                        Line {lineIndex + 1}
+                                    </span>
+                                    {isUnassigned && (
+                                        <span className="text-[9px] px-1 py-0.5 bg-amber-100 text-amber-600 rounded font-semibold">
+                                            unassigned
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    <button
+                                        onClick={() => moveLine(lineIndex, -1)}
+                                        disabled={lineIndex === 0}
+                                        className="p-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                                        title="Move line up"
+                                    >
+                                        <ArrowUp size={12} />
+                                    </button>
+                                    <button
+                                        onClick={() => moveLine(lineIndex, 1)}
+                                        disabled={lineIndex >= currentAlignmentRows.length - 1}
+                                        className="p-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                                        title="Move line down"
+                                    >
+                                        <ArrowDown size={12} />
+                                    </button>
+                                    <button
+                                        onClick={() => mergeLineWithNext(lineIndex)}
+                                        disabled={lineIndex >= currentAlignmentRows.length - 1}
+                                        className="p-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-40"
+                                        title="Merge with next line"
+                                    >
+                                        <Link2 size={12} />
+                                    </button>
+                                    <button
+                                        onClick={() => splitLine(lineIndex)}
+                                        className="p-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50"
+                                        title="Split line into two"
+                                    >
+                                        <Split size={12} />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <label className="text-[11px] text-gray-500 w-14 shrink-0">Line box</label>
+                                <select
+                                    value={row.boxIndex ?? ''}
+                                    onChange={(e) => assignBoxToLine(lineIndex, e.target.value)}
+                                    className="flex-1 px-2 py-1.5 bg-gray-50 rounded border border-gray-200 text-xs text-gray-700"
+                                >
+                                    <option value="">Unassigned</option>
+                                    {sortedBoxIndices.map((origIdx, sortedPos) => (
+                                        <option key={origIdx} value={origIdx}>Box {sortedPos + 1} (row {origIdx + 1})</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <textarea
+                                value={row.text}
+                                onChange={(e) => updateLineText(lineIndex, e.target.value)}
+                                rows={2}
+                                className="w-full px-2.5 py-2 bg-white border border-gray-200 rounded text-xs text-gray-700 resize-y focus:outline-none focus:ring-1 focus:ring-teal-200 focus:border-teal-400"
+                            />
+                        </div>
+                    );
+                })}
+
+                {/* Extra unassigned lines beyond available boxes */}
+                {isCurrentDetected && currentAlignmentRows.length === 0 && transcriptKeyForCurrentPage && (
+                    <div className="text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2">
+                        No transcript lines found for this page.
+                    </div>
+                )}
+            </div>
+
+            <div className="px-3 py-2 border-t border-gray-100 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between text-xs text-gray-500 shrink-0 gap-2">
+                <span className="shrink-0">{currentAlignmentRows.length} lines · {currentAlignmentRows.filter(r => r.boxIndex !== null && r.boxIndex !== undefined).length} assigned</span>
+                {currentAlignmentRows.length > 0 &&
+                    currentAlignmentRows.every(r => r.boxIndex !== null && r.boxIndex !== undefined) && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-semibold shrink-0">
+                        <CheckCircle2 size={11} /> All matched
+                    </span>
+                )}
+                {isCurrentDetected && currentAlignmentRows.length > 0 && (
+                    <button
+                        onClick={realignCurrentPage}
+                        title="Re-pair transcript lines with boxes in their current top-to-bottom order"
+                        className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:border-teal-300 font-semibold transition-colors shrink-0"
                     >
-                        <option>PP-OCRv5_server_rec</option>
-                        <option>PP-OCRv5_mobile_rec</option>
-                        <option>PP-OCRv4_server_rec</option>
-                    </select>
-                    <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
-                </div>
-                <button
-                    disabled
-                    className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-gray-100 text-gray-400 cursor-not-allowed"
-                >
-                    <Play size={14} />
-                    Generate Transcript
-                </button>
-            </div>
-
-            {/* Coming Soon placeholder */}
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-gradient-to-br from-gray-50/50 to-gray-100/30 min-h-0">
-                <div className="p-3 bg-gradient-to-br from-gray-100 to-gray-50 rounded-xl mb-3">
-                    <Lock size={36} className="opacity-40" />
-                </div>
-                <p className="font-semibold text-sm">Coming Soon</p>
-                <p className="text-xs mt-1 text-center px-4">
-                    OCR recognition models will be integrated here to generate transcripts from detected lines.
-                </p>
-            </div>
-
-            {/* Footer */}
-            <div className="px-3 py-2 border-t border-gray-100 bg-gradient-to-r from-gray-50 to-white flex items-center justify-between text-xs text-gray-400 shrink-0">
-                <span>Detection: {isCurrentDetected ? `${currentLines.length} lines` : 'Pending'}</span>
-                <span className="flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded-full font-semibold text-[10px]">
-                    <Lock size={10} /> Preview
-                </span>
+                        <RefreshCw size={11} />
+                        Realign
+                    </button>
+                )}
             </div>
         </div>
     );
 
+
+    // ════════════════════════════════════════════════════════
+    // OCR RIGHT PANEL — model picker shown in OCR mode
+    // ════════════════════════════════════════════════════════
+    const ocrRightPanel = (
+        <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
+            {/* Header */}
+            <div className="px-3 py-2.5 bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/50 border-b border-gray-100/80 shrink-0 flex items-center gap-2">
+                <div className="p-1 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg text-white">
+                    <Sparkles size={12} />
+                </div>
+                <h3 className="font-bold text-gray-800 text-sm">Perform OCR</h3>
+            </div>
+
+            {/* Scrollable body */}
+            <div className="flex-1 overflow-y-auto min-h-0 p-3 space-y-4">
+
+                {/* ── Local Model ─────────────────────────────── */}
+                <div>
+                    <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-1.5">
+                            <Cpu size={12} className="text-gray-500" />
+                            <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Local Model</p>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 bg-amber-100 text-amber-600 font-bold rounded-full border border-amber-200">Coming Soon</span>
+                    </div>
+
+                    <div className="relative">
+                        <select
+                            disabled
+                            className="w-full appearance-none px-2.5 py-2 bg-gray-100 rounded-lg text-xs text-gray-400 font-medium border border-gray-200 outline-none pr-7 cursor-not-allowed"
+                        >
+                            <option>Select a local model…</option>
+                            <option>PaddleOCR v5 (CPU / GPU)</option>
+                            <option>Tesseract 5</option>
+                            <option>EasyOCR</option>
+                        </select>
+                        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1.5 leading-relaxed">
+                        Local models run fully offline with no API key. Integration is in progress — check back soon.
+                    </p>
+                </div>
+
+            </div>
+
+            {/* ── Export footer — always visible ───────────────── */}
+            <div className="shrink-0 border-t border-gray-100 p-3 bg-gradient-to-r from-gray-50/80 to-white space-y-2">
+                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <Download size={11} /> Export Transcript
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                        disabled={detectedCount === 0}
+                        onClick={() => {
+                            const lines = availablePages.flatMap(p => detectedPages[p] || []);
+                            const txt = lines.map((poly, i) => `Line ${i + 1}`).join('\n');
+                            const blob = new Blob([txt], { type: 'text/plain' });
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                            a.download = 'transcript.txt'; a.click();
+                        }}
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all
+                            disabled:opacity-40 disabled:cursor-not-allowed
+                            bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                    >
+                        <FileTextIcon size={15} />
+                        TXT
+                    </button>
+                    <button
+                        disabled={detectedCount === 0}
+                        onClick={() => {
+                            const data = {};
+                            availablePages.forEach(p => { if (detectedPages[p]) data[p] = detectedPages[p]; });
+                            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                            a.download = 'boxes.json'; a.click();
+                        }}
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all
+                            disabled:opacity-40 disabled:cursor-not-allowed
+                            bg-white border-gray-200 text-gray-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                    >
+                        <FileJson size={15} />
+                        JSON
+                    </button>
+                    <button
+                        disabled={detectedCount === 0}
+                        onClick={() => {
+                            const rows = ['page,line_index,x1,y1,x2,y2,x3,y3,x4,y4'];
+                            availablePages.forEach(p => {
+                                (detectedPages[p] || []).forEach((poly, i) => {
+                                    rows.push([p, i, ...poly.flat()].join(','));
+                                });
+                            });
+                            const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                            a.download = 'boxes.csv'; a.click();
+                        }}
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all
+                            disabled:opacity-40 disabled:cursor-not-allowed
+                            bg-white border-gray-200 text-gray-600 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                    >
+                        <FileType size={15} />
+                        CSV
+                    </button>
+                </div>
+                {detectedCount === 0 && (
+                    <p className="text-[10px] text-gray-400 text-center">Detect at least one page to export.</p>
+                )}
+            </div>
+        </div>
+    );
 
     // ════════════════════════════════════════════════════════
     // RENDER
@@ -814,15 +1317,48 @@ export default function LayoutAwareDetectionPage({
                         </div>
                     </div>
                 </div>
+
+                {/* Dataset mode: Continue to Export button */}
+                {datasetMode && detectedCount > 0 && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        <button
+                            onClick={() => {
+                                if (onDatasetNext) {
+                                    onDatasetNext({
+                                        boxesByPage: detectedPages,
+                                        alignedTranscriptByPage,
+                                    });
+                                }
+                            }}
+                            className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-sm font-bold rounded-lg shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
+                        >
+                            Continue to Export
+                            <ChevronRight size={16} />
+                        </button>
+                    </div>
+                )}
+
+                {/* OCR mode: Continue to Perform OCR button */}
+                {!datasetMode && detectedCount > 0 && onNext && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        <button
+                            onClick={onNext}
+                            className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-sm font-bold rounded-lg shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
+                        >
+                            Continue to OCR
+                            <ChevronRight size={16} />
+                        </button>
+                    </div>
+                )}
             </header>
 
             {/* Main 3-column layout */}
             <main className="flex-1 min-h-0 p-2 overflow-hidden">
-                <div className="h-full hidden lg:block">
+<div className="h-full hidden lg:block">
                     <ResizablePanels
                         leftPanel={leftSidebar}
                         centerPanel={centerPanel}
-                        rightPanel={rightPanel}
+                        rightPanel={datasetMode ? rightPanel : ocrRightPanel}
                         defaultLeftWidth={280}
                         defaultRightWidth={300}
                         minLeftWidth={240}

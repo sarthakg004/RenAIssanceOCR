@@ -1,6 +1,11 @@
-import React, { useState, useCallback, useMemo } from 'react';
-import { FileText, Sparkles } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { FileText, Database, BookOpen } from 'lucide-react';
 import Stepper from './components/Stepper';
+import DatasetStepper from './components/DatasetStepper';
+import HomePage from './pages/HomePage';
+import CombinedUploadPage from './pages/CombinedUploadPage';
+import PageMatchReviewPage from './pages/PageMatchReviewPage';
+import DatasetGenerationPage from './pages/DatasetGenerationPage';
 import { UploadPage } from './features/upload';
 import { SelectPage } from './features/upload';
 import { PreprocessPage } from './features/preprocess';
@@ -11,13 +16,24 @@ import { usePdfPreview } from './hooks/usePdfPreview';
 
 
 function App() {
-  // App state
+  // ── Mode: null (home), 'ocr', 'dataset' ──────────────────────────
+  const [mode, setMode] = useState(null);
+
+  // ── Shared state ──────────────────────────────────────────────────
   const [currentStep, setCurrentStep] = useState(1);
   const [files, setFiles] = useState(null);
   const [selectedPages, setSelectedPages] = useState([]);
   const [processedImages, setProcessedImages] = useState({});
   const [detectionMethod, setDetectionMethod] = useState(null);
   const [detectionProvider, setDetectionProvider] = useState(null);
+
+  // ── Dataset-specific state ────────────────────────────────────────
+  const [parsedTranscript, setParsedTranscript] = useState(null);
+  const [allPagesBoxes, setAllPagesBoxes] = useState({});
+  const [alignedTranscriptByPage, setAlignedTranscriptByPage] = useState({});
+  const [isProcessingBook, setIsProcessingBook] = useState(false);
+  // Cache detection + alignment state so it survives step 4 ↔ 5 navigation
+  const [detectionCache, setDetectionCache] = useState({ pages: {}, alignment: {} });
 
   // PDF preview hook
   const {
@@ -36,6 +52,36 @@ function App() {
     setSelectedPages([]);
   }, []);
 
+  // ── Dataset: combined upload (book + transcript together) ─────────
+  const handleCombinedUploadNext = useCallback(async (bookFiles, transcript) => {
+    if (!bookFiles || bookFiles.length === 0) return;
+    setIsProcessingBook(true);
+    setParsedTranscript(transcript);
+    try {
+      const isPdf = bookFiles[0].type === 'application/pdf';
+      if (isPdf) {
+        await extractPages(bookFiles[0]);
+      } else {
+        const loadedPages = await loadImages(bookFiles);
+        setSelectedPages(loadedPages.map((p) => p.pageNumber));
+      }
+      setFiles(bookFiles);
+      setCurrentStep(2);
+    } catch (err) {
+      console.error('Failed to process book files:', err);
+    } finally {
+      setIsProcessingBook(false);
+    }
+  }, [extractPages, loadImages]);
+
+  // ── Dataset: after review page matching ───────────────────────────
+  const handleMatchReviewNext = useCallback((matchedPageNumbers, updatedTranscript) => {
+    setSelectedPages(matchedPageNumbers);
+    if (updatedTranscript) setParsedTranscript(updatedTranscript);
+    setCurrentStep(3);
+  }, []);
+
+
   // Handle proceeding from upload step
   const handleUploadNext = useCallback(async () => {
     if (!files || files.length === 0) return;
@@ -43,7 +89,6 @@ function App() {
     const isPdf = files[0].type === 'application/pdf';
 
     if (isPdf) {
-      // Extract PDF pages
       try {
         await extractPages(files[0]);
         setCurrentStep(2);
@@ -51,24 +96,28 @@ function App() {
         console.error('Failed to extract PDF:', err);
       }
     } else {
-      // Load images directly
       try {
         const loadedPages = await loadImages(files);
-        // Auto-select all images using their actual pageNumber IDs
         setSelectedPages(loadedPages.map((p) => p.pageNumber));
-        setCurrentStep(3); // Skip page selection for images
+        // In dataset mode: step 2 is Select, then step 3 is Transcript
+        // In OCR mode: skip to step 3 (Preprocess)
+        if (mode === 'dataset') {
+          setCurrentStep(2);
+        } else {
+          setCurrentStep(3);
+        }
       } catch (err) {
         console.error('Failed to load images:', err);
       }
     }
-  }, [files, extractPages, loadImages]);
+  }, [files, extractPages, loadImages, mode]);
 
   // Handle selection step
   const handleSelectionChange = useCallback((newSelection) => {
     setSelectedPages(newSelection);
   }, []);
 
-  // Navigation handlers
+  // Navigation
   const handleStepClick = useCallback((stepId) => {
     if (stepId <= currentStep) {
       setCurrentStep(stepId);
@@ -79,25 +128,186 @@ function App() {
     setCurrentStep(step);
   }, []);
 
-  // Reset app state
+  // Reset to home
   const handleReset = useCallback(() => {
+    setMode(null);
     setCurrentStep(1);
     setFiles(null);
     setSelectedPages([]);
     setProcessedImages({});
     setDetectionMethod(null);
     setDetectionProvider(null);
+    setParsedTranscript(null);
+    setAllPagesBoxes({});
+    setAlignedTranscriptByPage({});
+    setIsProcessingBook(false);
     resetPdfPreview();
   }, [resetPdfPreview]);
 
+  // ── Mode selection from HomePage ──────────────────────────────────
+  const handleSelectMode = useCallback((selectedMode) => {
+    setMode(selectedMode);
+    setCurrentStep(1);
+  }, []);
+
+  // ════════════════════════════════════════════════════════════════════
+  // Show HomePage when no mode is selected
+  // ════════════════════════════════════════════════════════════════════
+  if (!mode) {
+    return <HomePage onSelectMode={handleSelectMode} />;
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // DATASET MODE  (steps: 1=Upload+Transcript, 2=Match Review, 3=Preprocess, 4=Detect&Align, 5=Export)
+  // ════════════════════════════════════════════════════════════════════
+  if (mode === 'dataset') {
+
+    // ── Full-screen pass-through steps ───────────────────────────────
+    if (currentStep === 3) {
+      return (
+        <div className="h-screen w-screen overflow-hidden flex flex-col">
+          <PreprocessPage
+            pages={pages}
+            selectedPages={selectedPages}
+            initialProcessedImages={processedImages}
+            onBack={() => goToStep(2)}
+            onNext={() => goToStep(4)}
+            onProcessedImagesChange={setProcessedImages}
+          />
+        </div>
+      );
+    }
+
+    if (currentStep === 4) {
+      return (
+        <div className="h-screen w-screen overflow-hidden flex flex-col">
+          <LayoutAwareDetectionPage
+            pages={pages}
+            selectedPages={selectedPages}
+            processedImages={processedImages}
+            transcript={parsedTranscript}
+            onBack={() => goToStep(3)}
+            datasetMode={true}
+            initialDetectedPages={detectionCache.pages}
+            initialAlignmentByPage={detectionCache.alignment}
+            onStateChange={(cache) => setDetectionCache(cache)}
+            onDatasetNext={({ boxesByPage, alignedTranscriptByPage: alignedMap }) => {
+              setAllPagesBoxes(boxesByPage || {});
+              setAlignedTranscriptByPage(alignedMap || {});
+              goToStep(5);
+            }}
+          />
+        </div>
+      );
+    }
+
+    if (currentStep === 5) {
+      return (
+        <div className="h-screen w-screen overflow-hidden flex flex-col bg-gradient-to-br from-slate-50 via-white to-emerald-50">
+          <DatasetGenerationPage
+            pages={pages}
+            selectedPages={selectedPages}
+            processedImages={processedImages}
+            transcript={Object.keys(alignedTranscriptByPage).length > 0 ? alignedTranscriptByPage : parsedTranscript}
+            allPagesBoxes={allPagesBoxes}
+            onBack={() => goToStep(4)}
+            bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'dataset'}
+          />
+        </div>
+      );
+    }
+
+    // ── Steps 1 & 2: shared full-screen layout ───────────────────────
+    return (
+      <div className="h-screen w-screen flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-emerald-50/30">
+        {/* ── Compact header ─────────────────────────────────────── */}
+        <header className="flex-shrink-0 bg-white/90 backdrop-blur-md border-b border-gray-100/70 shadow-sm z-40">
+          <div className="flex items-center justify-between px-6 py-3 gap-6">
+            {/* Logo */}
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 via-teal-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-md shadow-emerald-500/25">
+                <Database className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-800 leading-none">Dataset Generator</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">OCR training data pipeline</p>
+              </div>
+            </div>
+
+            {/* Stepper — centered, full width */}
+            <div className="flex-1">
+              <DatasetStepper currentStep={currentStep} onStepClick={handleStepClick} compact />
+            </div>
+
+            {/* Home */}
+            <button
+              onClick={handleReset}
+              className="flex-shrink-0 text-sm font-medium text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 px-4 py-2 rounded-lg transition-all duration-200"
+            >
+              Home
+            </button>
+          </div>
+        </header>
+
+        {/* ── Error/progress banner ──────────────────────────────── */}
+        {(error || (isLoading && progress > 0)) && (
+          <div className="flex-shrink-0 px-6 pt-3">
+            {error && (
+              <div className="p-3 bg-red-50/90 border border-red-200 rounded-xl text-red-600 text-sm animate-fade-in shadow-sm mb-2">
+                <span className="font-semibold">Error: </span>{error}
+              </div>
+            )}
+            {isLoading && progress > 0 && (
+              <div className="p-3 bg-white/80 backdrop-blur-sm border border-gray-100 rounded-xl animate-fade-in shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-gray-600">Extracting pages…</span>
+                  <span className="text-xs font-bold text-emerald-600">{progress}%</span>
+                </div>
+                <div className="h-1.5 bg-emerald-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 rounded-full transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Page content (full remaining height) ──────────────── */}
+        <main className="flex-1 overflow-hidden">
+          {currentStep === 1 && (
+            <CombinedUploadPage
+              onNext={handleCombinedUploadNext}
+              isProcessingBook={isProcessingBook || isLoading}
+              initialBookFiles={files}
+              initialTranscript={parsedTranscript}
+            />
+          )}
+          {currentStep === 2 && (
+            <PageMatchReviewPage
+              pages={pages}
+              parsedTranscript={parsedTranscript}
+              onBack={() => goToStep(1)}
+              onNext={handleMatchReviewNext}
+            />
+          )}
+        </main>
+      </div>
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // OCR MODE (original workflow unchanged)
+  // ════════════════════════════════════════════════════════════════════
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Step 3 (Preprocess) and Step 5 (OCR) take over the full screen */}
       {currentStep === 3 ? (
         <div className="h-screen w-screen overflow-hidden flex flex-col">
           <PreprocessPage
             pages={pages}
             selectedPages={selectedPages}
+            initialProcessedImages={processedImages}
             onBack={() => goToStep(files[0]?.type === 'application/pdf' ? 2 : 1)}
             onNext={() => goToStep(4)}
             onProcessedImagesChange={setProcessedImages}
@@ -110,6 +320,11 @@ function App() {
             selectedPages={selectedPages}
             processedImages={processedImages}
             onBack={() => goToStep(4)}
+            onNext={() => {
+              setDetectionMethod('layout-aware');
+              setDetectionProvider('paddleocr');
+              goToStep(5);
+            }}
           />
         </div>
       ) : currentStep === 5 ? (
@@ -117,9 +332,7 @@ function App() {
           <TextRecognitionPage
             provider={detectionProvider || 'gemini'}
             processedImages={
-              // Get the final images (preprocessed or original) for selected pages
               selectedPages.map((pageNum) => {
-                // Find page by pageNumber (may be string like '3_left' or integer)
                 const original = pages.find(p => p.pageNumber === pageNum);
                 const preprocessed = processedImages[pageNum];
                 return {
@@ -127,16 +340,13 @@ function App() {
                   originalPageNumber: original?.originalPageNumber || null,
                   isSplit: original?.isSplit || false,
                   splitSide: original?.splitSide || null,
-                  // Use thumbnail for original (from PDF/image extraction)
                   original: original?.thumbnail || original,
-                  // Use preprocessed if available, otherwise fall back to thumbnail
                   processed: preprocessed || original?.thumbnail || original,
                 };
               })
             }
             onBack={() => goToStep(4)}
             onComplete={() => {
-              // OCR complete - show success state or reset
               alert('OCR processing complete! Transcripts have been saved.');
             }}
           />
@@ -160,23 +370,19 @@ function App() {
                 </div>
               </div>
 
-              {currentStep > 1 && (
-                <button
-                  onClick={handleReset}
-                  className="text-sm font-medium text-gray-500 hover:text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg transition-all duration-200"
-                >
-                  Start Over
-                </button>
-              )}
+              <button
+                onClick={handleReset}
+                className="text-sm font-medium text-gray-500 hover:text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg transition-all duration-200"
+              >
+                Home
+              </button>
             </div>
           </header>
 
           {/* Main content */}
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
-            {/* Stepper */}
             <Stepper currentStep={currentStep} onStepClick={handleStepClick} />
 
-            {/* Error display */}
             {error && (
               <div className="mb-6 p-4 bg-red-50/80 backdrop-blur-sm border border-red-200 rounded-xl text-red-600 animate-fade-in shadow-sm">
                 <p className="font-semibold">Error</p>
@@ -184,7 +390,6 @@ function App() {
               </div>
             )}
 
-            {/* Progress bar */}
             {isLoading && progress > 0 && (
               <div className="mb-6 animate-fade-in">
                 <div className="flex items-center justify-between mb-2">
@@ -202,7 +407,6 @@ function App() {
               </div>
             )}
 
-            {/* Step content */}
             <div className="min-h-[600px]">
               {currentStep === 1 && (
                 <UploadPage
@@ -249,9 +453,7 @@ function App() {
             <div className="max-w-7xl mx-auto px-4 text-center">
               <p className="text-sm text-gray-500 flex items-center justify-center gap-2">
                 <span className="font-semibold text-gray-600">OCR Preprocess Studio</span>
-                <span className="text-gray-300">•</span>
-                <span>Stage 1</span>
-                <span className="text-gray-300">•</span>
+                <span className="text-gray-300">|</span>
                 <span className="text-blue-600 font-medium">RenAIssance Project</span>
               </p>
             </div>

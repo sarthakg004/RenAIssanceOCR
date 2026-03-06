@@ -1,0 +1,135 @@
+# ============================================================
+# RenAIssance — Docker Build & Push
+# Builds backend + frontend in parallel
+# Tags: image:vX.Y and image:latest
+# Versioning: auto-increments minor (v1.0 → v1.1 → v1.2)
+# ============================================================
+
+name: Docker Build & Push
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  DOCKERHUB_USERNAME: saarthakg004
+  BACKEND_IMAGE: saarthakg004/renaissance-backend
+  FRONTEND_IMAGE: saarthakg004/renaissance-frontend
+
+jobs:
+  # ── Compute next semantic version ──────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: semver
+        run: |
+          # Fetch all tags
+          git fetch --tags
+
+          # Find latest vMAJOR.MINOR tag
+          LATEST=$(git tag --list 'v*.*' | sort -V | tail -n1)
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0"
+          else
+            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            NEXT="v${MAJOR}.$((MINOR + 1))"
+          fi
+
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Next version: $NEXT"
+
+      - name: Create and push tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.semver.outputs.version }}"
+          git push origin "${{ steps.semver.outputs.version }}"
+
+  # ── Build backend ───────────────────────────────────────────
+  build-backend:
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ needs.version.outputs.version }}
+            ${{ env.BACKEND_IMAGE }}:latest
+          # GitHub Actions cache for BuildKit layers
+          cache-from: type=gha,scope=backend
+          cache-to:   type=gha,scope=backend,mode=max
+          # BuildKit provenance for supply chain security
+          provenance: false
+
+  # ── Build frontend ──────────────────────────────────────────
+  build-frontend:
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ needs.version.outputs.version }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+          cache-from: type=gha,scope=frontend
+          cache-to:   type=gha,scope=frontend,mode=max
+          provenance: false
+
+  # ── Summary ─────────────────────────────────────────────────
+  summary:
+    runs-on: ubuntu-latest
+    needs: [version, build-backend, build-frontend]
+    if: always()
+    steps:
+      - name: Build summary
+        run: |
+          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | Tag | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| renaissance-backend  | ${{ needs.version.outputs.version }} | ${{ needs.build-backend.result }}  |" >> $GITHUB_STEP_SUMMARY
+          echo "| renaissance-frontend | ${{ needs.version.outputs.version }} | ${{ needs.build-frontend.result }} |" >> $GITHUB_STEP_SUMMARY

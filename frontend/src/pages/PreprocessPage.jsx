@@ -38,6 +38,13 @@ import ImageCropper from '../components/ImageCropper';
 import { usePipeline } from '../hooks/usePipeline';
 import { preprocessImage } from '../services/api';
 
+// Helper: shorten page labels so they fit in small boxes
+// "1_left" → "1L", "2_right" → "2R", plain numbers stay as-is
+function shortPageLabel(pageNumber) {
+  const s = String(pageNumber);
+  return s.replace('_left', 'L').replace('_right', 'R');
+}
+
 // ============================================
 // InfoBanner Component - Dismissible UX Tip
 // ============================================
@@ -154,6 +161,7 @@ function useImageHistory(initialState = null) {
 export default function PreprocessPage({
   pages,
   selectedPages,
+  initialProcessedImages,
   onBack,
   onNext,
   onProcessedImagesChange,
@@ -174,7 +182,8 @@ export default function PreprocessPage({
   const [imageStates, setImageStates] = useState({});
 
   // Final processed images (output of preprocessing pipeline)
-  const [processedImages, setProcessedImages] = useState({});
+  // Initialized from parent so navigating back and returning preserves progress
+  const [processedImages, setProcessedImages] = useState(() => initialProcessedImages || {});
 
   // UI state
   const [showCropper, setShowCropper] = useState(false);
@@ -399,8 +408,13 @@ export default function PreprocessPage({
    */
   const handleEraserSave = useCallback((results) => {
     // results is { [pageNumber]: dataUrl } for each modified page
-    Object.entries(results).forEach(([pageNum, dataUrl]) => {
-      const pn = Number(pageNum);
+    // Object keys are always strings — look up the original typed page number
+    Object.entries(results).forEach(([pageNumStr, dataUrl]) => {
+      const page = selectedPageData.find(p => String(p.pageNumber) === pageNumStr);
+      // Preserve original type (number vs string like "3_left")
+      const pn = page
+        ? page.pageNumber
+        : isNaN(Number(pageNumStr)) ? pageNumStr : Number(pageNumStr);
       pushImageState(pn, dataUrl);
       // Clear processed image since source changed
       setProcessedImages((prev) => {
@@ -409,7 +423,7 @@ export default function PreprocessPage({
       });
     });
     setShowEraser(false);
-  }, [pushImageState]);
+  }, [pushImageState, selectedPageData]);
 
   /**
    * Handle batch crop completion (current page + selected pages)
@@ -536,8 +550,31 @@ export default function PreprocessPage({
     setCurrentPageIndex((prev) => Math.min(selectedPageData.length - 1, prev + 1));
   };
 
-  // ========== RESET HANDLER ==========
+  // ========== RESET HANDLERS ==========
 
+  /** Reset ONLY the pipeline/operation config. Leaves all page images/results intact. */
+  const handleResetOperations = useCallback(() => {
+    resetPipeline();
+  }, [resetPipeline]);
+
+  /** Reset current page: clear its processed result AND undo all image edits. */
+  const handleResetCurrentPage = useCallback(() => {
+    if (!currentPage) return;
+    setImageStates((prev) => ({
+      ...prev,
+      [currentPage.pageNumber]: {
+        current: currentPage.thumbnail,
+        original: currentPage.thumbnail,
+        history: [],
+      },
+    }));
+    setProcessedImages((prev) => {
+      const { [currentPage.pageNumber]: _removed, ...rest } = prev;
+      return rest;
+    });
+  }, [currentPage]);
+
+  /** Full reset: pipeline + ALL pages (kept for future use, not exposed in UI). */
   const handleResetAll = useCallback(() => {
     resetPipeline();
     setProcessedImages({});
@@ -682,7 +719,7 @@ export default function PreprocessPage({
                 onOperationToggle={toggleOperation}
                 onOperationParamsChange={updateOperationParams}
                 onApplyRecommended={applyRecommendedPipeline}
-                onReset={handleResetAll}
+                onReset={handleResetOperations}
                 isProcessing={isProcessing}
                 className="h-full rounded-none shadow-none"
               />
@@ -782,12 +819,12 @@ export default function PreprocessPage({
                       <button
                         key={page.pageNumber}
                         onClick={() => setCurrentPageIndex(idx)}
-                        className={`relative w-7 h-7 rounded-lg text-xs font-medium transition-all ${idx === currentPageIndex
+                        className={`relative w-8 h-7 rounded-lg text-xs font-medium transition-all ${idx === currentPageIndex
                           ? 'bg-blue-600 text-white shadow-sm'
                           : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                           }`}
                       >
-                        {page.pageNumber}
+                        {shortPageLabel(page.pageNumber)}
                         {/* Status indicators */}
                         {processedImages[page.pageNumber] && (
                           <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white" />
@@ -845,7 +882,7 @@ export default function PreprocessPage({
                   </span>
                 </div>
                 {currentPage && (
-                  <span>Page {currentPage.pageNumber}</span>
+                  <span>Page {shortPageLabel(currentPage.pageNumber)}</span>
                 )}
               </div>
             </div>

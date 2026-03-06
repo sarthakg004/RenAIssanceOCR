@@ -27,6 +27,7 @@ from .api.ocr import router as ocr_router
 from .api.preprocess import router as preprocess_router
 from .api.export import router as export_router
 from .api.layout_detection import router as layout_detection_router
+from .api.dataset import router as dataset_router
 
 # Create FastAPI app
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
@@ -46,6 +47,7 @@ app.include_router(ocr_router)
 app.include_router(preprocess_router)
 app.include_router(export_router)
 app.include_router(layout_detection_router)
+app.include_router(dataset_router)
 
 
 # ============================================

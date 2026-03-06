@@ -1,33 +1,51 @@
 # ============================================
 # RenAIssance OCR — Frontend Dockerfile
-# Multi-stage: Node build → Nginx serve
+# Multi-stage: Node 20 build → Nginx alpine serve
 # ============================================
 
-# ---------- Stage 1: Build ----------
-FROM node:20-alpine AS build
+# ---- Stage 1: Build ----
+FROM node:20-alpine AS builder
+
+ENV NODE_ENV=production
 
 WORKDIR /app
 
-# Install dependencies first (layer cache)
-COPY package.json package-lock.json* ./
-RUN npm ci 2>/dev/null || npm install
+# Copy manifests first — layer cache for npm install
+COPY package.json package-lock.json ./
+
+# Clean install (uses lockfile exactly)
+RUN npm ci --prefer-offline --no-audit --no-fund
 
 # Copy source and build
 COPY . .
+
 RUN npm run build
 
-# ---------- Stage 2: Serve ----------
-FROM nginx:stable-alpine
 
-# Remove default nginx config
+# ---- Stage 2: Serve ----
+FROM nginx:1.27-alpine AS runtime
+
+# Remove default config
 RUN rm /etc/nginx/conf.d/default.conf
 
-# Copy custom nginx config
+# Copy custom nginx SPA config
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built static files from build stage
-COPY --from=build /app/dist /usr/share/nginx/html
+# Copy only the built static assets
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Non-root nginx
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /var/cache/nginx && \
+    chown -R nginx:nginx /var/log/nginx && \
+    touch /var/run/nginx.pid && \
+    chown nginx:nginx /var/run/nginx.pid
+
+USER nginx
 
 EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -qO- http://localhost:80/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

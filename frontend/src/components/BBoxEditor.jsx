@@ -12,6 +12,7 @@ import {
     Trash2,
     ChevronLeft,
     ChevronRight,
+    Copy,
     RotateCw,
 } from 'lucide-react';
 
@@ -19,7 +20,6 @@ import {
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 const HANDLE_RADIUS = 6;        // corner handle radius in canvas coords
-const ROT_HANDLE_OFFSET = 28;   // rotation handle distance from top-edge midpoint
 const MIN_BOX_SIZE = 10;
 const MAX_UNDO = 40;
 
@@ -29,26 +29,24 @@ const MAX_UNDO = 40;
 let _uid = 0;
 function uid() { return `bb-${Date.now()}-${_uid++}`; }
 
+/** Shorten split-page labels to fit small buttons: "2_left" → "2L", "3_right" → "3R" */
+function shortPageLabel(pageNumber) {
+    return String(pageNumber).replace('_left', 'L').replace('_right', 'R');
+}
+
 /**
- * Convert any PaddleOCR polygon to a box stored as 4 corner points.
- * If the polygon has exactly 4 points we keep them verbatim (preserves rotation).
- * Otherwise we fall back to the bounding-rect as an axis-aligned quad.
+ * Convert any PaddleOCR polygon to an axis-aligned rectangle stored as 4 corner points.
+ * Always computes the axis-aligned bounding box so all boxes are rectangles.
  */
 function polyToBox(poly, id) {
     if (!poly || poly.length === 0) return null;
-    let pts;
-    if (poly.length === 4) {
-        pts = poly.map(p => [p[0], p[1]]);
-    } else {
-        // Compute axis-aligned bounding rect from arbitrary polygon
-        const xs = poly.map(p => p[0]);
-        const ys = poly.map(p => p[1]);
-        const x1 = Math.min(...xs), y1 = Math.min(...ys);
-        const x2 = Math.max(...xs), y2 = Math.max(...ys);
-        pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
-    }
+    const xs = poly.map(p => p[0]);
+    const ys = poly.map(p => p[1]);
+    const x1 = Math.min(...xs), y1 = Math.min(...ys);
+    const x2 = Math.max(...xs), y2 = Math.max(...ys);
+    const pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
     return { id: id ?? uid(), points: pts, selected: false };
-    // points order: [TL, TR, BR, BL]  (standard PaddleOCR quad order)
+    // points order: [TL, TR, BR, BL]
 }
 
 /** Convert internal box back to PaddleOCR polygon format. */
@@ -63,18 +61,7 @@ function makeRectBox(x1, y1, x2, y2) {
     };
 }
 
-/** Centroid of 4 points. */
-function getCenter(pts) {
-    return { x: pts.reduce((s, p) => s + p[0], 0) / 4, y: pts.reduce((s, p) => s + p[1], 0) / 4 };
-}
-
-/** Rotate a single point around a centre by angle (radians). */
-function rotatePoint(px, py, cx, cy, angle) {
-    const cos = Math.cos(angle), sin = Math.sin(angle);
-    return [cx + (px - cx) * cos - (py - cy) * sin, cy + (px - cx) * sin + (py - cy) * cos];
-}
-
-/** Point-in-convex-polygon test (works for quads too). */
+/** Point-in-convex-polygon test (works for axis-aligned rects too). */
 function pointInPolygon(px, py, pts) {
     let inside = false;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -93,25 +80,80 @@ function hitCorner(pts, px, py, r) {
     return -1;
 }
 
-/** Position of the blue rotation handle (above the top-edge midpoint). */
-function getRotHandlePos(pts) {
-    const mid = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
-    const c = getCenter(pts);
-    const dx = mid[0] - c.x, dy = mid[1] - c.y;
-    const len = Math.hypot(dx, dy) || 1;
-    return [mid[0] + (dx / len) * ROT_HANDLE_OFFSET, mid[1] + (dy / len) * ROT_HANDLE_OFFSET];
+/**
+ * Given a corner index and new position, return updated rectangle points
+ * keeping the box axis-aligned. Opposite corner stays fixed.
+ * Order: 0=TL, 1=TR, 2=BR, 3=BL
+ */
+function resizeRectCorner(pts, cornerIdx, nx, ny) {
+    // Determine the opposite corner index
+    const opposites = [2, 3, 0, 1];
+    const oIdx = opposites[cornerIdx];
+    const ox = pts[oIdx][0], oy = pts[oIdx][1];
+    // new rectangle from these two corners
+    const x1 = Math.min(nx, ox), y1 = Math.min(ny, oy);
+    const x2 = Math.max(nx, ox), y2 = Math.max(ny, oy);
+    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
 }
 
-/** Is the mouse hitting the rotation handle? */
-function hitRotHandle(pts, px, py, r) {
-    const [hx, hy] = getRotHandlePos(pts);
+/** Width / height of an axis-aligned rect from its 4 corner points. */
+function rectSize(pts) {
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+}
+
+/** Rotate point (px,py) around center (cx,cy) by angle (radians). */
+function rotatePoint(px, py, cx, cy, angle) {
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    return [cx + (px - cx) * cos - (py - cy) * sin, cy + (px - cx) * sin + (py - cy) * cos];
+}
+
+/** Centroid of a 4-point box. */
+function getBoxCenter(pts) {
+    return [pts.reduce((s, p) => s + p[0], 0) / 4, pts.reduce((s, p) => s + p[1], 0) / 4];
+}
+
+/**
+ * Position of the rotation handle: offset away from the midpoint of the TL-TR edge
+ * along the outward normal from the box center.
+ */
+function getRotationHandlePos(pts, offsetDist) {
+    const mx = (pts[0][0] + pts[1][0]) / 2;
+    const my = (pts[0][1] + pts[1][1]) / 2;
+    const [cx, cy] = getBoxCenter(pts);
+    const dx = mx - cx, dy = my - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    return [mx + (dx / len) * offsetDist, my + (dy / len) * offsetDist];
+}
+
+/** True if the click (px,py) is within radius r of the rotation handle. */
+function hitRotationHandle(pts, px, py, r, offsetDist) {
+    const [hx, hy] = getRotationHandlePos(pts, offsetDist);
     return Math.hypot(px - hx, py - hy) <= r;
 }
 
-/** Bounding axis-aligned rect of 4 points (for size validation). */
-function polyBounds(pts) {
-    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+/**
+ * Resize a (possibly rotated) rectangle by dragging one corner to (nx, ny).
+ * Preserves the box rotation angle; opposite corner stays fixed.
+ */
+function resizeRotatedCorner(pts, cornerIdx, nx, ny) {
+    const opposites = [2, 3, 0, 1];
+    const oIdx = opposites[cornerIdx];
+    const [opx, opy] = pts[oIdx];
+    const ncx = (opx + nx) / 2, ncy = (opy + ny) / 2;
+    // Detect rotation from the top edge direction
+    const edgeDx = pts[1][0] - pts[0][0], edgeDy = pts[1][1] - pts[0][1];
+    const angle = Math.atan2(edgeDy, edgeDx);
+    const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+    const lox = (opx - ncx) * cosA - (opy - ncy) * sinA;
+    const loy = (opx - ncx) * sinA + (opy - ncy) * cosA;
+    const lnx = (nx - ncx) * cosA - (ny - ncy) * sinA;
+    const lny = (nx - ncx) * sinA + (ny - ncy) * cosA;
+    const hw = Math.abs(lnx - lox) / 2, hh = Math.abs(lny - loy) / 2;
+    if (hw * 2 < MIN_BOX_SIZE || hh * 2 < MIN_BOX_SIZE) return pts;
+    const local = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+    const cosR = Math.cos(angle), sinR = Math.sin(angle);
+    return local.map(([lx, ly]) => [ncx + lx * cosR - ly * sinR, ncy + lx * sinR + ly * cosR]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,8 +170,10 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
     // ── Refs ───────────────────────────────────────────────────────────────
     const bgCanvasRef = useRef(null);
     const overlayCanvasRef = useRef(null);
-    const containerRef = useRef(null);
+    const containerRef = useRef(null);    const outerRef = useRef(null);
 
+    // Grab keyboard focus when the editor opens so arrow keys work immediately
+    useEffect(() => { outerRef.current?.focus(); }, []);
     // ── Box state ──────────────────────────────────────────────────────────
     const [boxes, setBoxes] = useState([]);
     const [undoStack, setUndoStack] = useState([]);
@@ -231,14 +275,13 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
 
         const z = zoomRef.current;
         const lw = Math.max(1.5, 2 / z);
-        const cr = Math.max(4, HANDLE_RADIUS / z);     // corner radius in canvas coords
-        const rr = Math.max(5, (HANDLE_RADIUS + 2) / z); // rotation handle radius
+        const cr = Math.max(4, HANDLE_RADIUS / z);     // corner handle radius in canvas coords
 
         for (const b of boxList) {
             const sel = b.selected;
             const pts = b.points;
 
-            // Fill + stroke the polygon
+            // Fill + stroke the rectangle
             ctx.strokeStyle = sel ? '#f97316' : '#22c55e';
             ctx.lineWidth = lw;
             ctx.fillStyle = sel ? 'rgba(249,115,22,0.12)' : 'rgba(34,197,94,0.08)';
@@ -261,22 +304,26 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                     ctx.fill(); ctx.stroke();
                 }
 
-                // Dashed line from top-edge mid to rotation handle
-                const [rhx, rhy] = getRotHandlePos(pts);
-                const midX = (pts[0][0] + pts[1][0]) / 2;
-                const midY = (pts[0][1] + pts[1][1]) / 2;
-                ctx.strokeStyle = '#3b82f6';
+                // Rotation handle: circle above top-edge midpoint
+                const rotOffset = Math.max(8, 30 / z);
+                const [rhx, rhy] = getRotationHandlePos(pts, rotOffset);
+                const tmx = (pts[0][0] + pts[1][0]) / 2;
+                const tmy = (pts[0][1] + pts[1][1]) / 2;
+                ctx.setLineDash([3 / z, 2 / z]);
+                ctx.strokeStyle = '#f97316';
                 ctx.lineWidth = lw;
-                ctx.setLineDash([4 / z, 3 / z]);
-                ctx.beginPath(); ctx.moveTo(midX, midY); ctx.lineTo(rhx, rhy); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(tmx, tmy); ctx.lineTo(rhx, rhy); ctx.stroke();
                 ctx.setLineDash([]);
-
-                // Rotation handle (blue circle)
-                ctx.fillStyle = '#3b82f6';
-                ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = lw;
-                ctx.beginPath(); ctx.arc(rhx, rhy, rr, 0, Math.PI * 2);
-                ctx.fill(); ctx.stroke();
+                const rhr = cr * 0.95;
+                ctx.beginPath(); ctx.arc(rhx, rhy, rhr, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffffff'; ctx.fill();
+                ctx.strokeStyle = '#f97316'; ctx.lineWidth = lw; ctx.stroke();
+                // Small arrow inside the circle
+                ctx.strokeStyle = '#f97316';
+                ctx.lineWidth = Math.max(1, lw * 0.8);
+                ctx.beginPath();
+                ctx.arc(rhx, rhy, rhr * 0.5, -Math.PI * 0.8, Math.PI * 0.2);
+                ctx.stroke();
             }
         }
 
@@ -366,21 +413,24 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
         // ── SELECT mode ────────────────────────────────────────────────
         const selBox = boxes.find(b => b.selected);
 
-        // 1. Rotation handle (check before corners so it doesn't get hidden)
-        if (selBox && hitRotHandle(selBox.points, imgX, imgY, rr * 1.5)) {
-            const center = getCenter(selBox.points);
-            pushUndo(boxes);
-            dragRef.current = {
-                type: 'rotate',
-                id: selBox.id,
-                origPts: selBox.points.map(p => [...p]),
-                center,
-                startAngle: Math.atan2(imgY - center.y, imgX - center.x),
-            };
-            return;
+        // 0. Rotation handle on selected box
+        if (selBox) {
+            const rotOffset = Math.max(8, 30 / z);
+            if (hitRotationHandle(selBox.points, imgX, imgY, rr * 1.8, rotOffset)) {
+                const center = getBoxCenter(selBox.points);
+                pushUndo(boxes);
+                dragRef.current = {
+                    type: 'rotate',
+                    id: selBox.id,
+                    origPts: selBox.points.map(p => [...p]),
+                    center,
+                    startAngle: Math.atan2(imgY - center[1], imgX - center[0]),
+                };
+                return;
+            }
         }
 
-        // 2. Corner handles on selected box
+        // 1. Corner handles on selected box (resize rectangle)
         if (selBox) {
             const ci = hitCorner(selBox.points, imgX, imgY, cr * 1.5);
             if (ci !== -1) {
@@ -440,29 +490,27 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
             return;
         }
 
-        if (drag.type === 'corner') {
+        if (drag.type === 'rotate') {
+            const [cx, cy] = drag.center;
+            const currentAngle = Math.atan2(imgY - cy, imgX - cx);
+            // Slow rotation: 0.35x ratio so the box turns gently
+            const delta = (currentAngle - drag.startAngle) * 0.35;
             setBoxes(prev => prev.map(b => {
                 if (b.id !== drag.id) return b;
-                const newPts = drag.origPts.map(p => [...p]);
-                newPts[drag.cornerIdx] = [imgX, imgY];
-                // Enforce minimum size
-                const { w, h } = polyBounds(newPts);
-                if (w < MIN_BOX_SIZE || h < MIN_BOX_SIZE) return b;
+                const newPts = drag.origPts.map(([px, py]) => rotatePoint(px, py, cx, cy, delta));
                 return { ...b, points: newPts };
             }));
             return;
         }
 
-        if (drag.type === 'rotate') {
-            const currentAngle = Math.atan2(imgY - drag.center.y, imgX - drag.center.x);
-            const delta = currentAngle - drag.startAngle;
+        if (drag.type === 'corner') {
             setBoxes(prev => prev.map(b => {
                 if (b.id !== drag.id) return b;
-                return {
-                    ...b,
-                    points: drag.origPts.map(([px, py]) => rotatePoint(px, py, drag.center.x, drag.center.y, delta)),
-                };
+                // Resize while preserving rotation angle
+                const newPts = resizeRotatedCorner(drag.origPts, drag.cornerIdx, imgX, imgY);
+                return { ...b, points: newPts };
             }));
+            return;
         }
     }, [screenToImage, drawOverlay]);
 
@@ -504,7 +552,8 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
         if (!el) return;
         const onWheel = e => {
             e.preventDefault();
-            const f = e.deltaY < 0 ? 1.1 : 0.9;
+            // Gentle zoom: ~5 % per scroll tick instead of 10 %
+            const f = e.deltaY < 0 ? 1.05 : 1 / 1.05;
             setZoom(z => { const nz = Math.max(0.05, Math.min(8, z * f)); zoomRef.current = nz; return nz; });
         };
         el.addEventListener('wheel', onWheel, { passive: false });
@@ -516,8 +565,34 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
     // ─────────────────────────────────────────────────────────────────────
     const handleDelete = useCallback(() => {
         if (!selectedId) return;
+        // Find the box just before the deleted one (top-to-bottom order) so selection lands on it
+        const sorted = [...boxes].sort((a, b) => {
+            const topA = Math.min(...a.points.map(p => p[1]));
+            const topB = Math.min(...b.points.map(p => p[1]));
+            return topA - topB;
+        });
+        const delIdx = sorted.findIndex(b => b.id === selectedId);
+        const prevId = delIdx > 0 ? sorted[delIdx - 1].id : null;
         pushUndo(boxes);
-        setBoxes(prev => prev.filter(b => b.id !== selectedId));
+        setBoxes(prev =>
+            prev
+                .filter(b => b.id !== selectedId)
+                .map(b => ({ ...b, selected: prevId !== null && b.id === prevId }))
+        );
+        setModifiedPages(prev => new Set([...prev, currentPage?.pageNumber]));
+    }, [selectedId, boxes, pushUndo, currentPage]);
+
+    const handleDuplicate = useCallback(() => {
+        if (!selectedId) return;
+        const src = boxes.find(b => b.id === selectedId);
+        if (!src) return;
+        pushUndo(boxes);
+        const dup = {
+            id: uid(),
+            points: src.points.map(([px, py]) => [px + 12, py + 12]),
+            selected: true,
+        };
+        setBoxes(prev => [...prev.map(b => ({ ...b, selected: false })), dup]);
         setModifiedPages(prev => new Set([...prev, currentPage?.pageNumber]));
     }, [selectedId, boxes, pushUndo, currentPage]);
 
@@ -526,17 +601,39 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
             if (e.key === 'n' || e.key === 'N') { setMode(m => m === 'draw' ? 'select' : 'draw'); return; }
             if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) { e.preventDefault(); handleDelete(); return; }
+            if ((e.key === 'd' || e.key === 'D') && selectedId) { e.preventDefault(); handleDuplicate(); return; }
             if (e.key === 'Escape') { setMode('select'); setBoxes(prev => prev.map(b => ({ ...b, selected: false }))); dragRef.current = null; return; }
             if (e.ctrlKey || e.metaKey) {
                 if (e.key === 'z') { e.preventDefault(); handleUndo(); }
                 else if (e.key === 'y' || (e.shiftKey && e.key === 'z')) { e.preventDefault(); handleRedo(); }
+            }
+            // Up / Down arrows cycle through bboxes sorted top-to-bottom
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                const sorted = [...boxesRef.current].sort((a, b) => {
+                    const topA = Math.min(...a.points.map(p => p[1]));
+                    const topB = Math.min(...b.points.map(p => p[1]));
+                    return topA - topB;
+                });
+                if (sorted.length === 0) return;
+                const selIdx = sorted.findIndex(b => b.selected);
+                let nextIdx;
+                if (selIdx === -1) {
+                    nextIdx = e.key === 'ArrowDown' ? 0 : sorted.length - 1;
+                } else {
+                    nextIdx = e.key === 'ArrowDown' ? selIdx + 1 : selIdx - 1;
+                    nextIdx = Math.max(0, Math.min(sorted.length - 1, nextIdx));
+                }
+                const targetId = sorted[nextIdx].id;
+                setBoxes(prev => prev.map(b => ({ ...b, selected: b.id === targetId })));
+                return;
             }
             if (e.key === 'ArrowLeft') goToPage(currentIdx - 1);
             if (e.key === 'ArrowRight') goToPage(currentIdx + 1);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [selectedId, handleDelete, handleUndo, handleRedo, currentIdx, goToPage]);
+    }, [selectedId, handleDelete, handleDuplicate, handleUndo, handleRedo, currentIdx, goToPage]);
 
     // ─────────────────────────────────────────────────────────────────────
     // Fit view
@@ -563,11 +660,12 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
         const z = zoomRef.current;
         const selBox = boxes.find(b => b.selected);
         const cr = Math.max(4, HANDLE_RADIUS / z);
-        const rr = Math.max(5, (HANDLE_RADIUS + 2) / z);
 
         if (selBox) {
-            if (hitRotHandle(selBox.points, imgX, imgY, rr * 1.5)) { setCursor('grab'); return; }
-            if (hitCorner(selBox.points, imgX, imgY, cr * 1.5) !== -1) { setCursor('crosshair'); return; }
+            const rr = Math.max(5, (HANDLE_RADIUS + 2) / z);
+            const rotOffset = Math.max(8, 30 / z);
+            if (hitRotationHandle(selBox.points, imgX, imgY, rr * 1.8, rotOffset)) { setCursor('grab'); return; }
+            if (hitCorner(selBox.points, imgX, imgY, cr * 1.5) !== -1) { setCursor('nwse-resize'); return; }
         }
         const hit = [...boxes].reverse().find(b => pointInPolygon(imgX, imgY, b.points));
         setCursor(hit ? 'move' : 'default');
@@ -592,7 +690,12 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
     // Render
     // ─────────────────────────────────────────────────────────────────────
     return (
-        <div className="fixed inset-0 z-50 flex flex-col bg-gray-950" onContextMenu={e => e.preventDefault()}>
+        <div
+            ref={outerRef}
+            tabIndex={-1}
+            className="fixed inset-0 z-50 flex flex-col bg-gray-950 outline-none"
+            onContextMenu={e => e.preventDefault()}
+        >
 
             {/* ── TOOLBAR ────────────────────────────────────────────── */}
             <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 bg-gray-900 border-b border-gray-800">
@@ -628,12 +731,11 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                 <div className="flex items-center gap-3">
                     {selBox ? (
                         <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-gray-800 rounded-lg text-xs text-gray-300">
-                            <RotateCw size={11} className="text-blue-400" />
-                            <span className="text-gray-500 text-[10px]">Drag blue ● to rotate · Drag corners to reshape</span>
+                            <span className="text-gray-500 text-[10px]">Drag corners to resize · Drag body to move · Drag ○ to rotate</span>
                         </div>
                     ) : (
                         <div className="hidden md:flex items-center gap-1.5 px-3 py-1 bg-gray-800 rounded-lg text-xs text-gray-500">
-                            Click a box to select · drag its blue handle to rotate
+                            Click a box to select · drag to move or resize
                         </div>
                     )}
 
@@ -651,6 +753,12 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                         <button onClick={handleFit} title="Fit to view" className="p-1.5 text-gray-300 hover:text-white hover:bg-gray-700 rounded-md"><Maximize2 size={15} /></button>
                     </div>
 
+                    {selectedId && (
+                        <button onClick={handleDuplicate} title="Duplicate (D)"
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-900/50 hover:bg-blue-800/60 text-blue-400 hover:text-blue-300 text-xs font-semibold transition-colors">
+                            <Copy size={13} /> Dup
+                        </button>
+                    )}
                     {selectedId && (
                         <button onClick={handleDelete} title="Delete (Delete)"
                             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-900/50 hover:bg-red-800/60 text-red-400 hover:text-red-300 text-xs font-semibold transition-colors">
@@ -700,7 +808,7 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                 {mode === 'draw' && imageReady && (
                     <div className="absolute top-3 left-1/2 -translate-x-1/2 pointer-events-none">
                         <div className="px-3 py-1.5 bg-blue-600/90 text-white text-xs font-semibold rounded-full shadow-lg backdrop-blur-sm">
-                            Drag to draw · After drawing, drag the <span className="text-blue-200">blue ●</span> to rotate · Press N or Esc to exit
+                            Drag to draw a rectangle · Press N or Esc to exit
                         </div>
                     </div>
                 )}
@@ -711,10 +819,12 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                 <div className="flex items-center gap-4 text-[11px] text-gray-500">
                     <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">N</kbd> Add box</span>
                     <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">Del</kbd> Delete</span>
+                    <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">D</kbd> Duplicate</span>
+                    <span className="hidden md:inline"><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">○</kbd> Rotate</span>
                     <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">Ctrl+Z</kbd> Undo</span>
                     <span className="hidden sm:inline"><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">Ctrl+drag</kbd> Pan</span>
-                    <span className="hidden sm:inline text-blue-400">Blue ● = rotate box</span>
                     <span className="hidden sm:inline"><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">← →</kbd> Pages</span>
+                    <span className="hidden sm:inline"><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">↑ ↓</kbd> Boxes</span>
                 </div>
 
                 {pages.length > 1 && (
@@ -723,16 +833,22 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                             className={`p-1.5 rounded-lg ${currentIdx === 0 ? 'text-gray-700' : 'text-gray-300 hover:text-white hover:bg-gray-800'}`}>
                             <ChevronLeft size={18} />
                         </button>
-                        <div className="flex items-center gap-1">
-                            {pages.map((page, idx) => (
-                                <button key={page.pageNumber} onClick={() => goToPage(idx)} title={`Page ${page.pageNumber}`}
-                                    className={`relative w-7 h-7 rounded-lg text-xs font-semibold transition-all ${idx === currentIdx ? 'bg-orange-500 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
-                                    {page.pageNumber}
+                        <div className="flex items-center gap-1 overflow-x-auto max-w-xs scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                            {pages.map((page, idx) => {
+                                const pageBoxCount = idx === currentIdx
+                                    ? boxes.length
+                                    : (pageBoxesRef.current[page.pageNumber]?.length ?? 0);
+                                return (
+                                <button key={page.pageNumber} onClick={() => goToPage(idx)} title={`Page ${page.pageNumber} — ${pageBoxCount} boxes`}
+                                    className={`relative shrink-0 min-w-[2rem] px-1.5 py-1 rounded-lg transition-all flex flex-col items-center leading-none ${idx === currentIdx ? 'bg-orange-500 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
+                                    <span className="text-xs font-semibold">{shortPageLabel(page.pageNumber)}</span>
+                                    <span className="text-[9px] opacity-70">{pageBoxCount}</span>
                                     {modifiedPages.has(page.pageNumber) && (
                                         <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-amber-400 rounded-full border border-gray-900" />
                                     )}
                                 </button>
-                            ))}
+                                );
+                            })}
                         </div>
                         <button onClick={() => goToPage(currentIdx + 1)} disabled={currentIdx === pages.length - 1}
                             className={`p-1.5 rounded-lg ${currentIdx === pages.length - 1 ? 'text-gray-700' : 'text-gray-300 hover:text-white hover:bg-gray-800'}`}>
