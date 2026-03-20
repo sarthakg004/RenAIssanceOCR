@@ -3,7 +3,9 @@ Dataset Generation API Router — transcript parsing + dataset export endpoints.
 """
 
 import base64
+import re
 import traceback
+import urllib.parse
 from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -179,11 +181,19 @@ async def export_dataset(request: DatasetExportRequest):
         )
 
         filename = f"{request.book_name}_dataset.zip"
+        # Sanitize filename for Content-Disposition header (latin-1 safe)
+        ascii_filename = re.sub(r'[^\x20-\x7E]', '_', filename)
+        # RFC 5987 UTF-8 encoded filename for clients that support it
+        utf8_filename = urllib.parse.quote(filename)
+        content_disp = (
+            f'attachment; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{utf8_filename}"
+        )
 
         return StreamingResponse(
             zip_buffer,
             media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": content_disp},
         )
     except Exception as e:
         traceback.print_exc()

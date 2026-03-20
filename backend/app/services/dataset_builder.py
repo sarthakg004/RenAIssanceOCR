@@ -203,13 +203,14 @@ def build_dataset_zip(
             # Release page image memory
             del img, nparr, img_bytes
 
-        # Write simple global labels file
+        # Write simple global labels file (UTF-8 with BOM for broad compatibility)
         csv_buf = io.StringIO()
         writer = csv.writer(csv_buf)
         writer.writerow(["image", "text"])
         for path, text in csv_rows:
             writer.writerow([path, text])
-        zf.writestr(f"{book_name}/labels.csv", csv_buf.getvalue())
+        csv_bytes = b'\xef\xbb\xbf' + csv_buf.getvalue().encode('utf-8')
+        zf.writestr(f"{book_name}/labels.csv", csv_bytes)
 
     buf.seek(0)
     return buf
