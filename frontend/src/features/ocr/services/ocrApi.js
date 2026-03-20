@@ -316,3 +316,76 @@ export async function checkBackendHealth() {
         return false;
     }
 }
+
+// ============================================
+// CRNN Local Recognition
+// ============================================
+
+export async function getLocalRecognitionModels() {
+    const response = await fetch(`${API_BASE}/local-recognition-models`);
+    if (!response.ok) {
+        throw new Error('Failed to fetch local recognition models');
+    }
+    return response.json();
+}
+
+export async function runLocalRecognition(imageData, boxes, modelId) {
+    const response = await fetch(`${API_BASE}/local-recognize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            image_data: imageData,
+            boxes: boxes,
+            model_id: modelId,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        return {
+            success: false,
+            error: errorData.detail || `Local recognition failed (${response.status})`,
+        };
+    }
+
+    const data = await response.json();
+    return {
+        success: true,
+        results: data.results,
+        processing_time_ms: data.processing_time_ms,
+        model_used: data.model_used,
+        model_type: data.model_type,
+        device: data.device,
+    };
+}
+
+export async function getCRNNModels() {
+    const data = await getLocalRecognitionModels();
+    return {
+        models: (data.models || []).filter((m) => m.model_type === 'crnn'),
+    };
+}
+
+export async function runCRNNRecognition(imageData, boxes, modelId) {
+    const normalizedModelId = modelId.startsWith('crnn:') ? modelId : `crnn:${modelId}`;
+    const data = await runLocalRecognition(imageData, boxes, normalizedModelId);
+    return data;
+}
+
+// ── Local export helpers (no backend needed) ──
+
+export function exportCRNNResultsAsText(resultsByPage) {
+    const lines = [];
+    for (const [pageLabel, texts] of Object.entries(resultsByPage)) {
+        lines.push(`── Page ${pageLabel} ──`);
+        texts.forEach((t) => lines.push(t));
+        lines.push('');
+    }
+    return new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+}
+
+export function exportCRNNResultsAsJSON(resultsByPage) {
+    return new Blob([JSON.stringify(resultsByPage, null, 2)], {
+        type: 'application/json;charset=utf-8',
+    });
+}

@@ -26,6 +26,13 @@ import {
 } from 'lucide-react';
 import ResizablePanels from './ocr/ResizablePanels';
 import BBoxEditor from './BBoxEditor';
+import {
+    getLocalRecognitionModels,
+    runLocalRecognition,
+    exportCRNNResultsAsText,
+    exportCRNNResultsAsJSON,
+    downloadBlob,
+} from '../features/ocr/services/ocrApi';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -159,7 +166,6 @@ export default function LayoutAwareDetectionPage({
     onBack,
     datasetMode = false,
     onDatasetNext,
-    onNext = null,
     // Persistence props — restored when navigating back from export
     initialDetectedPages = {},
     initialAlignmentByPage = {},
@@ -196,6 +202,20 @@ export default function LayoutAwareDetectionPage({
     // ── Alignment state (dataset mode) ─────────────────────
     const [alignmentByPage, setAlignmentByPage] = useState(() => initialAlignmentByPage);
 
+    // ── Local OCR state (OCR mode) ─────────────────────────
+    const [localModels, setLocalModels] = useState([]);
+    const [localModelsLoading, setLocalModelsLoading] = useState(false);
+    const [localModelsError, setLocalModelsError] = useState(null);
+    const [selectedOcrModel, setSelectedOcrModel] = useState('');
+    const [recognizedByPage, setRecognizedByPage] = useState({});
+    const [ocrProcessing, setOcrProcessing] = useState(false);
+    const [ocrProcessingAll, setOcrProcessingAll] = useState(false);
+    const [ocrProgress, setOcrProgress] = useState(null);
+    const cancelOcrRef = useRef(false);
+    const [ocrDevice, setOcrDevice] = useState(null);
+    const [ocrTimeMs, setOcrTimeMs] = useState(null);
+    const [ocrError, setOcrError] = useState(null);
+
     // ── Hover state for bidirectional highlight ─────────────
     const [hoveredBoxIndex, setHoveredBoxIndex] = useState(null);
     const [hoveredLineIndex, setHoveredLineIndex] = useState(null);
@@ -221,6 +241,16 @@ export default function LayoutAwareDetectionPage({
     const transcriptKeyForCurrentPage = resolveTranscriptKey(transcript, currentPageNum);
 
     const currentAlignmentRows = alignmentByPage[currentPageNum] || [];
+    const currentRecognition = recognizedByPage[currentPageNum] || [];
+    const recognizedCount = Object.keys(recognizedByPage).length;
+
+    const currentRecognitionByIndex = useMemo(() => {
+        const map = {};
+        currentRecognition.forEach((item) => {
+            map[item.box_index] = item.text || '';
+        });
+        return map;
+    }, [currentRecognition]);
 
     // Sort detected boxes top → bottom using the midpoint-Y of the top edge.
     // For rotated boxes the top edge midpoint is more stable than the single min-Y corner.
@@ -245,6 +275,136 @@ export default function LayoutAwareDetectionPage({
     }, [pages, processedImages]);
 
     const currentImageUrl = getImageUrl(currentPageNum);
+
+    const toDataUrl = useCallback(async (url) => {
+        if (!url) return null;
+        if (url.startsWith('data:')) return url;
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Failed converting image to base64'));
+            reader.readAsDataURL(blob);
+        });
+    }, []);
+
+    useEffect(() => {
+        if (datasetMode) return;
+        let cancelled = false;
+        async function loadLocalModels() {
+            setLocalModelsLoading(true);
+            setLocalModelsError(null);
+            try {
+                const data = await getLocalRecognitionModels();
+                const models = data.models || [];
+                if (cancelled) return;
+                setLocalModels(models);
+                if (models.length > 0) {
+                    const preferred = models.find((m) => m.model_type === 'crnn') || models[0];
+                    setSelectedOcrModel((prev) => prev || preferred.id);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setLocalModelsError(err.message || 'Failed loading local models');
+                }
+            } finally {
+                if (!cancelled) {
+                    setLocalModelsLoading(false);
+                }
+            }
+        }
+        loadLocalModels();
+        return () => {
+            cancelled = true;
+        };
+    }, [datasetMode]);
+
+    const runOcrForPage = useCallback(async (pageNum) => {
+        const imageUrl = getImageUrl(pageNum);
+        const boxes = detectedPages[pageNum] || [];
+        if (!imageUrl || boxes.length === 0 || !selectedOcrModel) return null;
+        const imageData = await toDataUrl(imageUrl);
+        return runLocalRecognition(imageData, boxes, selectedOcrModel);
+    }, [detectedPages, getImageUrl, selectedOcrModel, toDataUrl]);
+
+    const handleRecognizeCurrentPage = useCallback(async () => {
+        if (datasetMode || ocrProcessing || ocrProcessingAll) return;
+        if (!selectedOcrModel || !isCurrentDetected) return;
+
+        setOcrProcessing(true);
+        setOcrError(null);
+        try {
+            const result = await runOcrForPage(currentPageNum);
+            if (!result) {
+                setOcrError('No detected boxes available for this page.');
+                return;
+            }
+            if (!result.success) {
+                setOcrError(result.error || 'Recognition failed');
+                return;
+            }
+
+            setRecognizedByPage((prev) => ({ ...prev, [currentPageNum]: result.results || [] }));
+            setOcrDevice(result.device || null);
+            setOcrTimeMs(result.processing_time_ms ?? null);
+        } catch (err) {
+            setOcrError(err.message || 'Recognition failed');
+        } finally {
+            setOcrProcessing(false);
+        }
+    }, [currentPageNum, datasetMode, isCurrentDetected, ocrProcessing, ocrProcessingAll, runOcrForPage, selectedOcrModel]);
+
+    const handleRecognizeAllPages = useCallback(async () => {
+        if (datasetMode || ocrProcessingAll || ocrProcessing) return;
+        if (!selectedOcrModel) return;
+
+        setOcrProcessingAll(true);
+        setOcrError(null);
+        cancelOcrRef.current = false;
+
+        try {
+            for (let i = 0; i < availablePages.length; i++) {
+                if (cancelOcrRef.current) break;
+                const pageNum = availablePages[i];
+                if (!(pageNum in detectedPages)) continue;
+
+                setOcrProgress({ current: i + 1, total: availablePages.length });
+                const result = await runOcrForPage(pageNum);
+                if (!result) continue;
+                if (!result.success) {
+                    setOcrError(`Page ${pageNum}: ${result.error || 'Recognition failed'}`);
+                    break;
+                }
+
+                setRecognizedByPage((prev) => ({ ...prev, [pageNum]: result.results || [] }));
+                setOcrDevice(result.device || null);
+                await new Promise((resolve) => setTimeout(resolve, 100));
+            }
+        } catch (err) {
+            setOcrError(err.message || 'Batch recognition failed');
+        } finally {
+            setOcrProcessingAll(false);
+            setOcrProgress(null);
+        }
+    }, [availablePages, datasetMode, detectedPages, ocrProcessing, ocrProcessingAll, runOcrForPage, selectedOcrModel]);
+
+    const updateRecognizedText = useCallback((lineIndex, value) => {
+        const boxIndex = sortedBoxIndices[lineIndex];
+        if (boxIndex === undefined) return;
+
+        setRecognizedByPage((prev) => {
+            const existing = prev[currentPageNum] || [];
+            const next = [...existing];
+            const foundIndex = next.findIndex((r) => r.box_index === boxIndex);
+            if (foundIndex >= 0) {
+                next[foundIndex] = { ...next[foundIndex], text: value };
+            } else {
+                next.push({ box_index: boxIndex, text: value });
+            }
+            return { ...prev, [currentPageNum]: next };
+        });
+    }, [currentPageNum, sortedBoxIndices]);
 
     useEffect(() => {
         if (!isCurrentDetected) return;
@@ -1158,111 +1318,217 @@ export default function LayoutAwareDetectionPage({
 
 
     // ════════════════════════════════════════════════════════
-    // OCR RIGHT PANEL — model picker shown in OCR mode
+    // OCR RIGHT PANEL — local model selection + transcript generation
     // ════════════════════════════════════════════════════════
     const ocrRightPanel = (
         <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
-            {/* Header */}
             <div className="px-3 py-2.5 bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/50 border-b border-gray-100/80 shrink-0 flex items-center gap-2">
                 <div className="p-1 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg text-white">
                     <Sparkles size={12} />
                 </div>
-                <h3 className="font-bold text-gray-800 text-sm">Perform OCR</h3>
+                <h3 className="font-bold text-gray-800 text-sm">Step 4 — Local OCR</h3>
             </div>
 
-            {/* Scrollable body */}
-            <div className="flex-1 overflow-y-auto min-h-0 p-3 space-y-4">
+            <div className="px-3 py-2 border-b border-gray-100 shrink-0 flex items-center justify-between text-xs text-gray-500">
+                <span>Detected: {isCurrentDetected ? `${currentLines.length} boxes` : 'Pending'}</span>
+                <span>Recognized: {currentRecognition.length} lines</span>
+            </div>
 
-                {/* ── Local Model ─────────────────────────────── */}
-                <div>
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-1.5">
-                            <Cpu size={12} className="text-gray-500" />
-                            <p className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Local Model</p>
+            <div className="flex-1 overflow-y-auto min-h-0 p-3 space-y-3 bg-gradient-to-br from-gray-50/50 to-gray-100/20">
+                <div className="space-y-2">
+                    <label className="text-[11px] font-bold text-gray-600 uppercase tracking-wider flex items-center gap-1.5">
+                        <Cpu size={12} className="text-gray-500" />
+                        OCR Model
+                    </label>
+
+                    {localModelsLoading ? (
+                        <div className="text-xs text-gray-500 flex items-center gap-1.5">
+                            <Loader2 size={12} className="animate-spin" /> Loading local models...
                         </div>
-                        <span className="text-[9px] px-1.5 py-0.5 bg-amber-100 text-amber-600 font-bold rounded-full border border-amber-200">Coming Soon</span>
-                    </div>
+                    ) : localModelsError ? (
+                        <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+                            {localModelsError}
+                        </div>
+                    ) : localModels.length === 0 ? (
+                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                            No local weights found in backend/models/weights.
+                        </div>
+                    ) : (
+                        <div className="relative">
+                            <select
+                                value={selectedOcrModel}
+                                onChange={(e) => setSelectedOcrModel(e.target.value)}
+                                disabled={ocrProcessing || ocrProcessingAll}
+                                className="w-full appearance-none px-2.5 py-2 bg-white rounded-lg text-xs text-gray-700 font-medium border border-gray-200 focus:border-blue-400 focus:ring-1 focus:ring-blue-200 outline-none pr-7"
+                            >
+                                {localModels.map((model) => (
+                                    <option key={model.id} value={model.id}>
+                                        {model.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        </div>
+                    )}
 
-                    <div className="relative">
-                        <select
-                            disabled
-                            className="w-full appearance-none px-2.5 py-2 bg-gray-100 rounded-lg text-xs text-gray-400 font-medium border border-gray-200 outline-none pr-7 cursor-not-allowed"
-                        >
-                            <option>Select a local model…</option>
-                            <option>PaddleOCR v5 (CPU / GPU)</option>
-                            <option>Tesseract 5</option>
-                            <option>EasyOCR</option>
-                        </select>
-                        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 pointer-events-none" />
-                    </div>
-                    <p className="text-[10px] text-gray-400 mt-1.5 leading-relaxed">
-                        Local models run fully offline with no API key. Integration is in progress — check back soon.
-                    </p>
+                    {ocrDevice && (
+                        <p className="text-[10px] text-gray-500">Last run device: {ocrDevice.toUpperCase()}</p>
+                    )}
                 </div>
 
+                <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                        onClick={handleRecognizeCurrentPage}
+                        disabled={!isCurrentDetected || !selectedOcrModel || ocrProcessing || ocrProcessingAll}
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-white transition-all duration-200 disabled:bg-gray-300 disabled:cursor-not-allowed bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
+                    >
+                        {ocrProcessing ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+                        Run Page
+                    </button>
+
+                    <button
+                        onClick={handleRecognizeAllPages}
+                        disabled={!selectedOcrModel || ocrProcessing || ocrProcessingAll || detectedCount === 0}
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all duration-200 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed bg-gradient-to-r from-cyan-500 to-teal-600 text-white hover:from-cyan-600 hover:to-teal-700"
+                    >
+                        {ocrProcessingAll ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+                        All Pages
+                    </button>
+                </div>
+
+                {ocrProcessingAll && ocrProgress && (
+                    <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-2 py-1.5 flex items-center justify-between">
+                        <span>Recognizing {ocrProgress.current}/{ocrProgress.total}</span>
+                        <button
+                            onClick={() => { cancelOcrRef.current = true; }}
+                            className="px-1.5 py-0.5 rounded bg-red-100 text-red-600 text-[10px] font-bold"
+                        >
+                            Stop
+                        </button>
+                    </div>
+                )}
+
+                {ocrTimeMs !== null && !ocrProcessing && (
+                    <div className="text-[11px] text-gray-500">Last recognition time: {(ocrTimeMs / 1000).toFixed(2)}s</div>
+                )}
+
+                {ocrError && (
+                    <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+                        {ocrError}
+                    </div>
+                )}
+
+                {!isCurrentDetected && (
+                    <div className="text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2">
+                        Detect this page first, then run OCR with your selected model.
+                    </div>
+                )}
+
+                {isCurrentDetected && sortedBoxIndices.length > 0 && (
+                    <div className="space-y-1.5">
+                        {sortedBoxIndices.map((boxIndex, lineIndex) => (
+                            <div key={`${currentPageNum}-${boxIndex}`} className="bg-white border border-gray-200 rounded-lg p-2 space-y-1">
+                                <div className="text-[11px] text-gray-500 font-semibold">Line {lineIndex + 1}</div>
+                                <textarea
+                                    value={currentRecognitionByIndex[boxIndex] || ''}
+                                    onChange={(e) => updateRecognizedText(lineIndex, e.target.value)}
+                                    rows={2}
+                                    className="w-full px-2 py-1.5 bg-white border border-gray-200 rounded text-xs text-gray-700 resize-y focus:outline-none focus:ring-1 focus:ring-blue-200 focus:border-blue-400"
+                                />
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
-            {/* ── Export footer — always visible ───────────────── */}
             <div className="shrink-0 border-t border-gray-100 p-3 bg-gradient-to-r from-gray-50/80 to-white space-y-2">
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
                     <Download size={11} /> Export Transcript
                 </p>
                 <div className="grid grid-cols-3 gap-1.5">
                     <button
-                        disabled={detectedCount === 0}
+                        disabled={recognizedCount === 0}
                         onClick={() => {
-                            const lines = availablePages.flatMap(p => detectedPages[p] || []);
-                            const txt = lines.map((poly, i) => `Line ${i + 1}`).join('\n');
-                            const blob = new Blob([txt], { type: 'text/plain' });
-                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-                            a.download = 'transcript.txt'; a.click();
+                            const resultsByPage = {};
+                            availablePages.forEach((p) => {
+                                const boxes = detectedPages[p] || [];
+                                if (boxes.length === 0) return;
+                                const indices = boxes
+                                    .map((poly, idx) => {
+                                        const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                                        return { idx, y: (byY[0][1] + byY[1][1]) / 2 };
+                                    })
+                                    .sort((a, b) => a.y - b.y)
+                                    .map((item) => item.idx);
+                                const byIndex = {};
+                                (recognizedByPage[p] || []).forEach((r) => {
+                                    byIndex[r.box_index] = r.text || '';
+                                });
+                                resultsByPage[p] = indices.map((idx) => byIndex[idx] || '');
+                            });
+                            const blob = exportCRNNResultsAsText(resultsByPage);
+                            downloadBlob(blob, `layout_aware_transcript_${new Date().toISOString().slice(0, 10)}.txt`);
                         }}
-                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all
-                            disabled:opacity-40 disabled:cursor-not-allowed
-                            bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-white border-gray-200 text-gray-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
                     >
                         <FileTextIcon size={15} />
                         TXT
                     </button>
                     <button
-                        disabled={detectedCount === 0}
+                        disabled={recognizedCount === 0}
                         onClick={() => {
-                            const data = {};
-                            availablePages.forEach(p => { if (detectedPages[p]) data[p] = detectedPages[p]; });
-                            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-                            a.download = 'boxes.json'; a.click();
+                            const resultsByPage = {};
+                            availablePages.forEach((p) => {
+                                if (!(p in recognizedByPage)) return;
+                                const byIndex = {};
+                                (recognizedByPage[p] || []).forEach((r) => { byIndex[r.box_index] = r.text || ''; });
+                                const sorted = (detectedPages[p] || [])
+                                    .map((poly, idx) => {
+                                        const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                                        return { idx, y: (byY[0][1] + byY[1][1]) / 2 };
+                                    })
+                                    .sort((a, b) => a.y - b.y)
+                                    .map((item) => byIndex[item.idx] || '');
+                                resultsByPage[p] = sorted;
+                            });
+                            const blob = exportCRNNResultsAsJSON(resultsByPage);
+                            downloadBlob(blob, `layout_aware_transcript_${new Date().toISOString().slice(0, 10)}.json`);
                         }}
-                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all
-                            disabled:opacity-40 disabled:cursor-not-allowed
-                            bg-white border-gray-200 text-gray-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-white border-gray-200 text-gray-600 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700"
                     >
                         <FileJson size={15} />
                         JSON
                     </button>
                     <button
-                        disabled={detectedCount === 0}
+                        disabled={recognizedCount === 0}
                         onClick={() => {
-                            const rows = ['page,line_index,x1,y1,x2,y2,x3,y3,x4,y4'];
-                            availablePages.forEach(p => {
-                                (detectedPages[p] || []).forEach((poly, i) => {
-                                    rows.push([p, i, ...poly.flat()].join(','));
+                            const rows = ['page,line_index,text'];
+                            availablePages.forEach((p) => {
+                                const byIndex = {};
+                                (recognizedByPage[p] || []).forEach((r) => { byIndex[r.box_index] = r.text || ''; });
+                                const sorted = (detectedPages[p] || [])
+                                    .map((poly, idx) => {
+                                        const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                                        return { idx, y: (byY[0][1] + byY[1][1]) / 2 };
+                                    })
+                                    .sort((a, b) => a.y - b.y)
+                                    .map((item) => byIndex[item.idx] || '');
+                                sorted.forEach((text, i) => {
+                                    const escaped = `"${String(text).replace(/"/g, '""')}"`;
+                                    rows.push(`${p},${i + 1},${escaped}`);
                                 });
                             });
-                            const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-                            const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-                            a.download = 'boxes.csv'; a.click();
+                            const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+                            downloadBlob(blob, `layout_aware_transcript_${new Date().toISOString().slice(0, 10)}.csv`);
                         }}
-                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all
-                            disabled:opacity-40 disabled:cursor-not-allowed
-                            bg-white border-gray-200 text-gray-600 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 disabled:hover:bg-white disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-white border-gray-200 text-gray-600 hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700"
                     >
                         <FileType size={15} />
                         CSV
                     </button>
                 </div>
-                {detectedCount === 0 && (
-                    <p className="text-[10px] text-gray-400 text-center">Detect at least one page to export.</p>
+                {recognizedCount === 0 && (
+                    <p className="text-[10px] text-gray-400 text-center">Run OCR on at least one page to export transcripts.</p>
                 )}
             </div>
         </div>
@@ -1338,18 +1604,6 @@ export default function LayoutAwareDetectionPage({
                     </div>
                 )}
 
-                {/* OCR mode: Continue to Perform OCR button */}
-                {!datasetMode && detectedCount > 0 && onNext && (
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                        <button
-                            onClick={onNext}
-                            className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-sm font-bold rounded-lg shadow-md hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
-                        >
-                            Continue to OCR
-                            <ChevronRight size={16} />
-                        </button>
-                    </div>
-                )}
             </header>
 
             {/* Main 3-column layout */}

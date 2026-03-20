@@ -35,6 +35,8 @@ function App() {
   // Cache detection + alignment state so it survives step 4 ↔ 5 navigation
   const [detectionCache, setDetectionCache] = useState({ pages: {}, alignment: {} });
 
+  const [ocrDetectionCache, setOcrDetectionCache] = useState({ pages: {}, alignment: {} });
+
   // PDF preview hook
   const {
     pages,
@@ -141,6 +143,7 @@ function App() {
     setAllPagesBoxes({});
     setAlignedTranscriptByPage({});
     setIsProcessingBook(false);
+    setOcrDetectionCache({ pages: {}, alignment: {} });
     resetPdfPreview();
   }, [resetPdfPreview]);
 
@@ -320,10 +323,10 @@ function App() {
             selectedPages={selectedPages}
             processedImages={processedImages}
             onBack={() => goToStep(4)}
-            onNext={() => {
-              setDetectionMethod('layout-aware');
-              setDetectionProvider('paddleocr');
-              goToStep(5);
+            initialDetectedPages={ocrDetectionCache.pages}
+            initialAlignmentByPage={ocrDetectionCache.alignment}
+            onStateChange={(cache) => {
+              setOcrDetectionCache(cache);
             }}
           />
         </div>

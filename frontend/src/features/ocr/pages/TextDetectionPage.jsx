@@ -76,7 +76,9 @@ export default function TextDetectionPage({
                     onClick={handleContinue}
                     className="btn-primary"
                 >
-                    {selectedMethod === 'layout-aware' ? 'Start Detection' : 'Continue to OCR'}
+                    {selectedMethod === 'layout-aware'
+                        ? 'Start Detection'
+                        : 'Continue to OCR'}
                     <ArrowRight className="w-5 h-5" />
                 </button>
             </div>
