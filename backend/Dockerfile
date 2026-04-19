@@ -72,6 +72,15 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
         paddlepaddle-gpu==3.3.0
 
+# Slim the venv before copying it into the runtime stage: strip all
+# __pycache__ dirs and *.pyc/*.pyo files. Python will regenerate them
+# lazily on first import — worth it because the builder-time bytecode
+# for torch + paddle + transformers alone is several hundred MB of
+# dead weight in the shipped image. We intentionally keep pip and
+# setuptools installed; paddlex introspects pkg_resources at runtime.
+RUN find /opt/venv -type d -name '__pycache__' -prune -exec rm -rf {} + && \
+    find /opt/venv -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
 
 ############################
 # Stage 2 — CUDA runtime
@@ -114,30 +123,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # — no ABI mismatch possible.
 COPY --from=builder /opt/venv /opt/venv
 
-# Create the model-cache directory.
-# At runtime this is shadowed by a named Docker volume so downloaded models
-# persist across container restarts (lazy-loaded on first use).
+# Create non-root user and the model-cache directory up front so that the
+# subsequent COPY --chown writes into correct ownership in a single layer
+# (avoids a recursive chown over /app afterwards).
 #
-# NOTE: we used to pre-download PaddleOCR weights here, but the named volume
-# mounted at /paddle_models shadows this path at runtime, so the baked-in
-# models were discarded anyway — bloating the image by ~1.5 GB for nothing.
-# Lazy first-run download is the correct pattern; the named volume preserves
-# weights across restarts.
-RUN mkdir -p /paddle_models
+# At runtime /paddle_models is shadowed by a named Docker volume so
+# downloaded models persist across container restarts (lazy-loaded on
+# first use). We used to pre-download PaddleOCR weights here, but the
+# named volume mounted at /paddle_models shadows this path at runtime,
+# so the baked-in models were discarded anyway — bloating the image by
+# ~1.5 GB for nothing. Lazy first-run download is the correct pattern.
+RUN groupadd --system appgroup && \
+    useradd --system --gid appgroup --home /home/appuser appuser && \
+    mkdir -p /home/appuser /paddle_models && \
+    chown appuser:appgroup /home/appuser /paddle_models
 
 ############################
 # App setup
 ############################
 WORKDIR /app
-COPY . .
-
-# Non-root user for security.
-# Give ownership of /paddle_models so the venv user can write model files
-# when the named Docker volume is mounted at runtime.
-RUN groupadd --system appgroup && \
-    useradd --system --gid appgroup --home /home/appuser appuser && \
-    mkdir -p /home/appuser && \
-    chown -R appuser:appgroup /app /home/appuser /paddle_models
+COPY --chown=appuser:appgroup . .
 
 USER appuser
 
