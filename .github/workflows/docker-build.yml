@@ -89,16 +89,16 @@ jobs:
       # of truth — update the folder there and rebuild to ship new weights.
       - name: Fetch recognition-model weights from Google Drive
         run: |
+          # gdown 6.x dropped --remaining-ok; its folder downloader is also
+          # capped at 50 files per folder (ours has 2 subfolders, so fine).
           python3 -m pip install --quiet --upgrade 'gdown>=5.2.0'
           mkdir -p backend/models/weights
-          # --remaining-ok lets gdown skip files it has already fetched.
           # Retry twice on transient 429/5xx — Drive occasionally throttles
           # anonymous public downloads.
           for attempt in 1 2 3; do
             if gdown --folder \
                 "https://drive.google.com/drive/folders/${WEIGHTS_DRIVE_FOLDER_ID}" \
-                -O backend/models/weights \
-                --remaining-ok; then
+                -O backend/models/weights; then
               break
             fi
             echo "gdown attempt $attempt failed — retrying in 10s…"
