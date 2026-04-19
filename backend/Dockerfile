@@ -54,17 +54,23 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /build
 COPY requirements.txt .
 
-# Install all Python dependencies into the venv.
-# --extra-index-url adds the PaddlePaddle cu126 index so pip can find
-# paddlepaddle-gpu (not published on PyPI).
-# BuildKit cache mount keeps ~/.cache/pip warm across builds so rebuilds after
-# a requirements.txt edit don't re-download multi-GB PyTorch/Paddle wheels.
-# Enable with:  DOCKER_BUILDKIT=1 docker build ...  (default in modern Docker).
+# Install Python dependencies in two steps to sidestep a hard conflict
+# between torch and paddlepaddle-gpu over their nvidia-*-cu12 pins (torch
+# pins one set of CUDA user-space libs, paddle pins another; pip's resolver
+# cannot satisfy both simultaneously). Both wheels bundle their own CUDA
+# libs internally, so the duplicate site-packages nvidia-* entries are not
+# needed at runtime — installing paddle with --no-deps avoids the conflict.
+#
+# BuildKit cache mount keeps ~/.cache/pip warm across builds so rebuilds
+# after a requirements.txt edit don't re-download multi-GB PyTorch/Paddle
+# wheels. Enable with:  DOCKER_BUILDKIT=1 docker build ...  (default in
+# modern Docker).
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
-    pip install \
+    pip install -r requirements.txt && \
+    pip install --no-deps \
         --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
-        -r requirements.txt
+        paddlepaddle-gpu==3.3.0
 
 
 ############################

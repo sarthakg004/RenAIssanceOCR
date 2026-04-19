@@ -31,12 +31,14 @@ numpy==1.24.4
 python-dotenv==1.0.1
 psutil==6.1.0
 
+# --- paddlepaddle-gpu runtime deps (installed with --no-deps in Dockerfile) ---
+# These are the non-CUDA runtime deps that paddle 3.3.0 would normally pull
+# transitively. Torch/FastAPI/pydantic already bring filelock, typing_extensions,
+# networkx, numpy, Pillow, protobuf, httpx — the only one missing is opt_einsum.
+opt_einsum==3.3.0
+
 # --- Local recognition models (CRNN / TrOCR) ---
-# torch must pin nvidia-cuda-*==12.6.x to co-install with paddlepaddle-gpu
-# 3.3.0 (which hard-pins nvidia-cuda-nvrtc-cu12==12.6.77). torch 2.5.1
-# pinned the 12.4 line and is resolution-incompatible; torch 2.7.1 pins
-# the matching 12.6.77 set, so both packages share one CUDA runtime.
-torch==2.7.1
+torch==2.5.1
 transformers==4.46.3
 # safetensors must be >=0.6.0 to satisfy paddlepaddle-gpu==3.3.0;
 # transformers 4.46.3 only requires >=0.4.1, so 0.6.x works for both.
@@ -46,7 +48,14 @@ safetensors==0.6.2
 PyMuPDF==1.25.1
 
 # --- Layout-aware GPU detection ---
-# Requires: NVIDIA driver >= 560 (CUDA 12.6) on host, --gpus all on docker run
-# Installed from the PaddlePaddle cu126 index via Dockerfile --extra-index-url.
-paddlepaddle-gpu==3.3.0
+# Requires: NVIDIA driver >= 560 (CUDA 12.6) on host, --gpus all on docker run.
+#
+# NOTE: paddlepaddle-gpu is NOT listed here — it is installed as a separate
+# --no-deps step in the Dockerfile. Reason: paddlepaddle-gpu==3.3.0 hard-pins
+# nvidia-nccl-cu12==2.25.1 (among several other nvidia-*-cu12 ==X.Y.Z pins)
+# while no torch release on PyPI pins that exact nccl. Letting pip resolve
+# both packages together is impossible under the modern resolver. Both
+# frameworks bundle their own CUDA user-space libraries under torch/lib/
+# and paddle.libs/ respectively, so the nvidia-*-cu12 site-packages copies
+# are redundant at runtime — installing paddle with --no-deps is safe.
 paddleocr==3.0.0
