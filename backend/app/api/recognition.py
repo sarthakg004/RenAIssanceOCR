@@ -29,10 +29,23 @@ from ..services.recognition.trocr_inference import (
 router = APIRouter()
 
 # ── Where to scan for trained models ─────────────────────────────────
-# Resolve relative to the repository root.
+# Two supported layouts:
+#   • Dev (uvicorn from repo root): <repo>/backend/models/weights/
+#   • Docker image (WORKDIR=/app, backend context copied to /app):
+#                                   /app/models/weights/
+# We pick whichever exists so the same code works in both.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", ".."))
-_MODEL_SEARCH_DIR = os.path.join(_PROJECT_ROOT, "backend", "models", "weights")
+_BACKEND_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", ".."))
+_REPO_ROOT = os.path.abspath(os.path.join(_BACKEND_ROOT, ".."))
+
+_CANDIDATE_DIRS = [
+    os.path.join(_BACKEND_ROOT, "models", "weights"),              # container layout
+    os.path.join(_REPO_ROOT, "backend", "models", "weights"),      # dev layout
+]
+_MODEL_SEARCH_DIR = next(
+    (p for p in _CANDIDATE_DIRS if os.path.isdir(p)),
+    _CANDIDATE_DIRS[0],
+)
 
 # Cache discovered models so we don't rescan on every request
 _model_cache: list[dict] | None = None
