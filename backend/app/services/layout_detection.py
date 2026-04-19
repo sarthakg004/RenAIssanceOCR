@@ -79,6 +79,104 @@ MIN_GPU_VRAM_GB  = 8.0   # Minimum GPU VRAM recommended for server models
 MIN_RAM_GB       = 8.0   # Minimum system RAM recommended for CPU mode
 LOW_RAM_GB       = 4.0   # RAM below this value is considered critically low
 
+# ---- tier selection thresholds (env-overridable) ----
+# Below these free-VRAM values, the tier falls through to the next level:
+#   >= SERVER_MIN_VRAM_GB → server models on GPU
+#   >= MOBILE_MIN_VRAM_GB → mobile models on GPU
+#   otherwise             → CPU (server if RAM >= CPU_SERVER_MIN_RAM_GB, else mobile)
+TIER_SERVER_MIN_VRAM_GB = float(os.environ.get("TIER_SERVER_MIN_VRAM_GB", 6.0))
+TIER_MOBILE_MIN_VRAM_GB = float(os.environ.get("TIER_MOBILE_MIN_VRAM_GB", 2.0))
+TIER_CPU_SERVER_MIN_RAM_GB = float(os.environ.get("TIER_CPU_SERVER_MIN_RAM_GB", 8.0))
+
+SERVER_MODELS = {
+    "layout": "PP-DocLayout_plus-L",
+    "det":    "PP-OCRv5_server_det",
+    "rec":    "PP-OCRv5_server_rec",
+}
+MOBILE_MODELS = {
+    "layout": "PP-DocLayout-S",
+    "det":    "PP-OCRv5_mobile_det",
+    "rec":    "PP-OCRv5_mobile_rec",
+}
+
+
+def select_tier(use_gpu: bool) -> Dict[str, Any]:
+    """
+    Pick device + model tier based on currently-free VRAM and RAM.
+
+    Returns a dict with:
+      device       : "gpu" | "cpu"
+      tier         : "server" | "mobile"
+      layout_model : str
+      det_model    : str
+      rec_model    : str
+      reason       : str  — human-readable explanation
+      free_vram_gb : float
+      free_ram_gb  : float
+    """
+    _ensure_paddle()
+    info = check_system_resources(use_gpu)
+    free_vram = info["gpu_vram_free_gb"]
+    free_ram  = info["available_ram_gb"]
+
+    if use_gpu and info["gpu_available"]:
+        if free_vram >= TIER_SERVER_MIN_VRAM_GB:
+            return {
+                "device": "gpu", "tier": "server",
+                "layout_model": SERVER_MODELS["layout"],
+                "det_model":    SERVER_MODELS["det"],
+                "rec_model":    SERVER_MODELS["rec"],
+                "reason": (
+                    f"{free_vram:.1f} GB free VRAM — using server models on GPU."
+                ),
+                "free_vram_gb": free_vram, "free_ram_gb": free_ram,
+            }
+        if free_vram >= TIER_MOBILE_MIN_VRAM_GB:
+            return {
+                "device": "gpu", "tier": "mobile",
+                "layout_model": MOBILE_MODELS["layout"],
+                "det_model":    MOBILE_MODELS["det"],
+                "rec_model":    MOBILE_MODELS["rec"],
+                "reason": (
+                    f"{free_vram:.1f} GB free VRAM (< {TIER_SERVER_MIN_VRAM_GB:.0f} GB) "
+                    "— using mobile models on GPU for lower memory footprint."
+                ),
+                "free_vram_gb": free_vram, "free_ram_gb": free_ram,
+            }
+        # Not enough VRAM for even the mobile tier — fall through to CPU.
+        cpu_reason_prefix = (
+            f"{free_vram:.1f} GB free VRAM (< {TIER_MOBILE_MIN_VRAM_GB:.0f} GB) "
+            "— falling back to CPU. "
+        )
+    else:
+        cpu_reason_prefix = ""  # CPU was explicitly chosen or no GPU present.
+
+    # CPU branch: pick server vs mobile based on free RAM.
+    if free_ram >= TIER_CPU_SERVER_MIN_RAM_GB:
+        return {
+            "device": "cpu", "tier": "server",
+            "layout_model": SERVER_MODELS["layout"],
+            "det_model":    SERVER_MODELS["det"],
+            "rec_model":    SERVER_MODELS["rec"],
+            "reason": (
+                f"{cpu_reason_prefix}{free_ram:.1f} GB free RAM — "
+                "using server models on CPU (slow but accurate)."
+            ),
+            "free_vram_gb": free_vram, "free_ram_gb": free_ram,
+        }
+    return {
+        "device": "cpu", "tier": "mobile",
+        "layout_model": MOBILE_MODELS["layout"],
+        "det_model":    MOBILE_MODELS["det"],
+        "rec_model":    MOBILE_MODELS["rec"],
+        "reason": (
+            f"{cpu_reason_prefix}{free_ram:.1f} GB free RAM "
+            f"(< {TIER_CPU_SERVER_MIN_RAM_GB:.0f} GB) — "
+            "using mobile models on CPU to avoid OOM."
+        ),
+        "free_vram_gb": free_vram, "free_ram_gb": free_ram,
+    }
+
 
 # ==============================================================
 # Resource Check
@@ -553,6 +651,7 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
 def detect_text_lines(image: np.ndarray, layout: list,
                       device: str = "gpu",
                       det_model_name: str = "PP-OCRv5_server_det",
+                      rec_model_name: str = "PP-OCRv5_server_rec",
                       region_padding: int = REGION_PADDING,
                       layout_expand: int = LAYOUT_EXPAND,
                       score_thresh: float = SCORE_THRESH,
@@ -563,7 +662,8 @@ def detect_text_lines(image: np.ndarray, layout: list,
     """Detect line-level bounding boxes for all text regions."""
 
     print(f"[detect_text_lines] image={image.shape}, "
-          f"{len(layout)} layout regions, det_model={det_model_name}")
+          f"{len(layout)} layout regions, det_model={det_model_name}, "
+          f"rec_model={rec_model_name}")
 
     _ensure_paddle()  # raises RuntimeError if paddle/CUDA not available
     ocr = None
@@ -571,7 +671,7 @@ def detect_text_lines(image: np.ndarray, layout: list,
         _free_memory()  # clear any lingering allocations before loading model
         ocr = _PaddleOCR(
             text_detection_model_name=det_model_name,
-            text_recognition_model_name="PP-OCRv5_server_rec",
+            text_recognition_model_name=rec_model_name,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
@@ -738,6 +838,7 @@ def run_layout_aware_detection(
     use_gpu: bool = False,
     layout_model_name: str = "PP-DocLayout_plus-L",
     det_model_name: str = "PP-OCRv5_server_det",
+    rec_model_name: str = "PP-OCRv5_server_rec",
     region_padding: int = REGION_PADDING,
     layout_expand: int = LAYOUT_EXPAND,
     score_thresh: float = SCORE_THRESH,
@@ -800,6 +901,7 @@ def run_layout_aware_detection(
     print(f"  device      : {device}  (cuda_compiled={cuda_compiled})")
     print(f"  layout_model: {layout_model_name}")
     print(f"  det_model   : {det_model_name}")
+    print(f"  rec_model   : {rec_model_name}")
     print(f"  region_padding : {region_padding}")
     print(f"  layout_expand  : {layout_expand}")
     print(f"  score_thresh   : {score_thresh}")
@@ -842,6 +944,7 @@ def run_layout_aware_detection(
     # Stage 2
     merged = detect_text_lines(image, layout, device=device,
                                det_model_name=det_model_name,
+                               rec_model_name=rec_model_name,
                                region_padding=region_padding,
                                layout_expand=layout_expand,
                                score_thresh=score_thresh,

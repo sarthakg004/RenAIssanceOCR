@@ -177,4 +177,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-access-log"]
+# Single worker on purpose: PaddleOCR server-class models (~1.5 GB each,
+# loaded fresh per detection call and freed after) would otherwise be
+# duplicated per-worker — doubling RAM / VRAM footprint and OOM-killing
+# the container on larger pages. Detection is already serialized at the
+# app level (asyncio lock in layout_detection router), so extra workers
+# add no throughput for GPU-bound work.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
