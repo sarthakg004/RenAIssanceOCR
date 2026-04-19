@@ -72,6 +72,21 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
         paddlepaddle-gpu==3.3.0
 
+# Pre-download paddlex fonts into site-packages. At first paddleocr
+# import, paddlex.utils.fonts tries to download PingFang-SC-Regular.ttf
+# and simfang.ttf INTO its own install directory — which fails at
+# runtime because the app runs as non-root `appuser` and /opt/venv is
+# owned by root. Baking the fonts in at build time (as root) makes the
+# import succeed without needing any writable mount or chown of the
+# entire venv.
+RUN apt-get update && apt-get install -y --no-install-recommends wget \
+    && PX_FONTS_DIR=/opt/venv/lib/python3.11/site-packages/paddlex/utils/fonts \
+    && PX_FONT_BASE=https://paddle-model-ecology.bj.bcebos.com/paddlex/PaddleX3.0/fonts \
+    && wget -q -O "$PX_FONTS_DIR/PingFang-SC-Regular.ttf" "$PX_FONT_BASE/PingFang-SC-Regular.ttf" \
+    && wget -q -O "$PX_FONTS_DIR/simfang.ttf"            "$PX_FONT_BASE/simfang.ttf" \
+    && apt-get purge -y --auto-remove wget \
+    && rm -rf /var/lib/apt/lists/*
+
 # Slim the venv before copying it into the runtime stage: strip all
 # __pycache__ dirs and *.pyc/*.pyo files. Python will regenerate them
 # lazily on first import — worth it because the builder-time bytecode
