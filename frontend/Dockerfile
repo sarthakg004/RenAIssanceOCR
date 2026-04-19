@@ -15,8 +15,11 @@ WORKDIR /app
 # Copy manifests first — layer cache for npm install
 COPY package.json package-lock.json ./
 
-# Install ALL dependencies (including devDeps) needed for the build
-RUN npm ci --prefer-offline --no-audit --no-fund
+# Install ALL dependencies (including devDeps) needed for the build.
+# BuildKit cache mount keeps ~/.npm warm across builds so rebuilds after a
+# lockfile edit don't re-download every tarball.
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefer-offline --no-audit --no-fund
 
 # Copy source and build
 COPY . .

@@ -14,6 +14,7 @@ import {
   verifyApiKey,
   exportTranscripts,
   downloadBlob,
+  postProcessWithLLM,
 } from '../services/geminiApi';
 
 // Default batch size (safe for 5 req/min limit)
@@ -63,6 +64,9 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
 
   // Export state
   const [exporting, setExporting] = useState(null);
+
+  // LLM post-processing state
+  const [isLLMProcessing, setIsLLMProcessing] = useState(false);
 
   // Zoom state - lifted here to persist across page changes
   const [zoomLevel, setZoomLevel] = useState(1);
@@ -411,6 +415,28 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     setExporting(null);
   }, [exporting, hasAnyTranscript, transcripts]);
 
+  // LLM post-processing
+  const handleLLMProcess = useCallback(async (template) => {
+    const text = transcripts[viewingPageNumber];
+    if (!text || !apiKey || isLLMProcessing) return;
+
+    setIsLLMProcessing(true);
+    setError(null);
+
+    try {
+      const result = await postProcessWithLLM(apiKey, text, selectedModel, template);
+      if (result.success && result.processed_text) {
+        setTranscripts(prev => ({ ...prev, [viewingPageNumber]: result.processed_text }));
+      } else {
+        setError(result.error || 'LLM processing failed');
+      }
+    } catch (err) {
+      setError(err.message || 'LLM processing failed');
+    } finally {
+      setIsLLMProcessing(false);
+    }
+  }, [transcripts, viewingPageNumber, apiKey, selectedModel, isLLMProcessing]);
+
   // Toggle auto processing - properly stops all processes when toggled off
   const handleToggleAutoProcess = useCallback(() => {
     setIsAutoProcessing((prev) => {
@@ -497,6 +523,9 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
           onReset={handleResetTranscript}
           onExport={handleExport}
           exporting={exporting}
+          onLLMProcess={handleLLMProcess}
+          isLLMProcessing={isLLMProcessing}
+          llmEnabled={isKeyValid === true}
         />
       }
     />

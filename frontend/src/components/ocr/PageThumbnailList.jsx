@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { CheckCircle2, Image as ImageIcon, Loader2 } from 'lucide-react';
 
 /**
@@ -61,7 +61,7 @@ function createThumbnail(imageSrc, maxSize = 200) {
  * PageThumbnailList Component
  * Scrollable list of page thumbnails with lazy loading - Compact version
  */
-export default function PageThumbnailList({
+function PageThumbnailList({
   images,
   currentIndex,
   processedPages,
@@ -103,6 +103,10 @@ export default function PageThumbnailList({
     </div>
   );
 }
+
+// Memoize — the list re-renders on every parent tick (zoom, hover, progress)
+// even when none of its own props changed. Shallow-equal props skip the work.
+export default memo(PageThumbnailList);
 
 /**
  * ThumbnailItem - Single thumbnail with lazy loading and downscaling

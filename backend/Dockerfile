@@ -36,8 +36,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         ca-certificates \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get install -y --no-install-recommends \
         python3.11 \
         python3.11-dev \
         python3.11-venv \
@@ -57,8 +57,12 @@ COPY requirements.txt .
 # Install all Python dependencies into the venv.
 # --extra-index-url adds the PaddlePaddle cu126 index so pip can find
 # paddlepaddle-gpu (not published on PyPI).
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir \
+# BuildKit cache mount keeps ~/.cache/pip warm across builds so rebuilds after
+# a requirements.txt edit don't re-download multi-GB PyTorch/Paddle wheels.
+# Enable with:  DOCKER_BUILDKIT=1 docker build ...  (default in modern Docker).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install \
         --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
         -r requirements.txt
 
@@ -84,17 +88,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Install ONLY the Python 3.11 runtime (no -dev, no pip) plus the shared
 # libraries that native extensions need at runtime.
 # IMPORTANT: same deadsnakes PPA + same Python 3.11 as the builder so every
-# .so in /opt/venv resolves its symbols correctly.
+# .so in /opt/venv resolves its symbols correctly. One combined RUN keeps the
+# apt cache clean-up in the same layer as the install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common \
         ca-certificates \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get install -y --no-install-recommends \
         python3.11 \
         python3.11-venv \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
+    && apt-get purge -y --auto-remove software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the fully-built venv from the builder.
@@ -104,46 +110,14 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Create the model-cache directory.
 # At runtime this is shadowed by a named Docker volume so downloaded models
-# persist across container restarts.
+# persist across container restarts (lazy-loaded on first use).
+#
+# NOTE: we used to pre-download PaddleOCR weights here, but the named volume
+# mounted at /paddle_models shadows this path at runtime, so the baked-in
+# models were discarded anyway — bloating the image by ~1.5 GB for nothing.
+# Lazy first-run download is the correct pattern; the named volume preserves
+# weights across restarts.
 RUN mkdir -p /paddle_models
-
-# Pre-download PaddleOCR model weights during image build.
-# This step uses CPU mode (no GPU driver at build time).
-# If paddle cannot be imported (libcuda not available at build time), the
-# except block catches it silently and models download on first container run.
-RUN python - <<'EOF'
-import os, sys
-os.environ.setdefault("PADDLE_PDX_MODEL_CACHE_HOME", "/paddle_models")
-os.environ["FLAGS_enable_pir_api"] = "0"
-os.environ["FLAGS_enable_pir_in_executor"] = "0"
-try:
-    from paddleocr import PPStructureV3, PaddleOCR
-    print("[build] Downloading layout detection model...")
-    PPStructureV3(
-        layout_detection_model_name="PP-DocLayout_plus-L",
-        device="cpu",
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_table_recognition=False,
-        use_formula_recognition=False,
-        use_chart_recognition=False,
-        use_seal_recognition=False,
-        use_region_detection=False,
-    )
-    print("[build] Downloading OCR models...")
-    PaddleOCR(
-        text_detection_model_name="PP-OCRv5_server_det",
-        text_recognition_model_name="PP-OCRv5_server_rec",
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        device="cpu",
-        lang="en",
-    )
-    print("[build] Model download complete.")
-except Exception as e:
-    print(f"[build] Model pre-download skipped (will fetch at runtime): {e}", file=sys.stderr)
-EOF
 
 ############################
 # App setup

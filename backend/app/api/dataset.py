@@ -17,6 +17,7 @@ from ..services.dataset_builder import (
     align_boxes_with_transcript,
     sort_boxes_reading_order,
     build_dataset_zip,
+    build_detection_dataset_zip,
 )
 
 
@@ -198,3 +199,52 @@ async def export_dataset(request: DatasetExportRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Dataset generation failed: {str(e)}")
+
+
+# ── Detection-only dataset export ──────────────────────────────────
+
+class DetectionPageItem(BaseModel):
+    page_key: str
+    image_data: str  # base64 data URL
+    boxes: list  # list of 4-pt polygons
+
+
+class DetectionExportRequest(BaseModel):
+    pages: List[DetectionPageItem]
+    book_name: str = "dataset"
+
+
+@router.post("/export-detection")
+async def export_detection_dataset(request: DetectionExportRequest):
+    """
+    Generate and download a text detection dataset (images + COCO annotations).
+
+    No transcript required — only bounding box coordinates.
+    """
+    if not request.pages:
+        raise HTTPException(status_code=400, detail="No pages provided.")
+
+    try:
+        pages_data = [p.dict() for p in request.pages]
+
+        zip_buffer = build_detection_dataset_zip(
+            pages_data=pages_data,
+            book_name=request.book_name,
+        )
+
+        filename = f"{request.book_name}_detection_dataset.zip"
+        ascii_filename = re.sub(r'[^\x20-\x7E]', '_', filename)
+        utf8_filename = urllib.parse.quote(filename)
+        content_disp = (
+            f'attachment; filename="{ascii_filename}"; '
+            f"filename*=UTF-8''{utf8_filename}"
+        )
+
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": content_disp},
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Detection dataset generation failed: {str(e)}")

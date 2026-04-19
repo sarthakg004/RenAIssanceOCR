@@ -9,12 +9,18 @@ import {
   Database,
   ChevronLeft,
   ChevronRight,
+  ScanSearch,
+  FileText,
 } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
 
 /**
  * Dataset Generation page — shows alignment preview and export controls.
+ *
+ * Supports two modes:
+ *   - "recognition": line crops + transcript labels (existing behavior)
+ *   - "detection": full images + COCO bbox annotations (no transcript needed)
  *
  * Props:
  *   pages            - array of page objects with .pageNumber, .thumbnail
@@ -37,8 +43,24 @@ export default function DatasetGenerationPage({
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
   const [previewIdx, setPreviewIdx] = useState(0);
+  const [datasetType, setDatasetType] = useState('recognition'); // 'recognition' | 'detection'
 
-  // Build per-page alignment data
+  // ── Detection-mode data ──────────────────────────────────────────
+  const detectionData = useMemo(() => {
+    if (!allPagesBoxes) return [];
+    return selectedPages
+      .filter(pageNum => (allPagesBoxes[pageNum] || []).length > 0)
+      .map(pageNum => {
+        const page = pages.find(p => p.pageNumber === pageNum);
+        const imageSrc = processedImages[pageNum] || page?.thumbnail;
+        const boxes = allPagesBoxes[pageNum] || [];
+        return { pageNumber: pageNum, imageSrc, boxes, numBoxes: boxes.length };
+      });
+  }, [allPagesBoxes, selectedPages, pages, processedImages]);
+
+  const totalDetectionBoxes = detectionData.reduce((s, d) => s + d.numBoxes, 0);
+
+  // ── Recognition-mode data (existing) ─────────────────────────────
   const alignmentData = useMemo(() => {
     if (!transcript || !allPagesBoxes) return [];
 
@@ -51,8 +73,6 @@ export default function DatasetGenerationPage({
     const data = [];
 
     for (const pageNum of selectedPages) {
-      // Sort boxes top-to-bottom by the midpoint-Y of the top edge.
-      // Take the two vertices with the smallest Y, average their Y — works for rotated boxes.
       const rawBoxes = allPagesBoxes[pageNum] || [];
       const boxes = [...rawBoxes].sort((a, b) => {
         const midTopY = poly => {
@@ -61,7 +81,6 @@ export default function DatasetGenerationPage({
         };
         return midTopY(a) - midTopY(b);
       });
-      // Try to find matching transcript key
       const pageKey = tKeys.find((k) => {
         const n = parseInt(k);
         return n === pageNum || k === String(pageNum);
@@ -94,14 +113,17 @@ export default function DatasetGenerationPage({
   const totalPairs = alignmentData.reduce((s, d) => s + d.numPairs, 0);
   const totalMismatches = alignmentData.filter((d) => d.mismatch).length;
 
-  const currentPreview = alignmentData[previewIdx] || null;
+  // ── Preview data (depends on mode) ───────────────────────────────
+  const previewList = datasetType === 'detection' ? detectionData : alignmentData;
+  const currentPreview = previewList[previewIdx] || null;
+
+  // ── Export handlers ──────────────────────────────────────────────
 
   const handleExport = async () => {
     setIsExporting(true);
     setExportError(null);
 
     try {
-      // Build pages payload
       const pagesPayload = alignmentData.map((d) => ({
         page_key: String(d.pageNumber),
         image_data: d.imageSrc,
@@ -123,7 +145,6 @@ export default function DatasetGenerationPage({
         throw new Error(err.detail || 'Export failed');
       }
 
-      // Download the ZIP
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -139,6 +160,50 @@ export default function DatasetGenerationPage({
       setIsExporting(false);
     }
   };
+
+  const handleDetectionExport = async () => {
+    setIsExporting(true);
+    setExportError(null);
+
+    try {
+      const pagesPayload = detectionData.map((d) => ({
+        page_key: String(d.pageNumber),
+        image_data: d.imageSrc,
+        boxes: d.boxes,
+      }));
+
+      const res = await fetch(`${API_BASE}/api/dataset/export-detection`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pages: pagesPayload,
+          book_name: bookName,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Export failed' }));
+        throw new Error(err.detail || 'Export failed');
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${bookName}_detection_dataset.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setExportError(err.message);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const isDetection = datasetType === 'detection';
+  const canExport = isDetection ? detectionData.length > 0 : alignmentData.length > 0;
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -158,36 +223,78 @@ export default function DatasetGenerationPage({
                 Generate Dataset
               </h1>
               <p className="text-sm text-gray-500">
-                {alignmentData.length} pages, {totalPairs} aligned pairs
+                {isDetection
+                  ? `${detectionData.length} pages, ${totalDetectionBoxes} bounding boxes`
+                  : `${alignmentData.length} pages, ${totalPairs} aligned pairs`
+                }
               </p>
             </div>
           </div>
         </div>
+
+        {/* Dataset type toggle */}
+        <div className="flex bg-gray-100 rounded-lg p-1">
+          <button
+            onClick={() => { setDatasetType('recognition'); setPreviewIdx(0); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+              !isDetection
+                ? 'bg-white text-emerald-700 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Recognition
+          </button>
+          <button
+            onClick={() => { setDatasetType('detection'); setPreviewIdx(0); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+              isDetection
+                ? 'bg-white text-emerald-700 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <ScanSearch className="w-3.5 h-3.5" />
+            Detection
+          </button>
+        </div>
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-4 gap-4 px-4 mb-6">
-        <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
-          <p className="text-2xl font-bold text-emerald-600">{alignmentData.length}</p>
-          <p className="text-xs text-gray-500 mt-1">Pages Matched</p>
+      {isDetection ? (
+        <div className="grid grid-cols-2 gap-4 px-4 mb-6">
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+            <p className="text-2xl font-bold text-emerald-600">{detectionData.length}</p>
+            <p className="text-xs text-gray-500 mt-1">Pages</p>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+            <p className="text-2xl font-bold text-indigo-600">{totalDetectionBoxes}</p>
+            <p className="text-xs text-gray-500 mt-1">Bounding Boxes</p>
+          </div>
         </div>
-        <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
-          <p className="text-2xl font-bold text-blue-600">{totalPairs}</p>
-          <p className="text-xs text-gray-500 mt-1">Line Pairs</p>
+      ) : (
+        <div className="grid grid-cols-4 gap-4 px-4 mb-6">
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+            <p className="text-2xl font-bold text-emerald-600">{alignmentData.length}</p>
+            <p className="text-xs text-gray-500 mt-1">Pages Matched</p>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+            <p className="text-2xl font-bold text-blue-600">{totalPairs}</p>
+            <p className="text-xs text-gray-500 mt-1">Line Pairs</p>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+            <p className="text-2xl font-bold text-indigo-600">
+              {alignmentData.reduce((s, d) => s + d.numBoxes, 0)}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">Bounding Boxes</p>
+          </div>
+          <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
+            <p className={`text-2xl font-bold ${totalMismatches > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+              {totalMismatches}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">Mismatches</p>
+          </div>
         </div>
-        <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
-          <p className="text-2xl font-bold text-indigo-600">
-            {alignmentData.reduce((s, d) => s + d.numBoxes, 0)}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">Bounding Boxes</p>
-        </div>
-        <div className="bg-white/80 backdrop-blur-sm rounded-xl border border-gray-100 p-4 text-center shadow-sm">
-          <p className={`text-2xl font-bold ${totalMismatches > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-            {totalMismatches}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">Mismatches</p>
-        </div>
-      </div>
+      )}
 
       <div className="flex-1 flex gap-6 px-4 pb-4 overflow-hidden">
         {/* Left: page list + preview */}
@@ -195,7 +302,7 @@ export default function DatasetGenerationPage({
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <h3 className="font-bold text-gray-700 flex items-center gap-2">
               <Eye className="w-4 h-4" />
-              Alignment Preview
+              {isDetection ? 'Detection Preview' : 'Alignment Preview'}
             </h3>
             <div className="flex items-center gap-2">
               <button
@@ -206,11 +313,11 @@ export default function DatasetGenerationPage({
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <span className="text-sm text-gray-500 min-w-[60px] text-center">
-                {alignmentData.length > 0 ? `${previewIdx + 1} / ${alignmentData.length}` : '—'}
+                {previewList.length > 0 ? `${previewIdx + 1} / ${previewList.length}` : '\u2014'}
               </span>
               <button
-                onClick={() => setPreviewIdx(Math.min(alignmentData.length - 1, previewIdx + 1))}
-                disabled={previewIdx >= alignmentData.length - 1}
+                onClick={() => setPreviewIdx(Math.min(previewList.length - 1, previewIdx + 1))}
+                disabled={previewIdx >= previewList.length - 1}
                 className="p-1.5 rounded-lg hover:bg-gray-100 disabled:opacity-30 transition-colors"
               >
                 <ChevronRight className="w-4 h-4" />
@@ -220,50 +327,88 @@ export default function DatasetGenerationPage({
 
           <div className="flex-1 overflow-y-auto p-4">
             {currentPreview ? (
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="font-semibold text-gray-700">
-                    Page {currentPreview.pageNumber}
-                  </span>
-                  {currentPreview.mismatch && (
-                    <span className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">
-                      <AlertTriangle className="w-3.5 h-3.5" />
-                      {currentPreview.numBoxes} boxes / {currentPreview.numLines} lines
+              isDetection ? (
+                /* Detection preview: show bbox count per page */
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-semibold text-gray-700">
+                      Page {currentPreview.pageNumber}
                     </span>
-                  )}
+                    <span className="text-xs text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
+                      {currentPreview.numBoxes} boxes
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+                    {currentPreview.boxes.map((box, i) => {
+                      const xs = box.map(p => p[0]);
+                      const ys = box.map(p => p[1]);
+                      const x1 = Math.round(Math.min(...xs));
+                      const y1 = Math.round(Math.min(...ys));
+                      const x2 = Math.round(Math.max(...xs));
+                      const y2 = Math.round(Math.max(...ys));
+                      return (
+                        <div
+                          key={i}
+                          className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-lg text-sm"
+                        >
+                          <span className="text-xs font-mono text-gray-400 w-8 text-right flex-shrink-0">
+                            {i + 1}
+                          </span>
+                          <span className="flex-1 text-gray-600 font-mono text-xs">
+                            [{x1}, {y1}, {x2 - x1}, {y2 - y1}]
+                          </span>
+                          <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-
-                {/* Aligned pairs table */}
-                <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-                  {currentPreview.lines.slice(0, currentPreview.numPairs).map((line, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-lg text-sm"
-                    >
-                      <span className="text-xs font-mono text-gray-400 w-8 text-right flex-shrink-0">
-                        {i + 1}
+              ) : (
+                /* Recognition preview: existing alignment view */
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-semibold text-gray-700">
+                      Page {currentPreview.pageNumber}
+                    </span>
+                    {currentPreview.mismatch && (
+                      <span className="flex items-center gap-1.5 text-xs text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        {currentPreview.numBoxes} boxes / {currentPreview.numLines} lines
                       </span>
-                      <span className="flex-1 text-gray-700 truncate">{line}</span>
-                      {i < currentPreview.numBoxes && (
-                        <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
-                      )}
-                    </div>
-                  ))}
-                  {currentPreview.numLines > currentPreview.numPairs && (
-                    <p className="text-xs text-amber-500 italic pl-11">
-                      {currentPreview.numLines - currentPreview.numPairs} unmatched transcript line(s)
-                    </p>
-                  )}
-                  {currentPreview.numBoxes > currentPreview.numPairs && (
-                    <p className="text-xs text-amber-500 italic pl-11">
-                      {currentPreview.numBoxes - currentPreview.numPairs} unmatched bounding box(es)
-                    </p>
-                  )}
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+                    {currentPreview.lines.slice(0, currentPreview.numPairs).map((line, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-lg text-sm"
+                      >
+                        <span className="text-xs font-mono text-gray-400 w-8 text-right flex-shrink-0">
+                          {i + 1}
+                        </span>
+                        <span className="flex-1 text-gray-700 truncate">{line}</span>
+                        {i < currentPreview.numBoxes && (
+                          <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                        )}
+                      </div>
+                    ))}
+                    {currentPreview.numLines > currentPreview.numPairs && (
+                      <p className="text-xs text-amber-500 italic pl-11">
+                        {currentPreview.numLines - currentPreview.numPairs} unmatched transcript line(s)
+                      </p>
+                    )}
+                    {currentPreview.numBoxes > currentPreview.numPairs && (
+                      <p className="text-xs text-amber-500 italic pl-11">
+                        {currentPreview.numBoxes - currentPreview.numPairs} unmatched bounding box(es)
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )
             ) : (
               <div className="flex items-center justify-center h-full text-gray-400">
-                No alignment data available
+                {isDetection ? 'No detection data available' : 'No alignment data available'}
               </div>
             )}
           </div>
@@ -279,12 +424,22 @@ export default function DatasetGenerationPage({
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
-            <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70 text-sm text-emerald-700">
-              Downloads one ZIP with line images and transcript labels.
-              <div className="text-xs text-emerald-600 mt-2 font-mono">
-                {bookName}/page_N/images/line_label.png
+            {isDetection ? (
+              <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/70 text-sm text-indigo-700">
+                Downloads a ZIP with full page images and COCO-format bounding box annotations.
+                <div className="text-xs text-indigo-600 mt-2 font-mono">
+                  {bookName}/images/page_N.jpg<br />
+                  {bookName}/annotations.json
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70 text-sm text-emerald-700">
+                Downloads one ZIP with line images and transcript labels.
+                <div className="text-xs text-emerald-600 mt-2 font-mono">
+                  {bookName}/page_N/images/line_label.png
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Export button */}
@@ -296,10 +451,10 @@ export default function DatasetGenerationPage({
             )}
 
             <button
-              onClick={handleExport}
-              disabled={isExporting || alignmentData.length === 0}
+              onClick={isDetection ? handleDetectionExport : handleExport}
+              disabled={isExporting || !canExport}
               className={`w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl font-bold text-white shadow-lg transition-all duration-200 ${
-                isExporting || alignmentData.length === 0
+                isExporting || !canExport
                   ? 'bg-gray-300 cursor-not-allowed'
                   : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:shadow-xl hover:-translate-y-0.5 shadow-emerald-500/30'
               }`}
@@ -312,13 +467,16 @@ export default function DatasetGenerationPage({
               ) : (
                 <>
                   <Download className="w-5 h-5" />
-                  Download Dataset
+                  {isDetection ? 'Download Detection Dataset' : 'Download Dataset'}
                 </>
               )}
             </button>
 
             <p className="text-xs text-gray-400 text-center mt-2">
-              {totalPairs} line images will be exported
+              {isDetection
+                ? `${detectionData.length} pages, ${totalDetectionBoxes} annotations`
+                : `${totalPairs} line images will be exported`
+              }
             </p>
           </div>
         </div>

@@ -1,0 +1,1 @@
+const e="http://localhost:8000/api";async function o(){const t=await fetch(`${e}/llm/templates`);if(!t.ok)throw new Error("Failed to fetch LLM templates");return t.json()}export{o as getLLMTemplates};

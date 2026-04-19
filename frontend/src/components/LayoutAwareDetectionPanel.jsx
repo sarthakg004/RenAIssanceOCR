@@ -78,6 +78,12 @@ const PARAM_DEFS = [
     { key: 'gap_multiplier', label: 'Gap Multiplier', unit: '×', min: 0.5, max: 5.0, step: 0.5, type: 'float', tooltip: 'Gap threshold multiplier for line merging' },
 ];
 
+// Monotonic row-ID counter. Used instead of Date.now() to guarantee uniqueness
+// even when many rows are created in the same millisecond (React keys colliding
+// silently trigger remounts and break reconciliation).
+let _rowIdCounter = 0;
+const nextRowId = () => ++_rowIdCounter;
+
 function shortPageLabel(pageKey) {
     return String(pageKey).replace('_left', 'L').replace('_right', 'R');
 }
@@ -187,7 +193,6 @@ export default function LayoutAwareDetectionPage({
     const [warning, setWarning] = useState(null);
     const [processingTime, setProcessingTime] = useState(null);
     const [imageLoaded, setImageLoaded] = useState(false);
-    const [compositeUrl, setCompositeUrl] = useState(null);
 
     // ── BBox editor state ──────────────────────────────────
     const [showBBoxEditor, setShowBBoxEditor] = useState(false);
@@ -217,18 +222,45 @@ export default function LayoutAwareDetectionPage({
     const [ocrError, setOcrError] = useState(null);
 
     // ── Hover state for bidirectional highlight ─────────────
+    // Single source of truth: `hoveredBoxIndex` identifies the polygon index.
+    // Line rows derive their highlight from this + their assigned boxIndex,
+    // so we don't need a separate `hoveredLineIndex` state (one update cycle
+    // per hover event instead of two).
     const [hoveredBoxIndex, setHoveredBoxIndex] = useState(null);
-    const [hoveredLineIndex, setHoveredLineIndex] = useState(null);
 
     const imgRef = useRef(null);
+    const imageWrapRef = useRef(null);
+    // Refs to transcript/recognition rows, keyed by box index, used to scroll
+    // the matching row into view when the user hovers a bbox on the image.
+    const lineRefsRef = useRef(new Map());
+    const setLineRef = useCallback((boxIndex, el) => {
+        if (boxIndex == null) return;
+        const map = lineRefsRef.current;
+        if (el) map.set(boxIndex, el);
+        else map.delete(boxIndex);
+    }, []);
+    // Natural image dimensions — needed to map SVG polygon coords (image
+    // pixels) into the displayed image's coordinate space via viewBox.
+    const [imageNaturalSize, setImageNaturalSize] = useState({ w: 0, h: 0 });
     // Tracks which pages have already been seeded so the seed effect never
     // overwrites alignment that already exists (avoids stale-closure re-fire).
     const seededPages = useRef(new Set());
 
     // ── Persist detection + alignment state to parent whenever it changes ──
+    // Skip the initial mount pass — otherwise we'd immediately overwrite the
+    // parent's cache with our initial (possibly empty) state before the user
+    // has done anything. Also pin the callback to a ref so re-renders caused
+    // by a new `onStateChange` identity don't trigger extra syncs.
+    const onStateChangeRef = useRef(onStateChange);
+    useEffect(() => { onStateChangeRef.current = onStateChange; }, [onStateChange]);
+    const didMountStateSyncRef = useRef(false);
     useEffect(() => {
-        if (onStateChange) onStateChange({ pages: detectedPages, alignment: alignmentByPage });
-    }, [detectedPages, alignmentByPage]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (!didMountStateSyncRef.current) {
+            didMountStateSyncRef.current = true;
+            return;
+        }
+        onStateChangeRef.current?.({ pages: detectedPages, alignment: alignmentByPage });
+    }, [detectedPages, alignmentByPage]);
 
     // ── Derived data ───────────────────────────────────────
     const availablePages = useMemo(() => selectedPages || [], [selectedPages]);
@@ -319,6 +351,24 @@ export default function LayoutAwareDetectionPage({
             cancelled = true;
         };
     }, [datasetMode]);
+
+    // ── Arrow key navigation (only when BBox editor is closed) ──
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (showBBoxEditor) return;
+            const tag = document.activeElement?.tagName?.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setViewingPageIndex(prev => Math.max(0, prev - 1));
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setViewingPageIndex(prev => Math.min(totalPages - 1, prev + 1));
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [showBBoxEditor, totalPages]);
 
     const runOcrForPage = useCallback(async (pageNum) => {
         const imageUrl = getImageUrl(pageNum);
@@ -418,7 +468,7 @@ export default function LayoutAwareDetectionPage({
         // One row per transcript line; boxIndex = original polygon index of the
         // corresponding sorted box (null if there are fewer boxes than lines).
         const initialRows = transcriptLines.map((line, index) => ({
-            id: `${currentPageNum}-${index}-${Date.now()}`,
+            id: `${currentPageNum}-${index}-${nextRowId()}`,
             text: line,
             boxIndex: index < sortedBoxIndices.length ? sortedBoxIndices[index] : null,
         }));
@@ -433,7 +483,6 @@ export default function LayoutAwareDetectionPage({
     // Reset hover state when navigating pages
     useEffect(() => {
         setHoveredBoxIndex(null);
-        setHoveredLineIndex(null);
     }, [viewingPageIndex]);
 
     const updateAlignmentRows = useCallback((pageNum, updater) => {
@@ -458,7 +507,7 @@ export default function LayoutAwareDetectionPage({
             const existingRows = prev[currentPageNum] || [];
             const texts = existingRows.map(r => r.text);
             const newRows = texts.map((text, i) => ({
-                id: `${currentPageNum}-${i}-${Date.now()}`,
+                id: `${currentPageNum}-${i}-${nextRowId()}`,
                 text,
                 boxIndex: i < sortedBoxIndices.length ? sortedBoxIndices[i] : null,
             }));
@@ -512,7 +561,7 @@ export default function LayoutAwareDetectionPage({
 
             const firstRow = { ...row, text: first };
             const secondRow = {
-                id: `${row.id}-split-${Date.now()}`,
+                id: `${row.id}-split-${nextRowId()}`,
                 text: second,
                 boxIndex: null,
             };
@@ -526,92 +575,46 @@ export default function LayoutAwareDetectionPage({
         setTuningParams(prev => ({ ...prev, [key]: value }));
     }, []);
 
-    // ── Composite image with bboxes baked in ───────────────
+    // ── Capture natural image size for SVG viewBox ──────────
+    // We need the untransformed pixel dimensions of the source image so the
+    // SVG overlay can declare a viewBox in the same coordinate space as the
+    // polygon points returned by the detector.
     useEffect(() => {
-        if (!currentImageUrl || currentLines.length === 0) {
-            setCompositeUrl(null);
+        if (!currentImageUrl) {
+            setImageNaturalSize({ w: 0, h: 0 });
             return;
         }
-
         let cancelled = false;
-        const img = new Image();
-
-        img.onerror = (err) => {
-            console.error('[composite] Image load failed:', err);
-            if (!cancelled) setCompositeUrl(null);
-        };
-
-        img.onload = () => {
+        const probe = new Image();
+        probe.onload = () => {
             if (cancelled) return;
-            const w = img.naturalWidth;
-            const h = img.naturalHeight;
-            if (w === 0 || h === 0) {
-                console.warn('[composite] Image has zero dimensions');
-                return;
-            }
-            console.log('[composite] building', w, 'x', h, 'with', currentLines.length, 'boxes');
-
-            try {
-                const offscreen = document.createElement('canvas');
-                offscreen.width = w;
-                offscreen.height = h;
-                const ctx = offscreen.getContext('2d');
-
-                // Draw original image
-                ctx.drawImage(img, 0, 0, w, h);
-
-                ctx.lineWidth = Math.max(2, Math.round(Math.max(w, h) / 500));
-                ctx.lineJoin = 'round';
-
-                let drawn = 0;
-                for (let i = 0; i < currentLines.length; i++) {
-                    const poly = currentLines[i];
-                    if (!poly || poly.length < 3) continue;
-
-                    const isHovered = hoveredBoxIndex === i;
-                    ctx.strokeStyle = isHovered ? '#f97316' : '#22c55e';
-                    ctx.fillStyle = isHovered ? 'rgba(249,115,22,0.25)' : 'rgba(34,197,94,0.08)';
-                    ctx.lineWidth = isHovered
-                        ? Math.max(3, Math.round(Math.max(w, h) / 300))
-                        : Math.max(2, Math.round(Math.max(w, h) / 500));
-
-                    ctx.beginPath();
-                    ctx.moveTo(poly[0][0], poly[0][1]);
-                    for (let k = 1; k < poly.length; k++) {
-                        ctx.lineTo(poly[k][0], poly[k][1]);
-                    }
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.stroke();
-                    drawn++;
-                }
-
-                const dataUrl = offscreen.toDataURL('image/png');
-                console.log(`[composite] baked ${drawn} boxes, dataUrl length: ${dataUrl.length}`);
-
-                if (!cancelled) {
-                    setCompositeUrl(dataUrl);
-                }
-            } catch (err) {
-                console.error('[composite] Canvas compositing failed:', err);
-                if (!cancelled) setCompositeUrl(null);
-            }
+            setImageNaturalSize({ w: probe.naturalWidth, h: probe.naturalHeight });
         };
-
-        img.src = currentImageUrl;
-
+        probe.onerror = () => { if (!cancelled) setImageNaturalSize({ w: 0, h: 0 }); };
+        probe.src = currentImageUrl;
         return () => { cancelled = true; };
-    }, [currentImageUrl, currentLines, hoveredBoxIndex]);
+    }, [currentImageUrl]);
 
     // Reset image display state on page change only
     useEffect(() => {
         setImageLoaded(false);
-        setCompositeUrl(null);
         setHoveredBoxIndex(null);
-        setHoveredLineIndex(null);
     }, [viewingPageIndex]);
 
-    const displayUrl = compositeUrl || currentImageUrl;
+    // Bboxes now render as an SVG overlay so hover state updates don't force
+    // an offscreen canvas rebuild + base64 encode on every mouse move.
+    const displayUrl = currentImageUrl;
+
+    // When the bbox hover source is the image (not the side panel), scroll
+    // the matching transcript/recognition row into view. We debounce via a
+    // microtask so rapid hover changes don't fight each other.
+    useEffect(() => {
+        if (hoveredBoxIndex == null) return;
+        const el = lineRefsRef.current.get(hoveredBoxIndex);
+        if (!el) return;
+        // `nearest` avoids jarring centering when the row is already visible.
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, [hoveredBoxIndex]);
 
     // ── Navigation ─────────────────────────────────────────
     const goToPage = useCallback((index) => {
@@ -1035,7 +1038,7 @@ export default function LayoutAwareDetectionPage({
                 // unassigned (no row).  If there are MORE texts than boxes,
                 // those extra texts keep boxIndex=null (shown as "unassigned").
                 const newRows = texts.map((text, i) => ({
-                    id: `${pageNum}-${i}-${Date.now()}`,
+                    id: `${pageNum}-${i}-${nextRowId()}`,
                     text,
                     boxIndex: i < sortedIdxs.length ? sortedIdxs[i] : null,
                 }));
@@ -1115,16 +1118,53 @@ export default function LayoutAwareDetectionPage({
 
                 {currentImageUrl && (
                     <div className="p-4 flex items-center justify-center min-h-full">
-                        <img
-                            key={`${currentPageNum}-${displayUrl?.slice(-20)}`}
-                            ref={imgRef}
-                            src={displayUrl}
-                            alt={`Page ${currentPageNum}`}
-                            className={`rounded-lg shadow-xl select-none ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
-                            onLoad={() => setImageLoaded(true)}
-                            draggable={false}
-                            style={{ display: 'block', transition: 'opacity 0.2s ease-out' }}
-                        />
+                        <div ref={imageWrapRef} className="relative inline-block">
+                            <img
+                                key={`${currentPageNum}-${displayUrl?.slice(-20)}`}
+                                ref={imgRef}
+                                src={displayUrl}
+                                alt={`Page ${currentPageNum}`}
+                                className={`rounded-lg shadow-xl select-none block ${imageLoaded ? 'opacity-100' : 'opacity-0'}`}
+                                onLoad={(e) => {
+                                    setImageLoaded(true);
+                                    const el = e.currentTarget;
+                                    setImageNaturalSize({ w: el.naturalWidth, h: el.naturalHeight });
+                                }}
+                                draggable={false}
+                                style={{ transition: 'opacity 0.2s ease-out' }}
+                            />
+                            {/* SVG overlay — matches the displayed image via viewBox
+                                and absolute positioning. Hover is handled by CSS +
+                                a lightweight state update; no canvas re-render. */}
+                            {imageLoaded && currentLines.length > 0 && imageNaturalSize.w > 0 && (
+                                <svg
+                                    className="absolute inset-0 w-full h-full"
+                                    viewBox={`0 0 ${imageNaturalSize.w} ${imageNaturalSize.h}`}
+                                    preserveAspectRatio="none"
+                                    style={{ pointerEvents: 'none' }}
+                                >
+                                    {currentLines.map((poly, i) => {
+                                        if (!poly || poly.length < 3) return null;
+                                        const pts = poly.map((p) => `${p[0]},${p[1]}`).join(' ');
+                                        const isHovered = hoveredBoxIndex === i;
+                                        const strokeW = Math.max(2, Math.round(Math.max(imageNaturalSize.w, imageNaturalSize.h) / (isHovered ? 300 : 500)));
+                                        return (
+                                            <polygon
+                                                key={i}
+                                                points={pts}
+                                                stroke={isHovered ? '#f97316' : '#22c55e'}
+                                                strokeWidth={strokeW}
+                                                fill={isHovered ? 'rgba(249,115,22,0.25)' : 'rgba(34,197,94,0.08)'}
+                                                strokeLinejoin="round"
+                                                onMouseEnter={() => setHoveredBoxIndex(i)}
+                                                onMouseLeave={() => setHoveredBoxIndex(null)}
+                                                style={{ pointerEvents: 'auto', cursor: 'pointer', transition: 'fill 120ms, stroke 120ms' }}
+                                            />
+                                        );
+                                    })}
+                                </svg>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
@@ -1192,27 +1232,24 @@ export default function LayoutAwareDetectionPage({
 
                 {isCurrentDetected && currentAlignmentRows.map((row, lineIndex) => {
                     const assignedBoxIdx = row.boxIndex;
-                    const isBoxHovered = assignedBoxIdx !== null && assignedBoxIdx !== undefined && hoveredBoxIndex === assignedBoxIdx;
-                    const isLineHovered = hoveredLineIndex === lineIndex;
-                    const isHighlighted = isBoxHovered || isLineHovered;
+                    const isHighlighted = assignedBoxIdx !== null && assignedBoxIdx !== undefined && hoveredBoxIndex === assignedBoxIdx;
                     const isUnassigned = assignedBoxIdx === null || assignedBoxIdx === undefined;
 
                     return (
                         <div
                             key={row.id}
+                            ref={(el) => setLineRef(assignedBoxIdx, el)}
                             className={`rounded-lg border p-2.5 space-y-1.5 shadow-sm transition-colors cursor-pointer ${
                                 isHighlighted
                                     ? 'bg-orange-50 border-orange-300 shadow-orange-100'
                                     : 'bg-white border-gray-200 hover:border-teal-300 hover:bg-teal-50/30'
                             }`}
                             onMouseEnter={() => {
-                                setHoveredLineIndex(lineIndex);
                                 if (assignedBoxIdx !== null && assignedBoxIdx !== undefined) {
                                     setHoveredBoxIndex(assignedBoxIdx);
                                 }
                             }}
                             onMouseLeave={() => {
-                                setHoveredLineIndex(null);
                                 setHoveredBoxIndex(null);
                             }}
                         >
@@ -1426,17 +1463,30 @@ export default function LayoutAwareDetectionPage({
 
                 {isCurrentDetected && sortedBoxIndices.length > 0 && (
                     <div className="space-y-1.5">
-                        {sortedBoxIndices.map((boxIndex, lineIndex) => (
-                            <div key={`${currentPageNum}-${boxIndex}`} className="bg-white border border-gray-200 rounded-lg p-2 space-y-1">
-                                <div className="text-[11px] text-gray-500 font-semibold">Line {lineIndex + 1}</div>
-                                <textarea
-                                    value={currentRecognitionByIndex[boxIndex] || ''}
-                                    onChange={(e) => updateRecognizedText(lineIndex, e.target.value)}
-                                    rows={2}
-                                    className="w-full px-2 py-1.5 bg-white border border-gray-200 rounded text-xs text-gray-700 resize-y focus:outline-none focus:ring-1 focus:ring-blue-200 focus:border-blue-400"
-                                />
-                            </div>
-                        ))}
+                        {sortedBoxIndices.map((boxIndex, lineIndex) => {
+                            const isHighlighted = hoveredBoxIndex === boxIndex;
+                            return (
+                                <div
+                                    key={`${currentPageNum}-${boxIndex}`}
+                                    ref={(el) => setLineRef(boxIndex, el)}
+                                    onMouseEnter={() => setHoveredBoxIndex(boxIndex)}
+                                    onMouseLeave={() => setHoveredBoxIndex(null)}
+                                    className={`rounded-lg p-2 space-y-1 border transition-colors ${
+                                        isHighlighted
+                                            ? 'bg-orange-50 border-orange-300 shadow-sm'
+                                            : 'bg-white border-gray-200'
+                                    }`}
+                                >
+                                    <div className={`text-[11px] font-semibold ${isHighlighted ? 'text-orange-600' : 'text-gray-500'}`}>Line {lineIndex + 1}</div>
+                                    <textarea
+                                        value={currentRecognitionByIndex[boxIndex] || ''}
+                                        onChange={(e) => updateRecognizedText(lineIndex, e.target.value)}
+                                        rows={2}
+                                        className="w-full px-2 py-1.5 bg-white border border-gray-200 rounded text-xs text-gray-700 resize-y focus:outline-none focus:ring-1 focus:ring-blue-200 focus:border-blue-400"
+                                    />
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>

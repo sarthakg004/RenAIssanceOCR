@@ -1,4 +1,4 @@
-version: "3.8"
+# `version:` top-level key is obsolete under Compose v2 and emits a warning.
 
 services:
   backend:
@@ -13,11 +13,7 @@ services:
       # so models are downloaded only once across container restarts.
       - PADDLE_PDX_MODEL_CACHE_HOME=/paddle_models
     volumes:
-      # Persist PaddleOCR / PaddleX model downloads across container restarts.
-      # First run downloads the required models; every subsequent run reuses them.
       - paddle_models:/paddle_models
-    # GPU access — requires NVIDIA Container Toolkit on the host
-    # and CUDA 13.0 drivers.
     deploy:
       resources:
         reservations:
@@ -25,16 +21,20 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # Uncomment below if you have a .env file with API keys
-    # env_file:
-    #   - .env
+    # API keys are loaded if a .env file exists alongside this compose file.
+    # `required: false` makes the file optional so the stack starts without it;
+    # missing keys surface as per-feature errors in the UI instead.
+    env_file:
+      - path: .env
+        required: false
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      # Longer start period: first-run model downloads can take several minutes.
+      start_period: 180s
 
   frontend:
     build:
@@ -42,8 +42,11 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5173:80"
+    # Gate frontend start on the backend being healthy, not just created —
+    # avoids the first few API calls hitting a cold server.
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { Check, ZoomIn } from 'lucide-react';
 
-export default function PageCard({
+const PageCard = React.forwardRef(function PageCard({
   pageNumber,
   thumbnail,
   isSelected,
   onSelect,
   onPreview,
   isShiftHeld,
-}) {
+}, ref) {
   const [isHovered, setIsHovered] = useState(false);
 
   const handleClick = (e) => {
@@ -21,6 +21,8 @@ export default function PageCard({
 
   return (
     <div
+      ref={ref}
+      data-page-card
       className={`relative group cursor-pointer rounded-xl overflow-hidden transition-all duration-200 ${isSelected
           ? 'ring-4 ring-blue-500 shadow-card-hover scale-[1.02]'
           : 'ring-1 ring-blue-100 hover:ring-blue-300 hover:shadow-card'
@@ -88,4 +90,8 @@ export default function PageCard({
       </div>
     </div>
   );
-}
+});
+
+// Wrapping in memo cuts re-renders of unchanged thumbnails when one card's
+// selection toggles — the page grid can be 100+ items in a large PDF.
+export default React.memo(PageCard);

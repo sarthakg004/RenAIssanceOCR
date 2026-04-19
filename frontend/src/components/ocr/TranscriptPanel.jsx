@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import {
   FileText,
   Copy,
@@ -11,6 +11,9 @@ import {
   FileType,
   Edit3,
   Eye,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 /**
@@ -92,7 +95,7 @@ function HighlightedTranscript({ text, monospace }) {
  * Scrollable transcript viewer with copy/export functionality
  * Fixed height, proper overflow handling
  */
-export default function TranscriptPanel({
+function TranscriptPanel({
   pageNumber,
   transcript,
   originalTranscript,
@@ -104,10 +107,32 @@ export default function TranscriptPanel({
   onReset,
   onExport,
   exporting,
+  onLLMProcess,
+  isLLMProcessing,
+  llmEnabled,
 }) {
   const [copied, setCopied] = useState(false);
   const [monospace, setMonospace] = useState(true);
   const [editMode, setEditMode] = useState(false);
+  const [llmExpanded, setLlmExpanded] = useState(false);
+  const [llmTemplates, setLlmTemplates] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('full_cleanup');
+
+  // Fetch LLM templates when enabled
+  useEffect(() => {
+    if (!llmEnabled) return;
+    let cancelled = false;
+    import('../../services/geminiApi').then(({ getLLMTemplates }) => {
+      getLLMTemplates()
+        .then(data => {
+          if (!cancelled && data.templates) {
+            setLlmTemplates(data.templates);
+          }
+        })
+        .catch(() => {}); // Silently fail - templates will just not show
+    });
+    return () => { cancelled = true; };
+  }, [llmEnabled]);
 
   const hasChanges = transcript !== originalTranscript;
   
@@ -275,6 +300,73 @@ export default function TranscriptPanel({
         </div>
       )}
 
+      {/* AI Polish Section */}
+      {llmEnabled && isProcessed && transcript && (
+        <div className="border-t border-gray-100 shrink-0">
+          <button
+            onClick={() => setLlmExpanded(!llmExpanded)}
+            className="w-full px-3 py-2 flex items-center justify-between text-xs font-bold text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <div className="p-1 bg-gradient-to-br from-purple-500 to-pink-500 rounded text-white">
+                <Sparkles size={10} />
+              </div>
+              AI Polish
+            </span>
+            {llmExpanded ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+          </button>
+          {llmExpanded && (
+            <div className="px-3 pb-3 space-y-2">
+              <select
+                value={selectedTemplate}
+                onChange={(e) => setSelectedTemplate(e.target.value)}
+                className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-purple-300 focus:border-purple-300"
+                disabled={isLLMProcessing}
+              >
+                {llmTemplates.length > 0 ? (
+                  llmTemplates.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))
+                ) : (
+                  <>
+                    <option value="full_cleanup">Full Cleanup</option>
+                    <option value="spelling_correction">Spelling Correction</option>
+                    <option value="formatting">Formatting</option>
+                    <option value="historical_normalization">Historical Normalization</option>
+                  </>
+                )}
+              </select>
+              {llmTemplates.length > 0 && (
+                <p className="text-[10px] text-gray-400 leading-tight">
+                  {llmTemplates.find(t => t.id === selectedTemplate)?.description || ''}
+                </p>
+              )}
+              <button
+                onClick={() => onLLMProcess && onLLMProcess(selectedTemplate)}
+                disabled={isLLMProcessing || !transcript}
+                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold
+                         bg-gradient-to-r from-purple-500 to-pink-500 text-white
+                         hover:from-purple-600 hover:to-pink-600 shadow-sm hover:shadow
+                         transition-all duration-200
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLLMProcessing ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Polishing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={14} />
+                    Polish with AI
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Export Panel - Compact */}
       {hasAnyTranscript && (
         <div className="px-3 py-3 border-t border-gray-200 bg-gradient-to-r from-white to-gray-50/50 shrink-0">
@@ -319,3 +411,7 @@ export default function TranscriptPanel({
     </div>
   );
 }
+
+// Transcript typing is the hot path here — memo so keystrokes don't re-render
+// this panel when an unrelated parent state (rate limit, zoom, etc.) changes.
+export default memo(TranscriptPanel);

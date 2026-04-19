@@ -338,3 +338,43 @@ export async function verifyApiKey(apiKey) {
     return { valid: false, error: 'Could not connect to server' };
   }
 }
+
+
+// ── LLM Post-processing ────────────────────────────────────────────
+
+/**
+ * Get available LLM post-processing templates
+ */
+export async function getLLMTemplates() {
+  const response = await fetch(`${API_BASE}/llm/templates`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch LLM templates');
+  }
+  return response.json();
+}
+
+/**
+ * Post-process OCR text using LLM
+ * @param {string} apiKey - Gemini API key
+ * @param {string} text - Raw OCR text
+ * @param {string} model - Model ID
+ * @param {string} template - Template name
+ * @returns {Promise<{success: boolean, processed_text?: string, error?: string}>}
+ */
+export async function postProcessWithLLM(apiKey, text, model = 'gemini-2.5-flash', template = 'full_cleanup') {
+  const response = await fetch(`${API_BASE}/llm/post-process`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Gemini-API-Key': apiKey,
+    },
+    body: JSON.stringify({ text, model, template }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'LLM processing failed' }));
+    throw new Error(err.detail || 'LLM processing failed');
+  }
+
+  return response.json();
+}

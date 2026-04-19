@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,6 +11,7 @@ import {
   Layers,
   Search,
   Undo2,
+  Redo2,
   RotateCcw,
   Info,
   X,
@@ -36,6 +37,7 @@ import ImageCropper from '../components/ImageCropper';
 
 // Import hooks and services
 import { usePipeline } from '../hooks/usePipeline';
+import { useHistoryStore, HistoryOps } from '../hooks/useHistoryStore';
 import { preprocessImage } from '../services/api';
 
 // Helper: shorten page labels so they fit in small boxes
@@ -85,67 +87,6 @@ function InfoBanner({ message, onDismiss, variant = 'info' }) {
 }
 
 // ============================================
-// useImageHistory Hook - Manages undo stack
-// ============================================
-function useImageHistory(initialState = null) {
-  // History stack for undo operations (stores previous states)
-  const [history, setHistory] = useState([]);
-  // Current working image state
-  const [currentState, setCurrentState] = useState(initialState);
-  // Original image (never modified)
-  const [originalState, setOriginalState] = useState(initialState);
-
-  // Initialize with a new original image
-  const initialize = useCallback((imageData) => {
-    setOriginalState(imageData);
-    setCurrentState(imageData);
-    setHistory([]);
-  }, []);
-
-  // Push current state to history and update with new state
-  const pushState = useCallback((newState) => {
-    setHistory((prev) => {
-      // Limit history size to prevent memory issues
-      const MAX_HISTORY = 10;
-      const newHistory = [...prev, currentState];
-      if (newHistory.length > MAX_HISTORY) {
-        return newHistory.slice(-MAX_HISTORY);
-      }
-      return newHistory;
-    });
-    setCurrentState(newState);
-  }, [currentState]);
-
-  // Undo - pop from history
-  const undo = useCallback(() => {
-    if (history.length === 0) return false;
-
-    const previousState = history[history.length - 1];
-    setHistory((prev) => prev.slice(0, -1));
-    setCurrentState(previousState);
-    return true;
-  }, [history]);
-
-  // Reset to original
-  const reset = useCallback(() => {
-    setCurrentState(originalState);
-    setHistory([]);
-  }, [originalState]);
-
-  return {
-    currentState,
-    originalState,
-    history,
-    canUndo: history.length > 0,
-    initialize,
-    pushState,
-    undo,
-    reset,
-    setCurrentState,
-  };
-}
-
-// ============================================
 // PreprocessPage - Enhanced Image Preprocessing Studio
 // ============================================
 /**
@@ -178,12 +119,16 @@ export default function PreprocessPage({
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
 
   // Image state management per page
-  // Structure: { pageNumber: { current, original, history } }
+  // Structure: { pageNumber: { current, original } }
+  // History lives in `history` (unified command store) — not duplicated here.
   const [imageStates, setImageStates] = useState({});
 
   // Final processed images (output of preprocessing pipeline)
   // Initialized from parent so navigating back and returning preserves progress
   const [processedImages, setProcessedImages] = useState(() => initialProcessedImages || {});
+
+  // Unified undo/redo store (replaces per-page history[] and globalUndoStack).
+  const history = useHistoryStore();
 
   // UI state
   const [showCropper, setShowCropper] = useState(false);
@@ -229,12 +174,15 @@ export default function PreprocessPage({
     return currentPage.thumbnail;
   }, [currentPage]);
 
-  // Check if current page has history (can undo)
-  const canUndo = useMemo(() => {
-    if (!currentPage) return false;
-    const state = imageStates[currentPage.pageNumber];
-    return state?.history?.length > 0;
-  }, [currentPage, imageStates]);
+  // Undo/redo availability is derived from the unified store. `history.version`
+  // is included so memoisation invalidates when the timeline changes.
+  const canUndo = useMemo(() => (
+    currentPage ? history.canUndoPage(currentPage.pageNumber) : false
+  ), [currentPage, history, history.version]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const canRedo = useMemo(() => (
+    currentPage ? history.canRedoPage(currentPage.pageNumber) : false
+  ), [currentPage, history, history.version]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Check if current page has been modified from original
   const isModified = useMemo(() => {
@@ -269,189 +217,320 @@ export default function PreprocessPage({
 
   // Sync processed/modified images to parent
   // This includes both preprocessed images AND cropped-only images
+  // Pin the callback so a new prop identity from the parent doesn't re-fire
+  // this sync effect. The effect's real deps are the data maps themselves.
+  const onProcessedImagesChangeRef = useRef(onProcessedImagesChange);
+  useEffect(() => { onProcessedImagesChangeRef.current = onProcessedImagesChange; }, [onProcessedImagesChange]);
+
   useEffect(() => {
-    if (onProcessedImagesChange) {
-      // Build a combined map: preprocessed images take priority, 
-      // but include cropped images that weren't preprocessed
-      const combinedImages = { ...processedImages };
-
-      // Add cropped images that don't have a preprocessed version
-      selectedPageData.forEach(page => {
-        const pageNum = page.pageNumber;
-        if (!combinedImages[pageNum]) {
-          const state = imageStates[pageNum];
-          // If the image was modified (cropped), use the current state
-          if (state?.current && state.current !== page.thumbnail) {
-            combinedImages[pageNum] = state.current;
-          }
+    if (!onProcessedImagesChangeRef.current) return;
+    const combinedImages = { ...processedImages };
+    selectedPageData.forEach(page => {
+      const pageNum = page.pageNumber;
+      if (!combinedImages[pageNum]) {
+        const state = imageStates[pageNum];
+        if (state?.current && state.current !== page.thumbnail) {
+          combinedImages[pageNum] = state.current;
         }
-      });
-
-      onProcessedImagesChange(combinedImages);
-    }
-  }, [processedImages, imageStates, selectedPageData, onProcessedImagesChange]);
+      }
+    });
+    onProcessedImagesChangeRef.current(combinedImages);
+  }, [processedImages, imageStates, selectedPageData]);
 
   // ========== IMAGE STATE HANDLERS ==========
 
   /**
-   * Push a new image state to history and update current
-   * This is the core state management function that ensures:
-   * - Previous state is saved for undo
-   * - New state becomes the working image
-   * - Original is never mutated
+   * Read the current working image for a page without touching state.
+   * Falls back to the page thumbnail if no edits have been made.
    */
-  const pushImageState = useCallback((pageNumber, newImageData) => {
+  const getCurrentImageFor = useCallback((pageNumber) => {
+    const state = imageStates[pageNumber];
+    if (state?.current) return state.current;
+    const page = pages.find((p) => p.pageNumber === pageNumber);
+    return page?.thumbnail;
+  }, [imageStates, pages]);
+
+  /**
+   * Write a new current image for a page (no history push).
+   * Callers that want the change undoable must also push an op to `history`.
+   */
+  const setCurrentImageFor = useCallback((pageNumber, newImageData) => {
     setImageStates((prev) => {
-      const pageData = pages.find(p => p.pageNumber === pageNumber);
-      const currentState = prev[pageNumber] || {
+      const pageData = pages.find((p) => p.pageNumber === pageNumber);
+      const entry = prev[pageNumber] || {
         current: pageData?.thumbnail,
         original: pageData?.thumbnail,
-        history: [],
       };
-
-      // Don't push if same as current
-      if (currentState.current === newImageData) {
-        return prev;
-      }
-
-      // Limit history size
-      const MAX_HISTORY = 10;
-      const newHistory = [...currentState.history, currentState.current];
-
-      return {
-        ...prev,
-        [pageNumber]: {
-          ...currentState,
-          current: newImageData,
-          history: newHistory.slice(-MAX_HISTORY),
-        },
-      };
+      if (entry.current === newImageData) return prev;
+      return { ...prev, [pageNumber]: { ...entry, current: newImageData } };
     });
   }, [pages]);
 
   /**
-   * Undo last image modification
+   * Bulk-overwrite processedImages, dropping any entries set to null so the
+   * map stays minimal. Used by revert paths that need to restore a snapshot.
+   */
+  const replaceProcessedImages = useCallback((nextMap) => {
+    setProcessedImages(() => {
+      const out = {};
+      Object.entries(nextMap || {}).forEach(([k, v]) => {
+        if (v != null) out[k] = v;
+      });
+      return out;
+    });
+  }, []);
+
+  /**
+   * Apply an operation's `after` side — used for redo. Returns nothing; all
+   * state writes happen through the existing setters so subscribers update.
+   */
+  const applyForward = useCallback((op) => {
+    if (!op) return;
+    switch (op.kind) {
+      case 'crop':
+        setCurrentImageFor(op.pageNumber, op.after.image);
+        setProcessedImages((prev) => {
+          const { [op.pageNumber]: _removed, ...rest } = prev;
+          return rest;
+        });
+        break;
+      case 'crop-batch':
+        Object.entries(op.after.images).forEach(([pn, url]) => {
+          setCurrentImageFor(pn in imageStates ? pn : Number(pn), url);
+        });
+        setProcessedImages((prev) => {
+          const next = { ...prev };
+          Object.keys(op.after.images).forEach((pn) => { delete next[pn]; });
+          return next;
+        });
+        break;
+      case 'erase':
+        setCurrentImageFor(op.pageNumber, op.after.image);
+        setProcessedImages((prev) => {
+          const { [op.pageNumber]: _removed, ...rest } = prev;
+          return rest;
+        });
+        break;
+      case 'erase-batch':
+        Object.entries(op.after.images).forEach(([pn, url]) => {
+          const key = isNaN(Number(pn)) ? pn : Number(pn);
+          setCurrentImageFor(key, url);
+        });
+        setProcessedImages((prev) => {
+          const next = { ...prev };
+          Object.keys(op.after.images).forEach((pn) => { delete next[pn]; });
+          return next;
+        });
+        break;
+      case 'pipeline':
+        setProcessedImages((prev) => ({ ...prev, [op.pageNumber]: op.after.processed }));
+        break;
+      case 'pipeline-batch':
+        replaceProcessedImages(op.after.processed);
+        break;
+      case 'reset-page': {
+        const page = pages.find((p) => p.pageNumber === op.pageNumber);
+        setCurrentImageFor(op.pageNumber, page?.thumbnail);
+        setProcessedImages((prev) => {
+          const { [op.pageNumber]: _removed, ...rest } = prev;
+          return rest;
+        });
+        break;
+      }
+      default:
+        console.warn('applyForward: unknown op kind', op.kind);
+    }
+  }, [imageStates, pages, replaceProcessedImages, setCurrentImageFor]);
+
+  /**
+   * Revert an operation's effect. The store has already moved its cursor;
+   * this just walks the state changes backwards.
+   */
+  const applyRevert = useCallback((op) => {
+    if (!op) return;
+    switch (op.kind) {
+      case 'crop':
+      case 'erase':
+        setCurrentImageFor(op.pageNumber, op.before.image);
+        // processed was cleared by the forward op; we can't re-derive it, leave it empty
+        break;
+      case 'crop-batch':
+      case 'erase-batch':
+        Object.entries(op.before.images).forEach(([pn, url]) => {
+          const key = isNaN(Number(pn)) ? pn : Number(pn);
+          setCurrentImageFor(key, url);
+        });
+        break;
+      case 'pipeline':
+        if (op.before.processed == null) {
+          setProcessedImages((prev) => {
+            const { [op.pageNumber]: _removed, ...rest } = prev;
+            return rest;
+          });
+        } else {
+          setProcessedImages((prev) => ({ ...prev, [op.pageNumber]: op.before.processed }));
+        }
+        break;
+      case 'pipeline-batch':
+        replaceProcessedImages(op.before.processed);
+        break;
+      case 'reset-page':
+        if (op.before.image != null) setCurrentImageFor(op.pageNumber, op.before.image);
+        if (op.before.processed != null) {
+          setProcessedImages((prev) => ({ ...prev, [op.pageNumber]: op.before.processed }));
+        }
+        break;
+      default:
+        console.warn('applyRevert: unknown op kind', op.kind);
+    }
+  }, [replaceProcessedImages, setCurrentImageFor]);
+
+  /**
+   * Undo last edit for the current page. Pulls the most recent op involving
+   * this page off the timeline and reverts its effect.
    */
   const handleUndo = useCallback(() => {
     if (!currentPage) return;
-
-    setImageStates((prev) => {
-      const state = prev[currentPage.pageNumber];
-      if (!state || state.history.length === 0) return prev;
-
-      const previousImage = state.history[state.history.length - 1];
-
-      return {
-        ...prev,
-        [currentPage.pageNumber]: {
-          ...state,
-          current: previousImage,
-          history: state.history.slice(0, -1),
-        },
-      };
-    });
-
-    // Also clear processed image since source changed
-    setProcessedImages((prev) => {
-      const { [currentPage.pageNumber]: removed, ...rest } = prev;
-      return rest;
-    });
-  }, [currentPage]);
+    const op = history.undoPage(currentPage.pageNumber);
+    if (op) applyRevert(op);
+  }, [currentPage, history, applyRevert]);
 
   /**
-   * Reset current page to original image
+   * Redo — walks the timeline forward. Scoped globally because the store's
+   * branch semantics already ensure this only exposes a coherent next op.
+   */
+  const handleRedo = useCallback(() => {
+    const op = history.redoGlobal();
+    if (op) applyForward(op);
+  }, [history, applyForward]);
+
+  // Keyboard shortcuts — Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z map to the store.
+  // Skipped while a modal is open (cropper / eraser handle their own keys).
+  useEffect(() => {
+    if (showCropper || showEraser) return;
+    const onKey = (e) => {
+      const meta = e.ctrlKey || e.metaKey;
+      if (!meta) return;
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        if (e.shiftKey) handleRedo();
+        else handleUndo();
+      } else if (e.key === 'y' || e.key === 'Y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleUndo, handleRedo, showCropper, showEraser]);
+
+  /**
+   * Reset current page to original image — pushed as a `reset-page` op so it
+   * is itself undoable.
    */
   const handleResetImage = useCallback(() => {
     if (!currentPage) return;
+    const pn = currentPage.pageNumber;
+    const beforeImage = getCurrentImageFor(pn);
+    const beforeProcessed = processedImages[pn] ?? null;
+    if (beforeImage === currentPage.thumbnail && beforeProcessed == null) return;
+
+    history.push(HistoryOps.resetPage({
+      pageNumber: pn,
+      beforeImage,
+      beforeProcessed,
+    }));
 
     setImageStates((prev) => ({
       ...prev,
-      [currentPage.pageNumber]: {
-        current: currentPage.thumbnail,
-        original: currentPage.thumbnail,
-        history: [],
-      },
+      [pn]: { current: currentPage.thumbnail, original: currentPage.thumbnail },
     }));
-
-    // Clear processed image
     setProcessedImages((prev) => {
-      const { [currentPage.pageNumber]: removed, ...rest } = prev;
+      const { [pn]: _removed, ...rest } = prev;
       return rest;
     });
-  }, [currentPage]);
+  }, [currentPage, getCurrentImageFor, history, processedImages]);
 
   // ========== CROP HANDLERS ==========
 
   /**
-   * Handle crop completion for single page
-   * Crops are treated as direct edits - saved immediately to working state
-   * with full undo support. No special "crop-only" mode needed.
+   * Handle crop completion for single page. Pushes a `crop` op capturing the
+   * before/after image references so the edit is undoable.
    */
   const handleCropComplete = useCallback((croppedDataUrl, cropData) => {
     if (!currentPage) return;
+    const pn = currentPage.pageNumber;
+    const before = getCurrentImageFor(pn);
 
-    // Push cropped image to state (saves history for undo)
-    pushImageState(currentPage.pageNumber, croppedDataUrl);
-
-    setShowCropper(false);
-
-    // Clear processed image since source changed
-    // User needs to re-apply preprocessing on the new cropped base
+    history.push(HistoryOps.crop({ pageNumber: pn, before, after: croppedDataUrl, cropData }));
+    setCurrentImageFor(pn, croppedDataUrl);
     setProcessedImages((prev) => {
-      const { [currentPage.pageNumber]: removed, ...rest } = prev;
+      const { [pn]: _removed, ...rest } = prev;
       return rest;
     });
-  }, [currentPage, pushImageState]);
+    setShowCropper(false);
+  }, [currentPage, getCurrentImageFor, history, setCurrentImageFor]);
 
   /**
-   * Handle eraser batch save — push erased images to history for all modified pages
+   * Eraser batch save — the eraser hands us a map of `{pageNumber: dataUrl}`
+   * for every page touched. We fold that into a single `erase-batch` op so
+   * one undo click rewinds the whole save.
    */
   const handleEraserSave = useCallback((results) => {
-    // results is { [pageNumber]: dataUrl } for each modified page
-    // Object keys are always strings — look up the original typed page number
+    const pageNumbers = [];
+    const beforeMap = {};
+    const afterMap = {};
+
     Object.entries(results).forEach(([pageNumStr, dataUrl]) => {
-      const page = selectedPageData.find(p => String(p.pageNumber) === pageNumStr);
-      // Preserve original type (number vs string like "3_left")
-      const pn = page
-        ? page.pageNumber
-        : isNaN(Number(pageNumStr)) ? pageNumStr : Number(pageNumStr);
-      pushImageState(pn, dataUrl);
-      // Clear processed image since source changed
-      setProcessedImages((prev) => {
-        const { [pn]: removed, ...rest } = prev;
-        return rest;
-      });
+      const page = selectedPageData.find((p) => String(p.pageNumber) === pageNumStr);
+      const pn = page ? page.pageNumber : (isNaN(Number(pageNumStr)) ? pageNumStr : Number(pageNumStr));
+      pageNumbers.push(pn);
+      beforeMap[pn] = getCurrentImageFor(pn);
+      afterMap[pn] = dataUrl;
+    });
+
+    if (pageNumbers.length === 1) {
+      const pn = pageNumbers[0];
+      history.push(HistoryOps.erase({ pageNumber: pn, before: beforeMap[pn], after: afterMap[pn] }));
+    } else if (pageNumbers.length > 1) {
+      history.push(HistoryOps.eraseBatch({ pageNumbers, before: beforeMap, after: afterMap }));
+    }
+
+    pageNumbers.forEach((pn) => setCurrentImageFor(pn, afterMap[pn]));
+    setProcessedImages((prev) => {
+      const next = { ...prev };
+      pageNumbers.forEach((pn) => { delete next[pn]; });
+      return next;
     });
     setShowEraser(false);
-  }, [pushImageState, selectedPageData]);
+  }, [getCurrentImageFor, history, selectedPageData, setCurrentImageFor]);
 
   /**
-   * Handle batch crop completion (current page + selected pages)
-   * Applies the same crop region to multiple pages at once
+   * Batch crop — one op spanning the current page + all batch targets.
    */
   const handleBatchCropComplete = useCallback((currentCroppedUrl, cropData, batchResults) => {
     if (!currentPage) return;
+    const pageNumbers = [currentPage.pageNumber];
+    const beforeMap = { [currentPage.pageNumber]: getCurrentImageFor(currentPage.pageNumber) };
+    const afterMap = { [currentPage.pageNumber]: currentCroppedUrl };
 
-    // Apply to current page
-    pushImageState(currentPage.pageNumber, currentCroppedUrl);
-
-    // Apply to all other selected pages
     batchResults.forEach(({ pageNumber, croppedDataUrl }) => {
-      pushImageState(pageNumber, croppedDataUrl);
+      pageNumbers.push(pageNumber);
+      beforeMap[pageNumber] = getCurrentImageFor(pageNumber);
+      afterMap[pageNumber] = croppedDataUrl;
     });
 
-    setShowCropper(false);
-
-    // Clear processed images for all affected pages
+    history.push(HistoryOps.cropBatch({ pageNumbers, before: beforeMap, after: afterMap }));
+    pageNumbers.forEach((pn) => setCurrentImageFor(pn, afterMap[pn]));
     setProcessedImages((prev) => {
-      const newProcessed = { ...prev };
-      delete newProcessed[currentPage.pageNumber];
-      batchResults.forEach(({ pageNumber }) => {
-        delete newProcessed[pageNumber];
-      });
-      return newProcessed;
+      const next = { ...prev };
+      pageNumbers.forEach((pn) => { delete next[pn]; });
+      return next;
     });
-  }, [currentPage, pushImageState]);
+    setShowCropper(false);
+  }, [currentPage, getCurrentImageFor, history, setCurrentImageFor]);
 
   // ========== PREPROCESSING HANDLERS ==========
 
@@ -482,13 +561,17 @@ export default function PreprocessPage({
       }
 
       const result = await preprocessImage(sourceImage, pipelineConfig);
+      const pn = currentPage.pageNumber;
+      const beforeProcessed = processedImages[pn] ?? null;
 
-      // Save the preprocessed result
-      setProcessedImages((prev) => ({
-        ...prev,
-        [currentPage.pageNumber]: result,
+      history.push(HistoryOps.pipeline({
+        pageNumber: pn,
+        beforeProcessed,
+        afterProcessed: result,
+        pipelineConfig,
       }));
 
+      setProcessedImages((prev) => ({ ...prev, [pn]: result }));
       setProcessingProgress(100);
     } catch (error) {
       console.error('Processing failed:', error);
@@ -497,7 +580,7 @@ export default function PreprocessPage({
       setCurrentProcessingStep(null);
       setProcessingProgress(0);
     }
-  }, [currentPage, isProcessing, getActivePipeline, buildPipelineConfig, currentImageState]);
+  }, [currentPage, isProcessing, getActivePipeline, buildPipelineConfig, currentImageState, history, processedImages]);
 
   /**
    * Apply preprocessing to all selected pages
@@ -529,6 +612,17 @@ export default function PreprocessPage({
         results[page.pageNumber] = result;
       }
 
+      const pageNumbers = Object.keys(results).map((k) => (isNaN(Number(k)) ? k : Number(k)));
+      const beforeProcessed = {};
+      pageNumbers.forEach((pn) => { beforeProcessed[pn] = processedImages[pn] ?? null; });
+
+      history.push(HistoryOps.pipelineBatch({
+        pageNumbers,
+        beforeProcessed,
+        afterProcessed: results,
+        pipelineConfig,
+      }));
+
       setProcessedImages(results);
       setProcessingProgress(100);
     } catch (error) {
@@ -538,7 +632,7 @@ export default function PreprocessPage({
       setBatchProgress({ current: 0, total: 0 });
       setProcessingProgress(0);
     }
-  }, [isProcessing, getActivePipeline, buildPipelineConfig, selectedPageData, imageStates]);
+  }, [isProcessing, getActivePipeline, buildPipelineConfig, selectedPageData, imageStates, processedImages, history]);
 
   // ========== NAVIGATION HANDLERS ==========
 
@@ -557,29 +651,27 @@ export default function PreprocessPage({
     resetPipeline();
   }, [resetPipeline]);
 
-  /** Reset current page: clear its processed result AND undo all image edits. */
-  const handleResetCurrentPage = useCallback(() => {
-    if (!currentPage) return;
-    setImageStates((prev) => ({
-      ...prev,
-      [currentPage.pageNumber]: {
-        current: currentPage.thumbnail,
-        original: currentPage.thumbnail,
-        history: [],
-      },
-    }));
-    setProcessedImages((prev) => {
-      const { [currentPage.pageNumber]: _removed, ...rest } = prev;
-      return rest;
-    });
-  }, [currentPage]);
+  /** Reset current page — delegates to the undoable reset-page handler. */
+  const handleResetCurrentPage = handleResetImage;
 
-  /** Full reset: pipeline + ALL pages (kept for future use, not exposed in UI). */
+  /** Full reset: pipeline + ALL pages. Clears history too since every op's
+   *  before-state is about to disappear. */
   const handleResetAll = useCallback(() => {
     resetPipeline();
     setProcessedImages({});
     setImageStates({});
-  }, [resetPipeline]);
+    history.clear();
+  }, [resetPipeline, history]);
+
+  /**
+   * "Undo All" — now an alias for the unified global undo. Reverts the most
+   * recent op regardless of page, matching the original button's intent of
+   * rewinding the last apply-all (which is the most common batch op).
+   */
+  const handleGlobalUndo = useCallback(() => {
+    const op = history.undoGlobal();
+    if (op) applyRevert(op);
+  }, [history, applyRevert]);
 
   // ========== COMPUTED VALUES ==========
 
@@ -597,6 +689,10 @@ export default function PreprocessPage({
 
   // Allow proceeding if there are processed images OR modified (cropped) images
   const canProceed = hasProcessedImages || hasModifiedImages;
+
+  // Global undo/redo availability is read from the unified store.
+  const canGlobalUndo = history.canUndoGlobal;
+  const canGlobalRedo = history.canRedoGlobal;
 
   // ========== RENDER ==========
 
@@ -769,7 +865,7 @@ export default function PreprocessPage({
                     Eraser
                   </button>
 
-                  {/* Undo button */}
+                  {/* Undo button (current image) */}
                   <button
                     onClick={handleUndo}
                     disabled={!canUndo}
@@ -777,10 +873,39 @@ export default function PreprocessPage({
                       ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                       : 'bg-gray-50 text-gray-300 cursor-not-allowed'
                       }`}
-                    title="Undo last edit"
+                    title="Undo last edit (current image)"
                   >
                     <Undo2 className="w-4 h-4" />
                     <span className="hidden sm:inline">Undo</span>
+                  </button>
+
+                  {/* Redo button — walks the timeline forward */}
+                  <button
+                    onClick={handleRedo}
+                    disabled={!canGlobalRedo}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${canGlobalRedo
+                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                      }`}
+                    title="Redo (Ctrl+Shift+Z)"
+                  >
+                    <Redo2 className="w-4 h-4" />
+                    <span className="hidden sm:inline">Redo</span>
+                  </button>
+
+                  {/* Undo All button (global - reverts last op across all pages) */}
+                  <button
+                    onClick={handleGlobalUndo}
+                    disabled={!canGlobalUndo}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${canGlobalUndo
+                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                      }`}
+                    title="Undo last global operation (e.g. Apply All)"
+                  >
+                    <Undo2 className="w-4 h-4" />
+                    <Layers className="w-3 h-3" />
+                    <span className="hidden sm:inline">Undo All</span>
                   </button>
 
                   {/* Reset button */}

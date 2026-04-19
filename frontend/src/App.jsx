@@ -358,7 +358,7 @@ function App() {
         <>
           {/* Header */}
           <header className="bg-white/80 backdrop-blur-md border-b border-gray-100/50 sticky top-0 z-40 shadow-sm">
-            <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+            <div className="px-6 lg:px-10 xl:px-16 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
                   <FileText className="w-6 h-6 text-white" />
@@ -383,7 +383,7 @@ function App() {
           </header>
 
           {/* Main content */}
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-6">
+          <main className="flex-1 w-full px-6 lg:px-10 xl:px-16 py-6">
             <Stepper currentStep={currentStep} onStepClick={handleStepClick} />
 
             {error && (
@@ -453,7 +453,7 @@ function App() {
 
           {/* Footer */}
           <footer className="bg-white/60 backdrop-blur-sm border-t border-gray-100 py-4">
-            <div className="max-w-7xl mx-auto px-4 text-center">
+            <div className="px-6 lg:px-10 xl:px-16 text-center">
               <p className="text-sm text-gray-500 flex items-center justify-center gap-2">
                 <span className="font-semibold text-gray-600">OCR Preprocess Studio</span>
                 <span className="text-gray-300">|</span>

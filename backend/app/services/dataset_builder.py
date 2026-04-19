@@ -214,3 +214,91 @@ def build_dataset_zip(
 
     buf.seek(0)
     return buf
+
+
+# ── Detection-only Dataset Export ──────────────────────────────────
+
+def build_detection_dataset_zip(
+    pages_data: List[Dict[str, Any]],
+    book_name: str = "dataset",
+) -> io.BytesIO:
+    """
+    Build a ZIP with full page images and bounding box annotations (no transcript).
+
+    Output (COCO-like format):
+        book_name/
+            images/
+                page_1.jpg
+                page_2.jpg
+            annotations.json
+    """
+    import base64
+    import json
+
+    buf = io.BytesIO()
+    annotations: Dict[str, Any] = {
+        "images": [],
+        "annotations": [],
+        "categories": [{"id": 1, "name": "text"}],
+    }
+    ann_id = 1
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for img_id, page in enumerate(pages_data, start=1):
+            page_key = page["page_key"]
+            boxes = page.get("boxes", [])
+
+            # Decode the page image
+            img_b64 = page["image_data"]
+            if "," in img_b64:
+                img_b64 = img_b64.split(",", 1)[1]
+            img_bytes = base64.b64decode(img_b64)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if img is None:
+                continue
+
+            h, w = img.shape[:2]
+            img_filename = f"{book_name}/images/page_{page_key}.jpg"
+
+            # Encode as JPEG
+            _, jpg_data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            zf.writestr(img_filename, jpg_data.tobytes())
+
+            annotations["images"].append({
+                "id": img_id,
+                "file_name": f"images/page_{page_key}.jpg",
+                "width": w,
+                "height": h,
+            })
+
+            for box in boxes:
+                pts = np.array(box, dtype=np.float32)
+                x1 = int(pts[:, 0].min())
+                y1 = int(pts[:, 1].min())
+                x2 = int(pts[:, 0].max())
+                y2 = int(pts[:, 1].max())
+                bw, bh = x2 - x1, y2 - y1
+
+                annotations["annotations"].append({
+                    "id": ann_id,
+                    "image_id": img_id,
+                    "category_id": 1,
+                    "bbox": [x1, y1, bw, bh],
+                    "area": bw * bh,
+                    "polygon": [[float(c) for c in pt] for pt in box],
+                    "iscrowd": 0,
+                })
+                ann_id += 1
+
+            # Release memory
+            del img, nparr, img_bytes
+
+        zf.writestr(
+            f"{book_name}/annotations.json",
+            json.dumps(annotations, indent=2, ensure_ascii=False),
+        )
+
+    buf.seek(0)
+    return buf

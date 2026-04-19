@@ -144,15 +144,63 @@ export default function ImageEraser({
     };
 
     // ========== SNAPSHOT (UNDO) ==========
-    const saveSnapshot = useCallback(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        const snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    // Each snapshot stores only the pixels inside the stroke's bounding box
+    // (plus the brush radius), not the whole canvas. For a typical 50px brush
+    // on a 2400×3200 page this is ~2 orders of magnitude less memory.
+    const strokeBoundsRef = useRef(null);
+
+    const beginStrokeBounds = useCallback(() => {
+        strokeBoundsRef.current = null;
+    }, []);
+
+    const extendStrokeBounds = useCallback((x, y) => {
+        const pad = brushSize;
+        const b = strokeBoundsRef.current;
+        if (!b) {
+            strokeBoundsRef.current = { minX: x - pad, minY: y - pad, maxX: x + pad, maxY: y + pad };
+        } else {
+            if (x - pad < b.minX) b.minX = x - pad;
+            if (y - pad < b.minY) b.minY = y - pad;
+            if (x + pad > b.maxX) b.maxX = x + pad;
+            if (y + pad > b.maxY) b.maxY = y + pad;
+        }
+    }, [brushSize]);
+
+    // Hidden "pre-stroke" canvas — clone of the drawing canvas at pointer-down.
+    // On pointer-up we read back only the dirty rectangle from here, so undo
+    // stores a region-delta instead of a full-canvas ImageData.
+    const preStrokeCanvasRef = useRef(null);
+
+    const clonePreStroke = useCallback(() => {
+        const src = canvasRef.current;
+        if (!src) return;
+        if (!preStrokeCanvasRef.current) {
+            preStrokeCanvasRef.current = document.createElement('canvas');
+        }
+        const dst = preStrokeCanvasRef.current;
+        if (dst.width !== src.width || dst.height !== src.height) {
+            dst.width = src.width;
+            dst.height = src.height;
+        }
+        dst.getContext('2d').drawImage(src, 0, 0);
+    }, []);
+
+    const commitStrokeDelta = useCallback(() => {
+        const bounds = strokeBoundsRef.current;
+        const pre = preStrokeCanvasRef.current;
+        if (!bounds || !pre) return;
+        const w = pre.width, h = pre.height;
+        const x = Math.max(0, Math.floor(bounds.minX));
+        const y = Math.max(0, Math.floor(bounds.minY));
+        const rw = Math.min(w - x, Math.ceil(bounds.maxX - bounds.minX));
+        const rh = Math.min(h - y, Math.ceil(bounds.maxY - bounds.minY));
+        if (rw <= 0 || rh <= 0) return;
+        const data = pre.getContext('2d').getImageData(x, y, rw, rh);
         setStrokeHistory((prev) => {
-            const next = [...prev, snapshot];
+            const next = [...prev, { x, y, w: rw, h: rh, data }];
             return next.length > 20 ? next.slice(-20) : next;
         });
+        strokeBoundsRef.current = null;
     }, []);
 
     const handleUndo = useCallback(() => {
@@ -160,7 +208,10 @@ export default function ImageEraser({
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d');
-        ctx.putImageData(strokeHistory[strokeHistory.length - 1], 0, 0);
+        const last = strokeHistory[strokeHistory.length - 1];
+        if (last?.data) {
+            ctx.putImageData(last.data, last.x, last.y);
+        }
         setStrokeHistory((prev) => prev.slice(0, -1));
     }, [strokeHistory]);
 
@@ -211,13 +262,15 @@ export default function ImageEraser({
 
             const { clientX, clientY } = getClientPos(e);
             const pt = screenToCanvas(clientX, clientY);
-            saveSnapshot();
+            clonePreStroke();
+            beginStrokeBounds();
+            extendStrokeBounds(pt.x, pt.y);
             setIsDrawing(true);
             lastPointRef.current = pt;
             drawDot(pt.x, pt.y);
             setModifiedPages((prev) => new Set([...prev, currentPage?.pageNumber]));
         },
-        [screenToCanvas, saveSnapshot, drawDot, pan, currentPage]
+        [screenToCanvas, clonePreStroke, beginStrokeBounds, extendStrokeBounds, drawDot, pan, currentPage]
     );
 
     const handlePointerMove = useCallback(
@@ -242,19 +295,24 @@ export default function ImageEraser({
             const pt = screenToCanvas(clientX, clientY);
             const last = lastPointRef.current;
             if (last) drawSegment(last, pt);
+            extendStrokeBounds(pt.x, pt.y);
             lastPointRef.current = pt;
         },
-        [isDrawing, isPanning, screenToCanvas, drawSegment]
+        [isDrawing, isPanning, screenToCanvas, drawSegment, extendStrokeBounds]
     );
 
     const handlePointerUp = useCallback(() => {
+        if (isDrawing) commitStrokeDelta();
         setIsDrawing(false);
         setIsPanning(false);
         lastPointRef.current = null;
-    }, []);
+    }, [isDrawing, commitStrokeDelta]);
 
     useEffect(() => {
         const up = () => {
+            // We can't read `isDrawing` from here without a ref, so we always
+            // try to commit; commitStrokeDelta is a no-op when bounds is null.
+            commitStrokeDelta();
             setIsDrawing(false);
             setIsPanning(false);
             lastPointRef.current = null;
@@ -265,7 +323,7 @@ export default function ImageEraser({
             window.removeEventListener('mouseup', up);
             window.removeEventListener('touchend', up);
         };
-    }, []);
+    }, [commitStrokeDelta]);
 
     // ========== KEYBOARD ==========
     useEffect(() => {

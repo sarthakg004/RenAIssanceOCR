@@ -1,6 +1,11 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { CheckSquare, Square, Grid3X3, LayoutGrid, X, ZoomIn } from 'lucide-react';
 import PageCard from './PageCard';
+
+// Helper: check if two rects intersect (both in { left, top, right, bottom } format)
+function rectsIntersect(a, b) {
+  return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
+}
 
 export default function PdfPreviewGrid({
   pages,
@@ -12,10 +17,19 @@ export default function PdfPreviewGrid({
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
   const [previewPage, setPreviewPage] = useState(null);
 
+  // Drag-to-select state
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState(null);
+  const [dragEnd, setDragEnd] = useState(null);
+  const dragModifierRef = useRef({ ctrl: false, shift: false });
+  const preSelectionRef = useRef([]);
+  const pageRefs = useRef({});
+  const gridRef = useRef(null);
+
   const gridClasses = {
-    small: 'grid-cols-4 md:grid-cols-6 lg:grid-cols-8',
-    medium: 'grid-cols-3 md:grid-cols-4 lg:grid-cols-6',
-    large: 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4',
+    small: 'grid-cols-4 md:grid-cols-6 lg:grid-cols-8 2xl:grid-cols-10',
+    medium: 'grid-cols-3 md:grid-cols-4 lg:grid-cols-6 2xl:grid-cols-8',
+    large: 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5',
   };
 
   const handleSelectPage = useCallback(
@@ -74,6 +88,96 @@ export default function PdfPreviewGrid({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewPage, pages.length]);
+
+  // --- Drag-to-select logic ---
+
+  // Compute which pages intersect the rubber band and update selection
+  const computeDragSelection = useCallback((start, end) => {
+    if (!start || !end) return;
+
+    const bandRect = {
+      left: Math.min(start.x, end.x),
+      top: Math.min(start.y, end.y),
+      right: Math.max(start.x, end.x),
+      bottom: Math.max(start.y, end.y),
+    };
+
+    const intersectedPages = [];
+    for (const page of pages) {
+      const el = pageRefs.current[page.pageNumber];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const cardRect = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+      if (rectsIntersect(bandRect, cardRect)) {
+        intersectedPages.push(page.pageNumber);
+      }
+    }
+
+    const { ctrl, shift } = dragModifierRef.current;
+    let newSelection;
+
+    if (ctrl || shift) {
+      // Additive: union with pre-drag selection
+      newSelection = Array.from(new Set([...preSelectionRef.current, ...intersectedPages]));
+    } else {
+      // Replace: only the intersected pages
+      newSelection = intersectedPages;
+    }
+
+    onSelectionChange(newSelection);
+  }, [pages, onSelectionChange]);
+
+  // Start drag on mousedown in the grid background (not on a page card)
+  const handleGridMouseDown = useCallback((e) => {
+    // Only left button
+    if (e.button !== 0) return;
+    // Don't start drag if clicking on a page card or interactive element
+    if (e.target.closest('[data-page-card]')) return;
+    if (e.target.closest('button')) return;
+
+    e.preventDefault();
+    const pos = { x: e.clientX, y: e.clientY };
+    setDragStart(pos);
+    setDragEnd(pos);
+    setIsDragging(true);
+    dragModifierRef.current = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
+    preSelectionRef.current = [...selectedPages];
+  }, [selectedPages]);
+
+  // Track mousemove and mouseup while dragging
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e) => {
+      const pos = { x: e.clientX, y: e.clientY };
+      setDragEnd(pos);
+      computeDragSelection(dragStart, pos);
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      setDragStart(null);
+      setDragEnd(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragStart, computeDragSelection]);
+
+  // Rubber band rect style
+  const rubberBandStyle = isDragging && dragStart && dragEnd ? {
+    position: 'fixed',
+    left: Math.min(dragStart.x, dragEnd.x),
+    top: Math.min(dragStart.y, dragEnd.y),
+    width: Math.abs(dragEnd.x - dragStart.x),
+    height: Math.abs(dragEnd.y - dragStart.y),
+    zIndex: 50,
+    pointerEvents: 'none',
+  } : null;
 
   return (
     <div className="animate-fade-in">
@@ -136,10 +240,15 @@ export default function PdfPreviewGrid({
       </div>
 
       {/* Grid */}
-      <div className={`grid gap-4 ${gridClasses[gridSize]}`}>
+      <div
+        ref={gridRef}
+        className={`grid gap-4 ${gridClasses[gridSize]} ${isDragging ? 'select-none' : ''}`}
+        onMouseDown={handleGridMouseDown}
+      >
         {pages.map((page, index) => (
           <PageCard
             key={page.pageNumber}
+            ref={(el) => { if (el) pageRefs.current[page.pageNumber] = el; }}
             pageNumber={page.pageNumber}
             thumbnail={page.thumbnail}
             isSelected={selectedPages.includes(page.pageNumber)}
@@ -148,6 +257,14 @@ export default function PdfPreviewGrid({
           />
         ))}
       </div>
+
+      {/* Rubber band overlay */}
+      {rubberBandStyle && (
+        <div
+          className="border-2 border-blue-500 bg-blue-200/20 rounded-sm"
+          style={rubberBandStyle}
+        />
+      )}
 
       {/* Lightbox preview */}
       {previewPage && (

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(timeout 30 docker buildx build --check .)"
+    ]
+  }
+}
