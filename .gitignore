@@ -8,3 +8,4 @@ RenAIssanceExperimental
 # Large model weights — tracked out-of-band, not in git.
 # See README for download instructions (HuggingFace trocr + custom CRNN).
 backend/models/weights/
+.claude
