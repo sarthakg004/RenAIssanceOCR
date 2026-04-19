@@ -159,6 +159,17 @@ RUN groupadd --system appgroup && \
 WORKDIR /app
 COPY --chown=appuser:appgroup . .
 
+# Normalize the TrOCR checkpoint for transformers 4.44.x + tokenizers 0.19.x.
+# The processor assets (image processor + tokenizer) shipped alongside the
+# fine-tuned weights were saved by a newer tokenizers release and can't be
+# deserialized by the pinned versions. Since the checkpoint was fine-tuned
+# from microsoft/trocr-base-printed (shares processor + vocabulary exactly),
+# we pull that processor at build time and drop its assets next to the
+# fine-tuned weights. See the script for details. Ownership is reset so
+# appuser can read the regenerated files at runtime.
+RUN python /app/scripts/normalize_trocr_config.py && \
+    chown -R appuser:appgroup /app/models/weights/trocr
+
 USER appuser
 
 EXPOSE 8000
