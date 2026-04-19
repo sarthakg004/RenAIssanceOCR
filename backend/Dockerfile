@@ -168,7 +168,7 @@ COPY --chown=appuser:appgroup . .
 # fine-tuned weights. See the script for details. Ownership is reset so
 # appuser can read the regenerated files at runtime.
 RUN python /app/scripts/normalize_trocr_config.py && \
-    chown -R appuser:appgroup /app/models/weights/trocr
+    chown -R appuser:appgroup /app/models/weights/trocr /home/appuser
 
 USER appuser
 
