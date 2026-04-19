@@ -39,9 +39,14 @@ opt_einsum==3.3.0
 
 # --- Local recognition models (CRNN / TrOCR) ---
 torch==2.5.1
-transformers==4.46.3
+# transformers must be <=4.44.x to accept tokenizers 0.19.x, which is
+# what paddlex 3.0.0 hard-pins ("tokenizers==0.19.1"). transformers 4.45+
+# jumped to tokenizers>=0.20 and is resolution-incompatible with paddlex.
+# 4.44.2 supports the same VisionEncoderDecoderModel / TrOCRProcessor
+# APIs the recognition service relies on.
+transformers==4.44.2
 # safetensors must be >=0.6.0 to satisfy paddlepaddle-gpu==3.3.0;
-# transformers 4.46.3 only requires >=0.4.1, so 0.6.x works for both.
+# transformers 4.44.2 only requires >=0.4.1, so 0.6.x works for both.
 safetensors==0.6.2
 
 # --- PDF parsing ---
