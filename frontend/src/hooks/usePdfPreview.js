@@ -1,131 +1,96 @@
-import { useState, useEffect, useCallback } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
-
-// Configure PDF.js worker - use unpkg CDN with correct path for v4.x
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+import { useState, useCallback, useEffect, useRef } from 'react';
 
 /**
- * Hook for extracting PDF pages as images
+ * Hook for extracting PDF pages and loading raw image files as page objects.
+ *
+ * PDF extraction runs inside a Web Worker (OffscreenCanvas) so it keeps making
+ * progress when the tab is hidden — main-thread canvas work is throttled to
+ * ~1 Hz in background tabs, which is what made progress appear to "freeze"
+ * when switching tabs.
+ *
+ * Image loading is parallelised with a small concurrency cap (workers don't
+ * help here because <img> decode + <canvas> ops only exist on the main thread,
+ * but parallel I/O drains the queue regardless of timer throttling).
  */
+
+const IMAGE_CONCURRENCY = 4;
+
+function makeWorker() {
+  return new Worker(
+    new URL('../workers/pdfExtractor.worker.js', import.meta.url),
+    { type: 'module' }
+  );
+}
+
 export function usePdfPreview() {
   const [pages, setPages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState(0);
 
-  const extractPages = useCallback(async (file, options = {}) => {
-    const { scale = 1.5, pageRange = null, splitDoublePages = true } = options;
+  const workerRef = useRef(null);
 
+  // Tear down worker on unmount.
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
+
+  const extractPages = useCallback(async (file, options = {}) => {
     setIsLoading(true);
     setError(null);
     setProgress(0);
     setPages([]);
 
+    // Recreate the worker per extraction so a stuck one can't poison later runs.
+    if (workerRef.current) workerRef.current.terminate();
+    const worker = makeWorker();
+    workerRef.current = worker;
+
+    const requestId = Date.now() + Math.random();
+    const collected = [];
+
     try {
-      // Read file as ArrayBuffer
-      const arrayBuffer = await file.arrayBuffer();
+      const fileBuffer = await file.arrayBuffer();
 
-      // Load PDF document
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const totalPages = pdf.numPages;
+      const result = await new Promise((resolve, reject) => {
+        worker.onmessage = (e) => {
+          const msg = e.data || {};
+          if (msg.id !== requestId) return;
+          if (msg.type === 'page') {
+            collected.push(msg.page);
+            // Stream pages into state so the UI can show partial results.
+            setPages((prev) => [...prev, msg.page]);
+          } else if (msg.type === 'progress') {
+            setProgress(msg.progress);
+          } else if (msg.type === 'done') {
+            resolve(collected);
+          } else if (msg.type === 'error') {
+            reject(new Error(msg.error));
+          }
+        };
+        worker.onerror = (e) => reject(new Error(e.message || 'PDF worker crashed'));
 
-      // Determine pages to extract
-      let pagesToExtract = [];
-      if (pageRange) {
-        const [start, end] = pageRange;
-        for (let i = Math.max(1, start); i <= Math.min(totalPages, end); i++) {
-          pagesToExtract.push(i);
-        }
-      } else {
-        for (let i = 1; i <= totalPages; i++) {
-          pagesToExtract.push(i);
-        }
-      }
+        // Transfer the ArrayBuffer to avoid a copy.
+        worker.postMessage(
+          { type: 'extract', id: requestId, fileBuffer, options },
+          [fileBuffer]
+        );
+      });
 
-      const extractedPages = [];
-
-      for (let i = 0; i < pagesToExtract.length; i++) {
-        const pageNum = pagesToExtract[i];
-        const page = await pdf.getPage(pageNum);
-        const viewport = page.getViewport({ scale });
-
-        // Create canvas for rendering
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-
-        // Render page to canvas
-        await page.render({
-          canvasContext: context,
-          viewport: viewport,
-        }).promise;
-
-        // Check if this is a double page (width > height * 1.19)
-        // Split logic from Python: if img.width > img.height * 1.19
-        if (splitDoublePages && viewport.width > viewport.height * 1.19) {
-          // Split into left and right pages
-          const halfWidth = Math.floor(viewport.width / 2);
-
-          // Left page — pageNumber = '3_left'
-          const leftCanvas = document.createElement('canvas');
-          leftCanvas.width = halfWidth;
-          leftCanvas.height = viewport.height;
-          const leftCtx = leftCanvas.getContext('2d');
-          leftCtx.drawImage(canvas, 0, 0, halfWidth, viewport.height, 0, 0, halfWidth, viewport.height);
-
-          extractedPages.push({
-            pageNumber: `${pageNum}_left`,
-            originalPageNumber: pageNum,
-            thumbnail: leftCanvas.toDataURL('image/png'),
-            width: halfWidth,
-            height: viewport.height,
-            isSplit: true,
-            splitSide: 'left',
-          });
-
-          // Right page — pageNumber = '3_right'
-          const rightCanvas = document.createElement('canvas');
-          rightCanvas.width = halfWidth;
-          rightCanvas.height = viewport.height;
-          const rightCtx = rightCanvas.getContext('2d');
-          rightCtx.drawImage(canvas, halfWidth, 0, halfWidth, viewport.height, 0, 0, halfWidth, viewport.height);
-
-          extractedPages.push({
-            pageNumber: `${pageNum}_right`,
-            originalPageNumber: pageNum,
-            thumbnail: rightCanvas.toDataURL('image/png'),
-            width: halfWidth,
-            height: viewport.height,
-            isSplit: true,
-            splitSide: 'right',
-          });
-        } else {
-          // Single page — keep PDF page number as integer
-          const thumbnail = canvas.toDataURL('image/png');
-
-          extractedPages.push({
-            pageNumber: pageNum,
-            originalPageNumber: pageNum,
-            thumbnail,
-            width: viewport.width,
-            height: viewport.height,
-            isSplit: false,
-          });
-        }
-
-        // Update progress
-        setProgress(Math.round(((i + 1) / pagesToExtract.length) * 100));
-      }
-
-      setPages(extractedPages);
-      return extractedPages;
+      return result;
     } catch (err) {
       console.error('PDF extraction error:', err);
       setError(err.message || 'Failed to extract PDF pages');
       throw err;
     } finally {
       setIsLoading(false);
+      // Keep worker alive in case the caller starts another extraction soon;
+      // it'll be replaced on next call or torn down on unmount.
     }
   }, []);
 
@@ -138,13 +103,14 @@ export function usePdfPreview() {
     setPages([]);
 
     try {
-      const loadedPages = [];
+      const total = files.length;
+      let done = 0;
+      // Preserve original order: index → page(s).
+      const slots = new Array(total);
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const fileIndex = i + 1; // 1-based file index used as base page number
+      const processOne = async (file, index) => {
+        const fileIndex = index + 1;
 
-        // Read file as data URL
         const dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = () => resolve(reader.result);
@@ -152,66 +118,79 @@ export function usePdfPreview() {
           reader.readAsDataURL(file);
         });
 
-        // Get image dimensions
         const imgData = await new Promise((resolve, reject) => {
           const img = new Image();
-          img.onload = () =>
-            resolve({ width: img.width, height: img.height, img });
+          img.onload = () => resolve({ width: img.width, height: img.height, img });
           img.onerror = () => reject(new Error('Failed to load image'));
           img.src = dataUrl;
         });
 
-        // Check if double page and split if needed
+        let produced;
         if (splitDoublePages && imgData.width > imgData.height * 1.19) {
           const halfWidth = Math.floor(imgData.width / 2);
 
-          // Left page — pageNumber = '1_left'
           const leftCanvas = document.createElement('canvas');
           leftCanvas.width = halfWidth;
           leftCanvas.height = imgData.height;
-          const leftCtx = leftCanvas.getContext('2d');
-          leftCtx.drawImage(imgData.img, 0, 0, halfWidth, imgData.height, 0, 0, halfWidth, imgData.height);
+          leftCanvas
+            .getContext('2d')
+            .drawImage(imgData.img, 0, 0, halfWidth, imgData.height, 0, 0, halfWidth, imgData.height);
 
-          loadedPages.push({
-            pageNumber: `${fileIndex}_left`,
-            thumbnail: leftCanvas.toDataURL('image/png'),
-            width: halfWidth,
-            height: imgData.height,
-            fileName: file.name,
-            isSplit: true,
-            splitSide: 'left',
-          });
-
-          // Right page — pageNumber = '1_right'
           const rightCanvas = document.createElement('canvas');
           rightCanvas.width = halfWidth;
           rightCanvas.height = imgData.height;
-          const rightCtx = rightCanvas.getContext('2d');
-          rightCtx.drawImage(imgData.img, halfWidth, 0, halfWidth, imgData.height, 0, 0, halfWidth, imgData.height);
+          rightCanvas
+            .getContext('2d')
+            .drawImage(imgData.img, halfWidth, 0, halfWidth, imgData.height, 0, 0, halfWidth, imgData.height);
 
-          loadedPages.push({
-            pageNumber: `${fileIndex}_right`,
-            thumbnail: rightCanvas.toDataURL('image/png'),
-            width: halfWidth,
-            height: imgData.height,
-            fileName: file.name,
-            isSplit: true,
-            splitSide: 'right',
-          });
+          produced = [
+            {
+              pageNumber: `${fileIndex}_left`,
+              thumbnail: leftCanvas.toDataURL('image/png'),
+              width: halfWidth,
+              height: imgData.height,
+              fileName: file.name,
+              isSplit: true,
+              splitSide: 'left',
+            },
+            {
+              pageNumber: `${fileIndex}_right`,
+              thumbnail: rightCanvas.toDataURL('image/png'),
+              width: halfWidth,
+              height: imgData.height,
+              fileName: file.name,
+              isSplit: true,
+              splitSide: 'right',
+            },
+          ];
         } else {
-          loadedPages.push({
+          produced = [{
             pageNumber: fileIndex,
             thumbnail: dataUrl,
             width: imgData.width,
             height: imgData.height,
             fileName: file.name,
             isSplit: false,
-          });
+          }];
         }
 
-        setProgress(Math.round(((i + 1) / files.length) * 100));
-      }
+        slots[index] = produced;
+        done += 1;
+        setProgress(Math.round((done / total) * 100));
+      };
 
+      // Bounded-concurrency runner: each "lane" pulls the next index until exhausted.
+      let cursor = 0;
+      const lanes = Array.from({ length: Math.min(IMAGE_CONCURRENCY, total) }, async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= total) return;
+          await processOne(files[idx], idx);
+        }
+      });
+      await Promise.all(lanes);
+
+      const loadedPages = slots.flat().filter(Boolean);
       setPages(loadedPages);
       return loadedPages;
     } catch (err) {
@@ -228,6 +207,10 @@ export function usePdfPreview() {
     setIsLoading(false);
     setError(null);
     setProgress(0);
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
+    }
   }, []);
 
   return {
