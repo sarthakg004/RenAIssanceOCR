@@ -1662,7 +1662,11 @@ export default function LayoutAwareDetectionPage({
                     <ResizablePanels
                         leftPanel={leftSidebar}
                         centerPanel={centerPanel}
-                        rightPanel={datasetMode ? rightPanel : ocrRightPanel}
+                        rightPanel={
+                            datasetMode
+                                ? (transcript && Object.keys(transcript).length > 0 ? rightPanel : null)
+                                : ocrRightPanel
+                        }
                         defaultLeftWidth={280}
                         defaultRightWidth={300}
                         minLeftWidth={240}

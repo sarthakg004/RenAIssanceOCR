@@ -45,6 +45,12 @@ export default function ImageEraser({
     const lastPointRef = useRef(null);
 
     // ========== STATE ==========
+    // Brush size scales with the loaded image. The cap is recomputed on every
+    // image load as ~5 % of the larger image dimension (clamped to a sensible
+    // floor for tiny thumbnails). On a 4000-px scan this gives a 200-px cap,
+    // and a 12 000-px scan gets ~600 px — large enough to wipe big stains in
+    // one stroke without ever being absurdly small for hi-res inputs.
+    const [maxBrush, setMaxBrush] = useState(200);
     const [brushSize, setBrushSize] = useState(50);
     const [isDrawing, setIsDrawing] = useState(false);
     const [canvasReady, setCanvasReady] = useState(false);
@@ -78,6 +84,14 @@ export default function ImageEraser({
             canvas.width = img.naturalWidth;
             canvas.height = img.naturalHeight;
             setImageSize({ w: img.naturalWidth, h: img.naturalHeight });
+
+            // Resolution-aware brush cap: 5 % of the longer side.
+            const dynMax = Math.max(
+                40,
+                Math.round(0.05 * Math.max(img.naturalWidth, img.naturalHeight)),
+            );
+            setMaxBrush(dynMax);
+            setBrushSize((s) => Math.min(s, dynMax));
 
             const ctx = canvas.getContext('2d');
 
@@ -273,33 +287,83 @@ export default function ImageEraser({
         [screenToCanvas, clonePreStroke, beginStrokeBounds, extendStrokeBounds, drawDot, pan, currentPage]
     );
 
+    // rAF-throttled pointermove. Native mousemove fires at ~500 Hz on modern
+    // mice; without throttling we re-render the cursor div + repaint the
+    // canvas on every event, which thrashes the GC and causes visible lag at
+    // large brush sizes (each segment draws a thick rounded line). Coalescing
+    // into one frame per refresh tick (~16 ms @ 60 Hz) keeps interaction
+    // smooth without dropping any actual pixels — getCoalescedEvents() flushes
+    // the missed points before drawing the segment.
+    const moveStateRef = useRef({ rafId: 0, latest: null });
+
     const handlePointerMove = useCallback(
         (e) => {
             const { clientX, clientY } = getClientPos(e);
+            // Snapshot the data we need; the event object cannot be used
+            // asynchronously (React pools synthetic events).
+            const native = e.nativeEvent || e;
+            const coalesced = native.getCoalescedEvents
+                ? native.getCoalescedEvents()
+                : null;
+            moveStateRef.current.latest = { clientX, clientY, coalesced };
 
-            if (containerRef.current) {
-                const rect = containerRef.current.getBoundingClientRect();
-                setCursorPos({ x: clientX - rect.left, y: clientY - rect.top });
-            }
+            // Drawing path needs preventDefault to suppress scrolling on
+            // touch — must happen synchronously, not in the rAF callback.
+            if (isDrawing) e.preventDefault();
 
-            if (isPanning) {
-                const dx = clientX - panStartRef.current.x;
-                const dy = clientY - panStartRef.current.y;
-                setPan({ x: panStartRef.current.panX + dx, y: panStartRef.current.panY + dy });
-                return;
-            }
+            if (moveStateRef.current.rafId) return;
+            moveStateRef.current.rafId = requestAnimationFrame(() => {
+                moveStateRef.current.rafId = 0;
+                const m = moveStateRef.current.latest;
+                if (!m) return;
 
-            if (!isDrawing) return;
-            e.preventDefault();
+                if (containerRef.current) {
+                    const rect = containerRef.current.getBoundingClientRect();
+                    setCursorPos({
+                        x: m.clientX - rect.left,
+                        y: m.clientY - rect.top,
+                    });
+                }
 
-            const pt = screenToCanvas(clientX, clientY);
-            const last = lastPointRef.current;
-            if (last) drawSegment(last, pt);
-            extendStrokeBounds(pt.x, pt.y);
-            lastPointRef.current = pt;
+                if (isPanning) {
+                    const dx = m.clientX - panStartRef.current.x;
+                    const dy = m.clientY - panStartRef.current.y;
+                    setPan({
+                        x: panStartRef.current.panX + dx,
+                        y: panStartRef.current.panY + dy,
+                    });
+                    return;
+                }
+
+                if (!isDrawing) return;
+
+                // Replay every coalesced sub-event so a fast swipe still
+                // produces a continuous stroke (no gaps between points).
+                const points = m.coalesced && m.coalesced.length
+                    ? m.coalesced.map((c) => ({ cx: c.clientX, cy: c.clientY }))
+                    : [{ cx: m.clientX, cy: m.clientY }];
+                for (const { cx, cy } of points) {
+                    const pt = screenToCanvas(cx, cy);
+                    const last = lastPointRef.current;
+                    if (last) drawSegment(last, pt);
+                    extendStrokeBounds(pt.x, pt.y);
+                    lastPointRef.current = pt;
+                }
+            });
         },
         [isDrawing, isPanning, screenToCanvas, drawSegment, extendStrokeBounds]
     );
+
+    // Cancel any pending rAF when the component unmounts so the callback
+    // doesn't fire against a torn-down canvas.
+    useEffect(() => {
+        return () => {
+            if (moveStateRef.current.rafId) {
+                cancelAnimationFrame(moveStateRef.current.rafId);
+                moveStateRef.current.rafId = 0;
+            }
+        };
+    }, []);
 
     const handlePointerUp = useCallback(() => {
         if (isDrawing) commitStrokeDelta();
@@ -328,8 +392,11 @@ export default function ImageEraser({
     // ========== KEYBOARD ==========
     useEffect(() => {
         const handleKey = (e) => {
-            if (e.key === '[') setBrushSize((s) => Math.max(5, s - 5));
-            else if (e.key === ']') setBrushSize((s) => Math.min(100, s + 5));
+            // Step is also resolution-aware so the keys feel responsive on
+            // huge brushes (a 5-px nudge is invisible at brush=400).
+            const step = Math.max(5, Math.round(maxBrush * 0.05));
+            if (e.key === '[') setBrushSize((s) => Math.max(5, s - step));
+            else if (e.key === ']') setBrushSize((s) => Math.min(maxBrush, s + step));
             else if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 handleUndo();
@@ -341,7 +408,7 @@ export default function ImageEraser({
         };
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
-    }, [handleUndo, goToPage, currentIdx]);
+    }, [handleUndo, goToPage, currentIdx, maxBrush]);
 
     // ========== ZOOM ==========
     const handleZoomIn = () => setZoom((z) => Math.min(z * 1.25, 5));
@@ -413,10 +480,10 @@ export default function ImageEraser({
                 <div className="flex items-center gap-4 bg-gray-700/60 px-4 py-2 rounded-xl">
                     {/* Brush */}
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setBrushSize((s) => Math.max(5, s - 5))} className="p-1 text-gray-300 hover:text-white"><Minus size={14} /></button>
-                        <input type="range" min={5} max={100} step={1} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-28 accent-blue-500" />
-                        <button onClick={() => setBrushSize((s) => Math.min(100, s + 5))} className="p-1 text-gray-300 hover:text-white"><Plus size={14} /></button>
-                        <span className="text-xs text-gray-300 font-mono w-10 text-center">{brushSize}px</span>
+                        <button onClick={() => setBrushSize((s) => Math.max(5, s - Math.max(5, Math.round(maxBrush * 0.05))))} className="p-1 text-gray-300 hover:text-white"><Minus size={14} /></button>
+                        <input type="range" min={5} max={maxBrush} step={1} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} className="w-28 accent-blue-500" />
+                        <button onClick={() => setBrushSize((s) => Math.min(maxBrush, s + Math.max(5, Math.round(maxBrush * 0.05))))} className="p-1 text-gray-300 hover:text-white"><Plus size={14} /></button>
+                        <span className="text-xs text-gray-300 font-mono w-12 text-center">{brushSize}px</span>
                     </div>
 
                     <div className="w-px h-6 bg-gray-600" />

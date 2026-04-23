@@ -12,6 +12,7 @@ import {
   X,
   FileScan,
   ScrollText,
+  ScanSearch,
 } from 'lucide-react';
 
 const API_BASE = 'http://localhost:8000';
@@ -25,7 +26,12 @@ export default function CombinedUploadPage({
   isProcessingBook,
   initialBookFiles,
   initialTranscript,
+  initialDatasetMode = 'recognition',
 }) {
+  // ── Dataset mode: 'recognition' (default, transcript required) |
+  //                 'detection'  (bbox-only, no transcript)
+  const [datasetMode, setDatasetMode] = useState(initialDatasetMode);
+  const isDetection = datasetMode === 'detection';
   // ── Book upload state ────────────────────────────────────────────
   const [bookFiles, setBookFiles] = useState(initialBookFiles || null);
   const [isDraggingBook, setIsDraggingBook] = useState(false);
@@ -125,24 +131,62 @@ export default function CombinedUploadPage({
     ? Object.values(parsedTranscript).reduce((s, l) => s + l.length, 0)
     : 0;
 
-  const canContinue = bookFiles && parsedTranscript && !isProcessingBook && !isParsing;
+  // In detection mode the transcript is irrelevant — only the book is needed.
+  const canContinue = isDetection
+    ? bookFiles && !isProcessingBook
+    : bookFiles && parsedTranscript && !isProcessingBook && !isParsing;
 
   const handleContinue = () => {
-    if (canContinue) onNext(bookFiles, parsedTranscript);
+    if (!canContinue) return;
+    onNext(bookFiles, isDetection ? null : parsedTranscript, datasetMode);
   };
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
       {/* ── Page header ───────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-8 py-5 border-b border-gray-100/80 bg-white/60 backdrop-blur-sm flex-shrink-0">
-        <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between px-8 py-5 border-b border-gray-100/80 bg-white/60 backdrop-blur-sm flex-shrink-0 gap-6">
+        <div className="flex items-center gap-4 min-w-0">
           <div className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl text-white shadow-lg shadow-emerald-500/30">
             <Upload className="w-5 h-5" />
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-800">Upload Book &amp; Transcript</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Upload both files together — only pages with matching transcripts will be processed</p>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-gray-800">
+              {isDetection ? 'Upload Book' : 'Upload Book \u0026 Transcript'}
+            </h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              {isDetection
+                ? 'Detection mode: only images are needed — line bounding boxes will be exported, no transcript required'
+                : 'Upload both files together — only pages with matching transcripts will be processed'}
+            </p>
           </div>
+        </div>
+
+        {/* Dataset-type toggle */}
+        <div className="flex bg-gray-100 rounded-lg p-1 flex-shrink-0">
+          <button
+            onClick={() => setDatasetMode('recognition')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+              !isDetection
+                ? 'bg-white text-emerald-700 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+            title="Aligned line images + transcript labels"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            Recognition
+          </button>
+          <button
+            onClick={() => setDatasetMode('detection')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${
+              isDetection
+                ? 'bg-white text-indigo-700 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+            title="Pages + bounding boxes only (no transcript)"
+          >
+            <ScanSearch className="w-3.5 h-3.5" />
+            Detection
+          </button>
         </div>
 
         <button
@@ -161,18 +205,18 @@ export default function CombinedUploadPage({
             </>
           ) : (
             <>
-              Review &amp; Match Pages
+              {isDetection ? 'Continue' : 'Review \u0026 Match Pages'}
               <ArrowRight className="w-4 h-4" />
             </>
           )}
         </button>
       </div>
 
-      {/* ── Main two-column layout ────────────────────────────────── */}
-      <div className="flex-1 grid grid-cols-2 gap-0 overflow-hidden">
+      {/* ── Main layout: two columns in recognition mode, single column in detection ── */}
+      <div className={`flex-1 grid ${isDetection ? 'grid-cols-1' : 'grid-cols-2'} gap-0 overflow-hidden`}>
 
         {/* ── LEFT: Book Upload ──────────────────────────────────── */}
-        <div className="flex flex-col border-r border-gray-100 overflow-hidden bg-gradient-to-br from-slate-50 to-white">
+        <div className={`flex flex-col ${isDetection ? '' : 'border-r border-gray-100'} overflow-hidden bg-gradient-to-br from-slate-50 to-white`}>
           {/* Section header */}
           <div className="flex items-center gap-3 px-8 pt-7 pb-4 flex-shrink-0">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 flex items-center justify-center">
@@ -297,7 +341,8 @@ export default function CombinedUploadPage({
           </div>
         </div>
 
-        {/* ── RIGHT: Transcript Upload ───────────────────────────── */}
+        {/* ── RIGHT: Transcript Upload (recognition mode only) ───── */}
+        {!isDetection && (
         <div className="flex flex-col overflow-hidden bg-gradient-to-br from-emerald-50/30 to-white">
           {/* Section header */}
           <div className="flex items-center gap-3 px-8 pt-7 pb-4 flex-shrink-0">
@@ -467,10 +512,11 @@ export default function CombinedUploadPage({
             </details>
           </div>
         </div>
+        )}
       </div>
 
       {/* ── Bottom status bar ─────────────────────────────────────── */}
-      {(bookFiles || parsedTranscript) && (
+      {(bookFiles || (!isDetection && parsedTranscript)) && (
         <div className="flex items-center justify-between px-8 py-3 border-t border-gray-100 bg-white/80 backdrop-blur-sm flex-shrink-0 animate-slide-up">
           <div className="flex items-center gap-6">
             <StatusDot
@@ -478,21 +524,28 @@ export default function CombinedUploadPage({
               active={!!bookFiles}
               activeColor="blue"
             />
-            <StatusDot
-              label="Transcript parsed"
-              active={!!parsedTranscript}
-              activeColor="emerald"
-            />
+            {!isDetection && (
+              <StatusDot
+                label="Transcript parsed"
+                active={!!parsedTranscript}
+                activeColor="emerald"
+              />
+            )}
           </div>
-          {canContinue && (
+          {canContinue && !isDetection && (
             <p className="text-xs text-gray-500">
               Both files ready — click <span className="font-semibold text-emerald-600">Review &amp; Match Pages</span> to continue
             </p>
           )}
-          {!canContinue && bookFiles && !parsedTranscript && (
+          {canContinue && isDetection && (
+            <p className="text-xs text-gray-500">
+              Book ready — click <span className="font-semibold text-indigo-600">Continue</span> to proceed
+            </p>
+          )}
+          {!canContinue && bookFiles && !isDetection && !parsedTranscript && (
             <p className="text-xs text-amber-600 font-medium">Upload a transcript to continue</p>
           )}
-          {!canContinue && !bookFiles && parsedTranscript && (
+          {!canContinue && !bookFiles && !isDetection && parsedTranscript && (
             <p className="text-xs text-amber-600 font-medium">Upload the book to continue</p>
           )}
         </div>

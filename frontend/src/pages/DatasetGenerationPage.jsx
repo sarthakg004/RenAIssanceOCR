@@ -39,11 +39,17 @@ export default function DatasetGenerationPage({
   allPagesBoxes,
   onBack,
   bookName = 'dataset',
+  forceMode = null,        // 'detection' to lock the toggle to detection-only
 }) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState(null);
   const [previewIdx, setPreviewIdx] = useState(0);
-  const [datasetType, setDatasetType] = useState('recognition'); // 'recognition' | 'detection'
+  // When the upstream flow already chose a mode (e.g. user picked Detection
+  // at upload time and never collected a transcript), respect it and hide
+  // the toggle. Otherwise default to recognition with the toggle visible.
+  const [datasetType, setDatasetType] = useState(forceMode || 'recognition');
+  const [bboxFormat, setBboxFormat] = useState('txt'); // 'txt' | 'json' | 'yolo' | 'coco'
+  const isModeLocked = forceMode != null;
 
   // ── Detection-mode data ──────────────────────────────────────────
   const detectionData = useMemo(() => {
@@ -178,6 +184,7 @@ export default function DatasetGenerationPage({
         body: JSON.stringify({
           pages: pagesPayload,
           book_name: bookName,
+          bbox_format: bboxFormat,
         }),
       });
 
@@ -232,7 +239,8 @@ export default function DatasetGenerationPage({
           </div>
         </div>
 
-        {/* Dataset type toggle */}
+        {/* Dataset type toggle (hidden when upstream locked the mode) */}
+        {!isModeLocked && (
         <div className="flex bg-gray-100 rounded-lg p-1">
           <button
             onClick={() => { setDatasetType('recognition'); setPreviewIdx(0); }}
@@ -257,6 +265,7 @@ export default function DatasetGenerationPage({
             Detection
           </button>
         </div>
+        )}
       </div>
 
       {/* Stats row */}
@@ -425,12 +434,56 @@ export default function DatasetGenerationPage({
 
           <div className="flex-1 overflow-y-auto p-4">
             {isDetection ? (
-              <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/70 text-sm text-indigo-700">
-                Downloads a ZIP with full page images and COCO-format bounding box annotations.
-                <div className="text-xs text-indigo-600 mt-2 font-mono">
-                  {bookName}/images/page_N.jpg<br />
-                  {bookName}/annotations.json
-                </div>
+              <div className="space-y-3">
+                {(() => {
+                  const layoutByFormat = {
+                    txt:  `${bookName}/images/page_N.jpg\n${bookName}/bboxes/page_N.txt`,
+                    json: `${bookName}/images/page_N.jpg\n${bookName}/bboxes/page_N.json`,
+                    yolo: `${bookName}/images/page_N.jpg\n${bookName}/labels/page_N.txt\n${bookName}/classes.txt`,
+                    coco: `${bookName}/images/page_N.jpg\n${bookName}/annotations.json`,
+                  };
+                  const sampleByFormat = {
+                    txt:  'x1 y1 x2 y2 (one per line)',
+                    json: '[[x1, y1, x2, y2], ...]',
+                    yolo: '0 cx cy w h (normalized 0–1)',
+                    coco: 'COCO JSON (single "text" category)',
+                  };
+                  return (
+                    <>
+                      <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/70 text-sm text-indigo-700">
+                        Downloads a ZIP with full page images and bounding boxes
+                        for each detected text line.
+                        <div className="text-xs text-indigo-600 mt-2 font-mono whitespace-pre-line">
+                          {layoutByFormat[bboxFormat]}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+                          Annotation format
+                        </label>
+                        <div className="grid grid-cols-4 bg-gray-100 rounded-lg p-1 gap-1">
+                          {['txt', 'json', 'yolo', 'coco'].map((f) => (
+                            <button
+                              key={f}
+                              onClick={() => setBboxFormat(f)}
+                              className={`px-2 py-1.5 rounded-md text-xs font-semibold uppercase transition-all ${
+                                bboxFormat === f
+                                  ? 'bg-white text-indigo-700 shadow-sm'
+                                  : 'text-gray-500 hover:text-gray-700'
+                              }`}
+                            >
+                              {f}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-[11px] text-gray-400 mt-1.5 font-mono">
+                          {sampleByFormat[bboxFormat]}
+                        </p>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ) : (
               <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70 text-sm text-emerald-700">

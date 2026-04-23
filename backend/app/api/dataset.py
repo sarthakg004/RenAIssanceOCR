@@ -212,6 +212,8 @@ class DetectionPageItem(BaseModel):
 class DetectionExportRequest(BaseModel):
     pages: List[DetectionPageItem]
     book_name: str = "dataset"
+    # "txt" → one "x1 y1 x2 y2" per line; "json" → array of [x1,y1,x2,y2].
+    bbox_format: str = "txt"
 
 
 @router.post("/export-detection")
@@ -230,6 +232,7 @@ async def export_detection_dataset(request: DetectionExportRequest):
         zip_buffer = build_detection_dataset_zip(
             pages_data=pages_data,
             book_name=request.book_name,
+            bbox_format=request.bbox_format,
         )
 
         filename = f"{request.book_name}_detection_dataset.zip"

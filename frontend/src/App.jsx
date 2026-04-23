@@ -28,6 +28,9 @@ function App() {
   const [detectionProvider, setDetectionProvider] = useState(null);
 
   // ── Dataset-specific state ────────────────────────────────────────
+  // 'recognition' (default — needs transcript, runs match review)
+  // 'detection'   (bbox-only — no transcript, no match review)
+  const [datasetMode, setDatasetMode] = useState('recognition');
   const [parsedTranscript, setParsedTranscript] = useState(null);
   const [allPagesBoxes, setAllPagesBoxes] = useState({});
   const [alignedTranscriptByPage, setAlignedTranscriptByPage] = useState({});
@@ -54,18 +57,25 @@ function App() {
     setSelectedPages([]);
   }, []);
 
-  // ── Dataset: combined upload (book + transcript together) ─────────
-  const handleCombinedUploadNext = useCallback(async (bookFiles, transcript) => {
+  // ── Dataset: combined upload (book + optional transcript) ─────────
+  const handleCombinedUploadNext = useCallback(async (bookFiles, transcript, mode = 'recognition') => {
     if (!bookFiles || bookFiles.length === 0) return;
     setIsProcessingBook(true);
-    setParsedTranscript(transcript);
+    setDatasetMode(mode);
+    setParsedTranscript(mode === 'detection' ? null : transcript);
     try {
       const isPdf = bookFiles[0].type === 'application/pdf';
+      let loadedPages;
       if (isPdf) {
-        await extractPages(bookFiles[0]);
+        loadedPages = await extractPages(bookFiles[0]);
       } else {
-        const loadedPages = await loadImages(bookFiles);
-        setSelectedPages(loadedPages.map((p) => p.pageNumber));
+        loadedPages = await loadImages(bookFiles);
+      }
+      // Recognition mode lets Match Review pick the pages. Detection mode
+      // uses step 2 as a Select-Pages step; preselect everything so the
+      // user can deselect what they don't want.
+      if (mode === 'detection' || !isPdf) {
+        setSelectedPages((loadedPages || []).map((p) => p.pageNumber));
       }
       setFiles(bookFiles);
       setCurrentStep(2);
@@ -139,6 +149,7 @@ function App() {
     setProcessedImages({});
     setDetectionMethod(null);
     setDetectionProvider(null);
+    setDatasetMode('recognition');
     setParsedTranscript(null);
     setAllPagesBoxes({});
     setAlignedTranscriptByPage({});
@@ -167,13 +178,14 @@ function App() {
 
     // ── Full-screen pass-through steps ───────────────────────────────
     if (currentStep === 3) {
+      const backStep = 2;
       return (
         <div className="h-screen w-screen overflow-hidden flex flex-col">
           <PreprocessPage
             pages={pages}
             selectedPages={selectedPages}
             initialProcessedImages={processedImages}
-            onBack={() => goToStep(2)}
+            onBack={() => goToStep(backStep)}
             onNext={() => goToStep(4)}
             onProcessedImagesChange={setProcessedImages}
           />
@@ -215,6 +227,7 @@ function App() {
             allPagesBoxes={allPagesBoxes}
             onBack={() => goToStep(4)}
             bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'dataset'}
+            forceMode={datasetMode === 'detection' ? 'detection' : null}
           />
         </div>
       );
@@ -239,7 +252,7 @@ function App() {
 
             {/* Stepper — centered, full width */}
             <div className="flex-1">
-              <DatasetStepper currentStep={currentStep} onStepClick={handleStepClick} compact />
+              <DatasetStepper currentStep={currentStep} onStepClick={handleStepClick} compact datasetMode={datasetMode} />
             </div>
 
             {/* Home */}
@@ -285,9 +298,20 @@ function App() {
               isProcessingBook={isProcessingBook || isLoading}
               initialBookFiles={files}
               initialTranscript={parsedTranscript}
+              initialDatasetMode={datasetMode}
             />
           )}
-          {currentStep === 2 && (
+          {currentStep === 2 && datasetMode === 'detection' && (
+            <SelectPage
+              pages={pages}
+              selectedPages={selectedPages}
+              onSelectionChange={handleSelectionChange}
+              onBack={() => goToStep(1)}
+              onNext={() => goToStep(3)}
+              isLoading={isLoading}
+            />
+          )}
+          {currentStep === 2 && datasetMode !== 'detection' && (
             <PageMatchReviewPage
               pages={pages}
               parsedTranscript={parsedTranscript}

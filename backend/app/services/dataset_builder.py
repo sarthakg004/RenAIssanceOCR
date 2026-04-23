@@ -218,87 +218,140 @@ def build_dataset_zip(
 
 # ── Detection-only Dataset Export ──────────────────────────────────
 
+def _polygon_to_xyxy(box: List[List[float]]) -> Tuple[int, int, int, int]:
+    """Axis-aligned bounding rect of a 4-point polygon, as integer pixels."""
+    pts = np.asarray(box, dtype=np.float32)
+    return (
+        int(pts[:, 0].min()),
+        int(pts[:, 1].min()),
+        int(pts[:, 0].max()),
+        int(pts[:, 1].max()),
+    )
+
+
 def build_detection_dataset_zip(
     pages_data: List[Dict[str, Any]],
     book_name: str = "dataset",
+    bbox_format: str = "txt",
 ) -> io.BytesIO:
     """
-    Build a ZIP with full page images and bounding box annotations (no transcript).
+    Build a ZIP with full page images and pure line-level bounding boxes.
 
-    Output (COCO-like format):
+    No labels, no classes — just coordinates per detected text line.
+
+    Layout:
         book_name/
             images/
                 page_1.jpg
-                page_2.jpg
-            annotations.json
+            bboxes/
+                page_1.txt    (one "x1 y1 x2 y2" per line)
+                # or page_1.json if bbox_format == "json"
+
+    Parameters
+    ----------
+    bbox_format : "txt" (default), "json", "yolo", or "coco"
+        - "txt"  : whitespace-separated `x1 y1 x2 y2`, one box per line.
+        - "json" : array of [x1, y1, x2, y2] arrays.
+        - "yolo" : `0 cx_norm cy_norm w_norm h_norm` per line (single class), plus classes.txt.
+        - "coco" : single annotations.json at the dataset root in COCO format.
     """
     import base64
     import json
 
+    fmt = (bbox_format or "txt").lower()
+    if fmt not in ("txt", "json", "yolo", "coco"):
+        raise ValueError(f"Unsupported bbox_format: {bbox_format!r} (use 'txt', 'json', 'yolo', or 'coco')")
+
     buf = io.BytesIO()
-    annotations: Dict[str, Any] = {
-        "images": [],
-        "annotations": [],
-        "categories": [{"id": 1, "name": "text"}],
-    }
-    ann_id = 1
+
+    # COCO accumulators
+    coco_images: List[Dict[str, Any]] = []
+    coco_annotations: List[Dict[str, Any]] = []
+    coco_image_id = 0
+    coco_ann_id = 0
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for img_id, page in enumerate(pages_data, start=1):
+        for page in pages_data:
             page_key = page["page_key"]
             boxes = page.get("boxes", [])
 
-            # Decode the page image
             img_b64 = page["image_data"]
             if "," in img_b64:
                 img_b64 = img_b64.split(",", 1)[1]
             img_bytes = base64.b64decode(img_b64)
             nparr = np.frombuffer(img_bytes, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
             if img is None:
                 continue
 
             h, w = img.shape[:2]
-            img_filename = f"{book_name}/images/page_{page_key}.jpg"
-
-            # Encode as JPEG
+            stem = f"page_{page_key}"
+            jpg_name = f"{stem}.jpg"
             _, jpg_data = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            zf.writestr(img_filename, jpg_data.tobytes())
+            zf.writestr(f"{book_name}/images/{jpg_name}", jpg_data.tobytes())
 
-            annotations["images"].append({
-                "id": img_id,
-                "file_name": f"images/page_{page_key}.jpg",
-                "width": w,
-                "height": h,
-            })
+            xyxy_boxes = [_polygon_to_xyxy(b) for b in boxes]
 
-            for box in boxes:
-                pts = np.array(box, dtype=np.float32)
-                x1 = int(pts[:, 0].min())
-                y1 = int(pts[:, 1].min())
-                x2 = int(pts[:, 0].max())
-                y2 = int(pts[:, 1].max())
-                bw, bh = x2 - x1, y2 - y1
-
-                annotations["annotations"].append({
-                    "id": ann_id,
-                    "image_id": img_id,
-                    "category_id": 1,
-                    "bbox": [x1, y1, bw, bh],
-                    "area": bw * bh,
-                    "polygon": [[float(c) for c in pt] for pt in box],
-                    "iscrowd": 0,
+            if fmt == "txt":
+                lines = "\n".join(
+                    f"{x1} {y1} {x2} {y2}" for (x1, y1, x2, y2) in xyxy_boxes
+                )
+                payload = (lines + "\n").encode("utf-8") if lines else b""
+                zf.writestr(f"{book_name}/bboxes/{stem}.txt", payload)
+            elif fmt == "json":
+                payload = json.dumps(
+                    [[x1, y1, x2, y2] for (x1, y1, x2, y2) in xyxy_boxes],
+                    indent=2,
+                ).encode("utf-8")
+                zf.writestr(f"{book_name}/bboxes/{stem}.json", payload)
+            elif fmt == "yolo":
+                yolo_lines = []
+                for (x1, y1, x2, y2) in xyxy_boxes:
+                    bw = max(0, x2 - x1)
+                    bh = max(0, y2 - y1)
+                    cx = (x1 + x2) / 2.0
+                    cy = (y1 + y2) / 2.0
+                    yolo_lines.append(
+                        f"0 {cx / w:.6f} {cy / h:.6f} {bw / w:.6f} {bh / h:.6f}"
+                    )
+                payload = ("\n".join(yolo_lines) + "\n").encode("utf-8") if yolo_lines else b""
+                zf.writestr(f"{book_name}/labels/{stem}.txt", payload)
+            elif fmt == "coco":
+                coco_image_id += 1
+                coco_images.append({
+                    "id": coco_image_id,
+                    "file_name": jpg_name,
+                    "width": int(w),
+                    "height": int(h),
                 })
-                ann_id += 1
+                for (x1, y1, x2, y2) in xyxy_boxes:
+                    coco_ann_id += 1
+                    bw = max(0, x2 - x1)
+                    bh = max(0, y2 - y1)
+                    coco_annotations.append({
+                        "id": coco_ann_id,
+                        "image_id": coco_image_id,
+                        "category_id": 1,
+                        "bbox": [int(x1), int(y1), int(bw), int(bh)],
+                        "area": int(bw * bh),
+                        "iscrowd": 0,
+                        "segmentation": [],
+                    })
 
-            # Release memory
             del img, nparr, img_bytes
 
-        zf.writestr(
-            f"{book_name}/annotations.json",
-            json.dumps(annotations, indent=2, ensure_ascii=False),
-        )
+        if fmt == "yolo":
+            zf.writestr(f"{book_name}/classes.txt", b"text\n")
+        elif fmt == "coco":
+            coco = {
+                "images": coco_images,
+                "annotations": coco_annotations,
+                "categories": [{"id": 1, "name": "text", "supercategory": "text"}],
+            }
+            zf.writestr(
+                f"{book_name}/annotations.json",
+                json.dumps(coco, indent=2).encode("utf-8"),
+            )
 
     buf.seek(0)
     return buf

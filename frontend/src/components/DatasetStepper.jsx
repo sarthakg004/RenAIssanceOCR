@@ -8,7 +8,7 @@ import {
   Database,
 } from 'lucide-react';
 
-const datasetSteps = [
+const recognitionSteps = [
   { id: 1, name: 'Upload', description: 'Book & transcript', icon: Upload },
   { id: 2, name: 'Match & Review', description: 'Verify page matches', icon: GitMerge },
   { id: 3, name: 'Preprocess', description: 'Apply image transforms', icon: Wand2 },
@@ -16,7 +16,16 @@ const datasetSteps = [
   { id: 5, name: 'Export Dataset', description: 'Download training data', icon: Database },
 ];
 
-export default function DatasetStepper({ currentStep, onStepClick, compact = false }) {
+const detectionSteps = [
+  { id: 1, name: 'Upload', description: 'Book images', icon: Upload },
+  { id: 2, name: 'Select Pages', description: 'Pick pages to detect', icon: GitMerge },
+  { id: 3, name: 'Preprocess', description: 'Apply image transforms', icon: Wand2 },
+  { id: 4, name: 'Detect Lines', description: 'Detect text bounding boxes', icon: ScanText },
+  { id: 5, name: 'Export Dataset', description: 'Download training data', icon: Database },
+];
+
+export default function DatasetStepper({ currentStep, onStepClick, compact = false, datasetMode = 'recognition' }) {
+  const datasetSteps = datasetMode === 'detection' ? detectionSteps : recognitionSteps;
   const progressPercent = ((currentStep - 1) / (datasetSteps.length - 1)) * 100;
 
   const inner = (
