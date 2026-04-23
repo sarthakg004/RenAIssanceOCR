@@ -12,9 +12,9 @@ import {
     processBatchOCR,
     getRateLimitStatus,
     verifyApiKey,
-    exportTranscripts,
     downloadBlob,
 } from '../services/ocrApi';
+import { saveTranscriptSession } from '../../../services/storageApi';
 import {
     PROVIDER_LABELS,
     FALLBACK_MODELS,
@@ -30,7 +30,7 @@ const DEFAULT_BATCH_SIZE = 4;
  * Supports background auto-processing with batch concurrent requests
  * Now supports multiple providers: gemini, chatgpt, deepseek, qwen
  */
-export default function TextRecognitionPage({ provider = 'gemini', processedImages, onBack, onComplete }) {
+export default function TextRecognitionPage({ provider = 'gemini', bookName = 'transcript', processedImages, onBack, onHome, onComplete }) {
     // API Configuration
     const [apiKey, setApiKey] = useState('');
     const [isKeyValid, setIsKeyValid] = useState(null);
@@ -66,9 +66,12 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
     const [dailyLimitReached, setDailyLimitReached] = useState(false);
     const pollRetryCountRef = useRef(0);
     const MAX_POLL_RETRIES = 30; // Stop polling after ~60 seconds (30 * 2s)
+    const lastSavedSignatureRef = useRef('');
 
     // Export state
     const [exporting, setExporting] = useState(null);
+    const [isSavingSession, setIsSavingSession] = useState(false);
+    const [sessionSaved, setSessionSaved] = useState(false);
 
     // Zoom state - lifted here to persist across page changes
     const [zoomLevel, setZoomLevel] = useState(1);
@@ -461,13 +464,131 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
         if (exporting || !hasAnyTranscript) return;
         setExporting(format);
         try {
-            const blob = await exportTranscripts(transcripts, format);
-            downloadBlob(blob, `transcript_${new Date().toISOString().slice(0, 10)}.${format}`);
+            const timestamp = new Date().toISOString().slice(0, 10);
+            const orderedEntries = Object.entries(transcripts)
+                .filter(([, text]) => text && text.trim())
+                .sort(([a], [b]) => {
+                    const aNum = Number.parseInt(a, 10);
+                    const bNum = Number.parseInt(b, 10);
+                    if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+                    return a.localeCompare(b);
+                });
+
+            let blob;
+            if (format === 'txt') {
+                const text = orderedEntries
+                    .map(([page, value]) => `--- Page ${page} ---\n${value.trim()}`)
+                    .join('\n\n');
+                blob = new Blob([`\uFEFF${text}\n`], { type: 'text/plain;charset=utf-8' });
+            } else if (format === 'csv') {
+                const escapeCsv = (value) => `"${String(value).replaceAll('"', '""')}"`;
+                const rows = ['page,text'];
+                orderedEntries.forEach(([page, value]) => {
+                    rows.push(`${escapeCsv(page)},${escapeCsv(value.trim())}`);
+                });
+                blob = new Blob([`\uFEFF${rows.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
+            } else if (format === 'json') {
+                const payload = Object.fromEntries(orderedEntries);
+                blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+            } else {
+                throw new Error(`Unsupported format: ${format}`);
+            }
+
+            downloadBlob(blob, `transcript_${timestamp}.${format}`);
         } catch (err) {
             setError(`Export failed: ${err.message}`);
         }
         setExporting(null);
     }, [exporting, hasAnyTranscript, transcripts]);
+
+    const toDataUrl = useCallback(async (url) => {
+        if (!url) return null;
+        if (url.startsWith('data:')) return url;
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Failed converting image to base64'));
+            reader.readAsDataURL(blob);
+        });
+    }, []);
+
+    const buildSavePayload = useCallback(async () => {
+        const entries = Object.entries(transcripts)
+            .filter(([, value]) => typeof value === 'string' && value.trim())
+            .sort(([a], [b]) => {
+                const aNum = Number.parseInt(a, 10);
+                const bNum = Number.parseInt(b, 10);
+                if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) return aNum - bNum;
+                return a.localeCompare(b);
+            });
+
+        const nonEmptyTranscripts = {};
+        entries.forEach(([key, value]) => {
+            nonEmptyTranscripts[key] = value.trim();
+        });
+
+        const transcriptImages = {};
+        for (let i = 0; i < pageLabels.length; i += 1) {
+            const key = pageLabels[i];
+            if (!(key in nonEmptyTranscripts)) continue;
+
+            const imageSrc = processedImages[i]?.processed || processedImages[i]?.original || '';
+            if (!imageSrc) continue;
+
+            try {
+                const dataUrl = await toDataUrl(imageSrc);
+                if (typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
+                    transcriptImages[key] = dataUrl;
+                }
+            } catch {
+                // Skip image snapshot if conversion fails; transcript save still proceeds.
+            }
+        }
+
+        const signature = JSON.stringify(nonEmptyTranscripts);
+        return { nonEmptyTranscripts, transcriptImages, signature };
+    }, [pageLabels, processedImages, toDataUrl, transcripts]);
+
+    const handleSaveLocal = useCallback(async () => {
+        if (!hasAnyTranscript || isSavingSession) return;
+        setIsSavingSession(true);
+        setError(null);
+        try {
+            const { nonEmptyTranscripts, transcriptImages, signature } = await buildSavePayload();
+            if (Object.keys(nonEmptyTranscripts).length === 0) {
+                setError('No transcript pages to save.');
+                return;
+            }
+
+            if (lastSavedSignatureRef.current === signature) {
+                const proceed = window.confirm('No transcript changes were detected since the last save. Save another copy anyway?');
+                if (!proceed) return;
+            }
+
+            await saveTranscriptSession(
+                nonEmptyTranscripts,
+                'ocr workflow',
+                'recognition',
+                transcriptImages,
+                bookName,
+                {
+                    ocr_provider: provider,
+                    ocr_model: selectedModel,
+                    batch_size: batchSize,
+                    custom_prompt_enabled: Boolean(customPrompt && customPrompt.trim()),
+                },
+            );
+            lastSavedSignatureRef.current = signature;
+            setSessionSaved(true);
+            window.alert('Transcript and page images saved to My Files.');
+        } catch (err) {
+            setError(`Save failed: ${err.message}`);
+        } finally {
+            setIsSavingSession(false);
+        }
+    }, [batchSize, bookName, buildSavePayload, customPrompt, hasAnyTranscript, isSavingSession, provider, selectedModel]);
 
     // Toggle auto processing - properly stops all processes when toggled off
     const handleToggleAutoProcess = useCallback(() => {
@@ -485,13 +606,20 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
         });
     }, []);
 
+    const handleComplete = useCallback(async () => {
+        if (typeof onComplete === 'function') {
+            onComplete('OCR processing complete. Use Save to My Files to persist transcripts.');
+        }
+    }, [onComplete]);
+
     return (
         <OCRLayout
             onBack={onBack}
-            onComplete={onComplete}
+            onComplete={handleComplete}
+            onHome={onHome}
             processedCount={processedPages.size}
             totalPages={totalPages}
-            hasAnyTranscript={hasAnyTranscript}
+            hasAnyTranscript={hasAnyTranscript && !isSavingSession}
             backendOnline={backendOnline}
             leftSidebar={
                 <>
@@ -560,7 +688,9 @@ export default function TextRecognitionPage({ provider = 'gemini', processedImag
                     onTranscriptChange={handleTranscriptChange}
                     onReset={handleResetTranscript}
                     onExport={handleExport}
+                    onSaveLocal={handleSaveLocal}
                     exporting={exporting}
+                    savingLocal={isSavingSession}
                 />
             }
         />

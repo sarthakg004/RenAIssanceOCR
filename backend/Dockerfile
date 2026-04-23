@@ -150,8 +150,8 @@ COPY --from=builder /opt/venv /opt/venv
 # ~1.5 GB for nothing. Lazy first-run download is the correct pattern.
 RUN groupadd --system appgroup && \
     useradd --system --gid appgroup --home /home/appuser appuser && \
-    mkdir -p /home/appuser /paddle_models && \
-    chown appuser:appgroup /home/appuser /paddle_models
+    mkdir -p /home/appuser /paddle_models /app/storage/transcripts /app/storage/datasets && \
+    chown -R appuser:appgroup /home/appuser /paddle_models /app/storage
 
 ############################
 # App setup
@@ -173,6 +173,7 @@ RUN python /app/scripts/normalize_trocr_config.py && \
 USER appuser
 
 EXPOSE 8000
+VOLUME ["/app/storage"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1

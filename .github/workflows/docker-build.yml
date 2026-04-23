@@ -1,8 +1,8 @@
 # ============================================================
 # RenAIssance — Docker Build & Push
 # Builds backend + frontend in parallel
-# Versioning: v3.0 → v3.1 → v3.2 → ... (ignores v1, v2)
-# Tags pushed: image:v3.x  and  image:latest
+# Versioning: vX.Y with rollover at .9 (e.g. v3.9 → v4.0)
+# Tags pushed: image:vX.Y and image:latest
 # ============================================================
 
 name: Docker Build & Push
@@ -22,7 +22,7 @@ env:
   FRONTEND_IMAGE: saarthakg004/renaissance-frontend
 
 jobs:
-  # ── Compute next v3.x version (no tag push yet) ────────────
+  # ── Compute next version (no tag push yet) ─────────────────
   # The git tag is only created AFTER both images build successfully.
   # This prevents a failed build from consuming a version number.
   version:
@@ -35,24 +35,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute next v3.x version
+      - name: Compute next version with rollover
         id: semver
         run: |
           git fetch --tags --force
 
-          # Only consider tags that match exactly v3.<number> — ignore v1, v2, etc.
-          LATEST=$(git tag --list 'v3.*' \
-            | grep -E '^v3\.[0-9]+$' \
+          # Consider tags that match exactly v<major>.<minor>
+          LATEST=$(git tag --list 'v*' \
+            | grep -E '^v[0-9]+\.[0-9]+$' \
             | sort -V \
             | tail -n1)
 
           if [ -z "$LATEST" ]; then
-            # No v3.x tag exists yet → start the series
-            NEXT="v3.0"
+            # No version tags yet
+            NEXT="v1.0"
           else
-            # Extract the minor number with awk and increment
-            MINOR=$(echo "$LATEST" | awk -F'.' '{print $2}')
-            NEXT="v3.$((MINOR + 1))"
+            MAJOR=$(echo "$LATEST" | sed -E 's/^v([0-9]+)\.[0-9]+$/\1/')
+            MINOR=$(echo "$LATEST" | sed -E 's/^v[0-9]+\.([0-9]+)$/\1/')
+
+            # Rollover after .9
+            if [ "$MINOR" -ge 9 ]; then
+              NEXT="v$((MAJOR + 1)).0"
+            else
+              NEXT="v${MAJOR}.$((MINOR + 1))"
+            fi
           fi
 
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"

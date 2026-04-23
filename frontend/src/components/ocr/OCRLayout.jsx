@@ -9,6 +9,7 @@ export default function OCRLayout({
   // Header props
   onBack,
   onComplete,
+  onHome,
   processedCount,
   totalPages,
   hasAnyTranscript,
@@ -73,18 +74,29 @@ export default function OCRLayout({
 
         {/* Right: Complete button - absolutely positioned */}
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
-          <button
-            onClick={onComplete}
-            disabled={!hasAnyTranscript}
-            className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all text-sm ${
-              hasAnyTranscript
-                ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-sm'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            }`}
-          >
-            <CheckCircle2 size={14} />
-            <span className="hidden sm:inline">Complete</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {onHome && (
+              <button
+                onClick={onHome}
+                className="px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all text-sm bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+              >
+                <ChevronLeft size={14} />
+                <span className="hidden sm:inline">Home</span>
+              </button>
+            )}
+            <button
+              onClick={onComplete}
+              disabled={!hasAnyTranscript}
+              className={`px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-all text-sm ${
+                hasAnyTranscript
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-sm'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              <CheckCircle2 size={14} />
+              <span className="hidden sm:inline">Complete</span>
+            </button>
+          </div>
         </div>
       </header>
 

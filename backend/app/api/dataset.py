@@ -3,6 +3,7 @@ Dataset Generation API Router — transcript parsing + dataset export endpoints.
 """
 
 import base64
+import logging
 import re
 import traceback
 import urllib.parse
@@ -19,9 +20,11 @@ from ..services.dataset_builder import (
     build_dataset_zip,
     build_detection_dataset_zip,
 )
+from ..storage.storage_manager import save_detection_dataset, save_recognition_dataset
 
 
 router = APIRouter(prefix="/api/dataset", tags=["dataset"])
+logger = logging.getLogger(__name__)
 
 
 # ── Schemas ─────────────────────────────────────────────────────────
@@ -181,6 +184,15 @@ async def export_dataset(request: DatasetExportRequest):
             book_name=request.book_name,
         )
 
+        try:
+            save_recognition_dataset(
+                pages_data=pages_data,
+                source="dataset export",
+                book_name=request.book_name,
+            )
+        except Exception as save_err:
+            logger.warning("Recognition dataset persistence failed: %s", save_err)
+
         filename = f"{request.book_name}_dataset.zip"
         # Sanitize filename for Content-Disposition header (latin-1 safe)
         ascii_filename = re.sub(r'[^\x20-\x7E]', '_', filename)
@@ -234,6 +246,16 @@ async def export_detection_dataset(request: DetectionExportRequest):
             book_name=request.book_name,
             bbox_format=request.bbox_format,
         )
+
+        try:
+            save_detection_dataset(
+                pages_data=pages_data,
+                source="dataset export",
+                book_name=request.book_name,
+                bbox_format=request.bbox_format,
+            )
+        except Exception as save_err:
+            logger.warning("Detection dataset persistence failed: %s", save_err)
 
         filename = f"{request.book_name}_detection_dataset.zip"
         ascii_filename = re.sub(r'[^\x20-\x7E]', '_', filename)

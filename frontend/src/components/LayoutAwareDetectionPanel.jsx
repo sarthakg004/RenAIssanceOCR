@@ -23,6 +23,7 @@ import {
     FileJson,
     FileType,
     RefreshCw,
+    Home,
 } from 'lucide-react';
 import ResizablePanels from './ocr/ResizablePanels';
 import BBoxEditor from './BBoxEditor';
@@ -33,6 +34,7 @@ import {
     exportCRNNResultsAsJSON,
     downloadBlob,
 } from '../features/ocr/services/ocrApi';
+import { saveTranscriptSession } from '../services/storageApi';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -169,7 +171,9 @@ export default function LayoutAwareDetectionPage({
     selectedPages,
     processedImages,
     transcript = {},
+    bookName = 'transcript',
     onBack,
+    onHome,
     datasetMode = false,
     onDatasetNext,
     // Persistence props — restored when navigating back from export
@@ -217,6 +221,7 @@ export default function LayoutAwareDetectionPage({
     const [ocrProcessingAll, setOcrProcessingAll] = useState(false);
     const [ocrProgress, setOcrProgress] = useState(null);
     const cancelOcrRef = useRef(false);
+    const lastSavedSignatureRef = useRef('');
     const [ocrDevice, setOcrDevice] = useState(null);
     const [ocrTimeMs, setOcrTimeMs] = useState(null);
     const [ocrError, setOcrError] = useState(null);
@@ -438,6 +443,77 @@ export default function LayoutAwareDetectionPage({
             setOcrProgress(null);
         }
     }, [availablePages, datasetMode, detectedPages, ocrProcessing, ocrProcessingAll, runOcrForPage, selectedOcrModel]);
+
+    const handleSaveTranscript = useCallback(async () => {
+        if (recognizedCount === 0) return;
+
+        const transcriptByPage = {};
+        const transcriptImages = {};
+
+        for (let i = 0; i < availablePages.length; i += 1) {
+            const p = availablePages[i];
+            const byIndex = {};
+            (recognizedByPage[p] || []).forEach((r) => {
+                byIndex[r.box_index] = r.text || '';
+            });
+            const sorted = (detectedPages[p] || [])
+                .map((poly, idx) => {
+                    const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                    return { idx, y: (byY[0][1] + byY[1][1]) / 2 };
+                })
+                .sort((a, b) => a.y - b.y)
+                .map((item) => byIndex[item.idx] || '');
+
+            const pageText = sorted.join('\n').trim();
+            if (!pageText) continue;
+
+            const pageKey = String(p);
+            transcriptByPage[pageKey] = pageText;
+
+            const imageUrl = getImageUrl(p);
+            if (imageUrl) {
+                try {
+                    const dataUrl = await toDataUrl(imageUrl);
+                    if (typeof dataUrl === 'string' && dataUrl.startsWith('data:')) {
+                        transcriptImages[pageKey] = dataUrl;
+                    }
+                } catch {
+                    // Skip this page image if conversion fails.
+                }
+            }
+        }
+
+        if (Object.keys(transcriptByPage).length === 0) {
+            setOcrError('No transcript pages to save.');
+            return;
+        }
+
+        const signature = JSON.stringify(transcriptByPage);
+        if (lastSavedSignatureRef.current === signature) {
+            const proceed = window.confirm('No transcript changes were detected since the last save. Save another copy anyway?');
+            if (!proceed) return;
+        }
+
+        try {
+            await saveTranscriptSession(
+                transcriptByPage,
+                'layout-aware ocr',
+                'recognition',
+                transcriptImages,
+                bookName,
+                {
+                    ocr_provider: 'local',
+                    ocr_model: selectedOcrModel,
+                    layout_model: selectedLayoutModel,
+                    detection_model: selectedDetModel,
+                },
+            );
+            lastSavedSignatureRef.current = signature;
+            window.alert('Transcript and page images saved to My Files.');
+        } catch (err) {
+            setOcrError(err.message || 'Failed to save transcript session');
+        }
+    }, [availablePages, bookName, detectedPages, getImageUrl, recognizedByPage, recognizedCount, selectedDetModel, selectedLayoutModel, selectedOcrModel, toDataUrl]);
 
     const updateRecognizedText = useCallback((lineIndex, value) => {
         const boxIndex = sortedBoxIndices[lineIndex];
@@ -1495,6 +1571,13 @@ export default function LayoutAwareDetectionPage({
                 <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider flex items-center gap-1.5">
                     <Download size={11} /> Export Transcript
                 </p>
+                <button
+                    disabled={recognizedCount === 0}
+                    onClick={handleSaveTranscript}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 text-[10px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                    Save to My Files
+                </button>
                 <div className="grid grid-cols-3 gap-1.5">
                     <button
                         disabled={recognizedCount === 0}
@@ -1606,6 +1689,12 @@ export default function LayoutAwareDetectionPage({
                         <ChevronLeft size={16} />
                         <span className="font-medium hidden sm:inline">Back</span>
                     </button>
+                    {onHome && (
+                        <button onClick={onHome} className="flex items-center gap-1 text-gray-600 hover:text-teal-600 hover:bg-teal-50 px-2 py-1 rounded-lg transition-all text-sm">
+                            <Home size={16} />
+                            <span className="font-medium hidden sm:inline">Home</span>
+                        </button>
+                    )}
                     <div className="h-4 w-px bg-gray-200 hidden sm:block" />
                     <div className="flex items-center gap-1.5 hidden sm:flex">
                         <div className="p-1 bg-gradient-to-br from-teal-500 to-emerald-600 rounded text-white">

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   Download,
@@ -12,6 +12,7 @@ import {
   ScanSearch,
   FileText,
 } from 'lucide-react';
+import { saveDatasetToMyFiles } from '../services/storageApi';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -38,10 +39,12 @@ export default function DatasetGenerationPage({
   transcript,
   allPagesBoxes,
   onBack,
+  onHome = null,
   bookName = 'dataset',
   forceMode = null,        // 'detection' to lock the toggle to detection-only
 }) {
   const [isExporting, setIsExporting] = useState(false);
+  const [isSavingLocal, setIsSavingLocal] = useState(false);
   const [exportError, setExportError] = useState(null);
   const [previewIdx, setPreviewIdx] = useState(0);
   // When the upstream flow already chose a mode (e.g. user picked Detection
@@ -49,6 +52,7 @@ export default function DatasetGenerationPage({
   // the toggle. Otherwise default to recognition with the toggle visible.
   const [datasetType, setDatasetType] = useState(forceMode || 'recognition');
   const [bboxFormat, setBboxFormat] = useState('txt'); // 'txt' | 'json' | 'yolo' | 'coco'
+  const lastSavedSignatureRef = useRef('');
   const isModeLocked = forceMode != null;
 
   // ── Detection-mode data ──────────────────────────────────────────
@@ -209,6 +213,75 @@ export default function DatasetGenerationPage({
     }
   };
 
+  const handleSaveLocal = async () => {
+    setIsSavingLocal(true);
+    setExportError(null);
+
+    try {
+      if (isDetection) {
+        const pagesPayload = detectionData.map((d) => ({
+          page_key: String(d.pageNumber),
+          image_data: d.imageSrc,
+          boxes: d.boxes,
+        }));
+
+        const signature = JSON.stringify({
+          mode: 'detection',
+          bookName,
+          bboxFormat,
+          pages: pagesPayload.map((p) => ({ page_key: p.page_key, boxes: p.boxes.length })),
+        });
+        if (lastSavedSignatureRef.current === signature) {
+          const proceed = window.confirm('No dataset changes were detected since the last save. Save another copy anyway?');
+          if (!proceed) return;
+        }
+
+        await saveDatasetToMyFiles(pagesPayload, {
+          source: 'dataset generation',
+          bookName,
+          bboxFormat,
+          mode: 'detection',
+        });
+        lastSavedSignatureRef.current = signature;
+      } else {
+        const pagesPayload = alignmentData.map((d) => ({
+          page_key: String(d.pageNumber),
+          image_data: d.imageSrc,
+          boxes: d.boxes,
+          lines: d.lines,
+        }));
+
+        const signature = JSON.stringify({
+          mode: 'recognition',
+          bookName,
+          pages: pagesPayload.map((p) => ({
+            page_key: p.page_key,
+            boxes: p.boxes.length,
+            lines: p.lines.length,
+            text: p.lines.join('\n'),
+          })),
+        });
+        if (lastSavedSignatureRef.current === signature) {
+          const proceed = window.confirm('No dataset changes were detected since the last save. Save another copy anyway?');
+          if (!proceed) return;
+        }
+
+        await saveDatasetToMyFiles(pagesPayload, {
+          source: 'dataset generation',
+          bookName,
+          mode: 'recognition',
+        });
+        lastSavedSignatureRef.current = signature;
+      }
+
+      window.alert('Dataset saved to My Files.');
+    } catch (err) {
+      setExportError(`Save failed: ${err.message}`);
+    } finally {
+      setIsSavingLocal(false);
+    }
+  };
+
   const isDetection = datasetType === 'detection';
   const canExport = isDetection ? detectionData.length > 0 : alignmentData.length > 0;
 
@@ -236,6 +309,15 @@ export default function DatasetGenerationPage({
                 }
               </p>
             </div>
+
+            {onHome && (
+              <button
+                onClick={onHome}
+                className="ml-2 px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:text-emerald-700 hover:bg-emerald-50 transition-all"
+              >
+                Home
+              </button>
+            )}
           </div>
         </div>
 
@@ -502,6 +584,21 @@ export default function DatasetGenerationPage({
                 {exportError}
               </div>
             )}
+
+            <div className="flex gap-2 mb-2">
+              <button
+                onClick={handleSaveLocal}
+                disabled={isExporting || isSavingLocal || !canExport}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold transition-all duration-200 border ${
+                  isExporting || isSavingLocal || !canExport
+                    ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+                    : 'bg-cyan-50 text-cyan-700 border-cyan-200 hover:bg-cyan-100'
+                }`}
+              >
+                {isSavingLocal ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+                Save to My Files
+              </button>
+            </div>
 
             <button
               onClick={isDetection ? handleDetectionExport : handleExport}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Database, ArrowRight, BookOpen, Sparkles } from 'lucide-react';
+import { FileText, Database, ArrowRight, BookOpen, Archive } from 'lucide-react';
 import homeImage from '../assets/home-image.png';
 
 /**
@@ -32,28 +32,9 @@ export default function HomePage({ onSelectMode }) {
 
       {/* Main */}
       <main className="relative z-10 flex-1 min-h-0 grid lg:grid-cols-2 gap-8 items-stretch px-6 lg:px-16 py-6 overflow-hidden">
-        {/* Left: copy + decorative image */}
-        <div className="flex flex-col min-h-0 justify-center">
-          <div className="inline-flex w-fit items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-100 text-blue-600 text-xs font-semibold mb-4 shadow-sm">
-            <Sparkles className="w-3.5 h-3.5" />
-            Choose your workflow
-          </div>
-
-          <h2 className="text-3xl xl:text-4xl font-bold tracking-tight leading-[1.15] text-gray-800">
-            Bring{' '}
-            <span className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-              historical text
-            </span>{' '}
-            into the digital age.
-          </h2>
-
-          <p className="mt-3 text-base text-gray-500 max-w-lg leading-relaxed">
-            Preprocess pages, detect text lines, and either transcribe with
-            modern OCR or build training datasets — all in one place.
-          </p>
-
-          {/* Decorative image card — flexes to fill remaining height */}
-          <div className="mt-5 relative flex-1 min-h-0 rounded-2xl overflow-hidden border border-blue-100 shadow-xl shadow-blue-500/10">
+        {/* Left: decorative image only */}
+        <div className="flex flex-col min-h-0 h-full justify-start">
+          <div className="relative flex-1 min-h-[18rem] rounded-2xl overflow-hidden border border-blue-100 shadow-xl shadow-blue-500/10">
             <img
               src={homeImage}
               alt="Historical manuscript"
@@ -64,7 +45,7 @@ export default function HomePage({ onSelectMode }) {
         </div>
 
         {/* Right: mode cards */}
-        <div className="flex flex-col min-h-0 justify-center gap-5">
+        <div className="flex flex-col min-h-0 h-full justify-start gap-5">
           {/* Dataset */}
           <button
             onClick={() => onSelectMode('dataset')}
@@ -105,6 +86,29 @@ export default function HomePage({ onSelectMode }) {
                 </p>
                 <div className="mt-4 flex items-center gap-1.5 text-indigo-600 font-semibold text-sm group-hover:gap-3 transition-all">
                   Start OCR workflow
+                  <ArrowRight className="w-4 h-4" />
+                </div>
+              </div>
+            </div>
+          </button>
+
+          {/* My Files */}
+          <button
+            onClick={() => onSelectMode('files')}
+            className="group relative text-left p-6 rounded-2xl border border-gray-200 bg-white/90 backdrop-blur-sm hover:border-cyan-400 hover:shadow-2xl hover:shadow-cyan-500/15 hover:-translate-y-0.5 transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-cyan-100"
+          >
+            <div className="flex items-start gap-5">
+              <div className="p-3.5 rounded-xl bg-gradient-to-br from-cyan-50 to-blue-50 text-cyan-700 group-hover:from-cyan-500 group-hover:to-blue-600 group-hover:text-white group-hover:shadow-lg group-hover:shadow-cyan-500/30 transition-all duration-300 flex-shrink-0">
+                <Archive className="w-7 h-7" strokeWidth={2} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-xl font-bold text-gray-800 mb-1">My Files</h3>
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  Browse saved transcription sessions and generated datasets.
+                  View, download, or delete persistent artifacts.
+                </p>
+                <div className="mt-4 flex items-center gap-1.5 text-cyan-700 font-semibold text-sm group-hover:gap-3 transition-all">
+                  Open file manager
                   <ArrowRight className="w-4 h-4" />
                 </div>
               </div>

@@ -4,6 +4,7 @@ import {
   Copy,
   Check,
   Download,
+  Save,
   RotateCcw,
   Type,
   Loader2,
@@ -106,7 +107,9 @@ function TranscriptPanel({
   onTranscriptChange,
   onReset,
   onExport,
+  onSaveLocal,
   exporting,
+  savingLocal,
   onLLMProcess,
   isLLMProcessing,
   llmEnabled,
@@ -385,8 +388,8 @@ function TranscriptPanel({
           <div className="grid grid-cols-3 gap-1.5">
             {[
               { format: 'txt', icon: FileText, label: 'TXT' },
-              { format: 'docx', icon: File, label: 'DOCX' },
-              { format: 'pdf', icon: FileType, label: 'PDF' },
+              { format: 'csv', icon: File, label: 'CSV' },
+              { format: 'json', icon: FileType, label: 'JSON' },
             ].map(({ format, icon: Icon, label }) => (
               <button
                 key={format}
@@ -406,6 +409,17 @@ function TranscriptPanel({
               </button>
             ))}
           </div>
+
+          {onSaveLocal && (
+            <button
+              onClick={onSaveLocal}
+              disabled={savingLocal}
+              className="mt-2 w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {savingLocal ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              Save to My Files
+            </button>
+          )}
         </div>
       )}
     </div>

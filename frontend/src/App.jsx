@@ -3,6 +3,7 @@ import { FileText, Database, BookOpen } from 'lucide-react';
 import Stepper from './components/Stepper';
 import DatasetStepper from './components/DatasetStepper';
 import HomePage from './pages/HomePage';
+import MyFilesPage from './pages/MyFilesPage';
 import CombinedUploadPage from './pages/CombinedUploadPage';
 import PageMatchReviewPage from './pages/PageMatchReviewPage';
 import DatasetGenerationPage from './pages/DatasetGenerationPage';
@@ -16,7 +17,7 @@ import { usePdfPreview } from './hooks/usePdfPreview';
 
 
 function App() {
-  // ── Mode: null (home), 'ocr', 'dataset' ──────────────────────────
+  // ── Mode: null (home), 'ocr', 'dataset', 'files' ─────────────────
   const [mode, setMode] = useState(null);
 
   // ── Shared state ──────────────────────────────────────────────────
@@ -171,6 +172,10 @@ function App() {
     return <HomePage onSelectMode={handleSelectMode} />;
   }
 
+  if (mode === 'files') {
+    return <MyFilesPage onBack={handleReset} />;
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // DATASET MODE  (steps: 1=Upload+Transcript, 2=Match Review, 3=Preprocess, 4=Detect&Align, 5=Export)
   // ════════════════════════════════════════════════════════════════════
@@ -202,6 +207,7 @@ function App() {
             processedImages={processedImages}
             transcript={parsedTranscript}
             onBack={() => goToStep(3)}
+            onHome={handleReset}
             datasetMode={true}
             initialDetectedPages={detectionCache.pages}
             initialAlignmentByPage={detectionCache.alignment}
@@ -226,6 +232,7 @@ function App() {
             transcript={Object.keys(alignedTranscriptByPage).length > 0 ? alignedTranscriptByPage : parsedTranscript}
             allPagesBoxes={allPagesBoxes}
             onBack={() => goToStep(4)}
+            onHome={handleReset}
             bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'dataset'}
             forceMode={datasetMode === 'detection' ? 'detection' : null}
           />
@@ -346,7 +353,9 @@ function App() {
             pages={pages}
             selectedPages={selectedPages}
             processedImages={processedImages}
+            bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'transcript'}
             onBack={() => goToStep(4)}
+            onHome={handleReset}
             initialDetectedPages={ocrDetectionCache.pages}
             initialAlignmentByPage={ocrDetectionCache.alignment}
             onStateChange={(cache) => {
@@ -358,6 +367,7 @@ function App() {
         <div className="h-screen w-screen overflow-hidden">
           <TextRecognitionPage
             provider={detectionProvider || 'gemini'}
+            bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'transcript'}
             processedImages={
               selectedPages.map((pageNum) => {
                 const original = pages.find(p => p.pageNumber === pageNum);
@@ -373,8 +383,9 @@ function App() {
               })
             }
             onBack={() => goToStep(4)}
-            onComplete={() => {
-              alert('OCR processing complete! Transcripts have been saved.');
+            onHome={handleReset}
+            onComplete={(message) => {
+              alert(message || 'OCR processing complete! Transcripts have been saved.');
             }}
           />
         </div>
