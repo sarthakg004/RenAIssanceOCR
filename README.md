@@ -21,53 +21,91 @@ with PaddleOCR, and transcribe with your choice of provider.
 
 ## Run it (prebuilt images)
 
+### Initial setup (one time only)
+
 ```bash
-# Pull
+# Pull latest images
 docker pull saarthakg004/renaissance-backend:latest
 docker pull saarthakg004/renaissance-frontend:latest
 
-# Shared network
+# Create network and volumes (do this once — they persist forever)
 docker network create renaissance 2>/dev/null || true
+docker volume create paddle_models 2>/dev/null || true
+docker volume create renaissance_storage 2>/dev/null || true
+```
 
-# Backend — GPU + persistent PaddleOCR model cache
+### Start the containers
+
+```bash
+# Backend with GPU support
 docker run -d --name renaissance-backend \
   --gpus all \
   --network renaissance \
   -p 8000:8000 \
   -v paddle_models:/paddle_models \
+  -v renaissance_storage:/app/storage \
   --restart unless-stopped \
   saarthakg004/renaissance-backend:latest
 
 # Frontend
 docker run -d --name renaissance-frontend \
   --network renaissance \
-  -p 5173:80 \
+  -p 5173:8080 \
   --restart unless-stopped \
   saarthakg004/renaissance-frontend:latest
+
+# Wait ~30s for containers to start, then open http://localhost:5173
 ```
 
-Open **http://localhost:5173**.
+### Stop containers (data persists in volumes)
 
-**No GPU?** Drop `--gpus all` from the backend command — everything still runs,
-just slower.
-
-**Stop:**
 ```bash
+# Stop and remove only containers — volumes and data are preserved
 docker rm -f renaissance-backend renaissance-frontend
 ```
 
----
-
-## Run it (from source)
+### Restart containers (reuse existing volumes and data)
 
 ```bash
-git clone https://github.com/sarthakg004/RenAIssanceOCR.git
-cd RenAIssance
-docker compose up --build
+# Just run the container start commands above again
+# All your datasets and transcripts will be there
 ```
 
-First build takes 10–15 minutes (downloads PyTorch, PaddlePaddle, and the
-recognition model weights). Subsequent builds reuse the BuildKit cache.
+### Clean up (⚠️ WARNING: deletes all data)
+
+```bash
+# Delete containers, network, and volumes (this removes all saved datasets/transcripts)
+docker rm -f renaissance-backend renaissance-frontend
+docker network rm renaissance
+docker volume rm paddle_models renaissance_storage
+```
+
+**No GPU?** Drop `--gpus all` from the backend command — everything still runs, just slower.
+
+**All commands in one script:**
+
+```bash
+# Setup (run once)
+docker pull saarthakg004/renaissance-backend:latest
+docker pull saarthakg004/renaissance-frontend:latest
+docker network create renaissance 2>/dev/null || true
+docker volume create paddle_models 2>/dev/null || true
+docker volume create renaissance_storage 2>/dev/null || true
+
+# Start
+docker run -d --name renaissance-backend \
+  --gpus all --network renaissance -p 8000:8000 \
+  -v paddle_models:/paddle_models -v renaissance_storage:/app/storage \
+  --restart unless-stopped \
+  saarthakg004/renaissance-backend:latest
+
+docker run -d --name renaissance-frontend \
+  --network renaissance -p 5173:8080 \
+  --restart unless-stopped \
+  saarthakg004/renaissance-frontend:latest
+
+sleep 30 && echo "Open http://localhost:5173"
+```
 
 ---
 
@@ -90,7 +128,7 @@ A 5-step wizard, one step per page:
 | Backend exits immediately on `--gpus all` | NVIDIA Container Toolkit not installed or Docker not restarted after install |
 | Layout detection falls back to CPU (`cuda_compiled=False`) | Container launched without `--gpus all`, or host driver < 560 |
 | PaddleOCR re-downloads on every start | `paddle_models` volume was removed; it will repopulate on next run |
-| Port 8000/5173 already in use | Remap with `-p 8001:8000` / `-p 5174:80` |
+| Port 8000/5173 already in use | Remap with `-p 8001:8000` / `-p 5174:8080` |
 | Frontend says "cannot reach backend" | Backend still starting — health check takes ~30 s on first run |
 
 View logs: `docker logs -f renaissance-backend`.

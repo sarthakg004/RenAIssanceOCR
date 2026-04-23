@@ -32,6 +32,9 @@ FROM nginx:1.27-alpine AS runtime
 
 ENV NODE_ENV=production
 
+# Install curl for runtime health checks.
+RUN apk add --no-cache curl
+
 # Remove default config
 RUN rm /etc/nginx/conf.d/default.conf
 
@@ -53,6 +56,6 @@ USER nginx
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget -qO- http://localhost:8080/ || exit 1
+    CMD curl -fsS http://localhost:8080/ >/dev/null || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
