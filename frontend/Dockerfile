@@ -1,6 +1,6 @@
 # ============================================
 # RenAIssance OCR — Frontend Dockerfile
-# Multi-stage: Node 20 build → Nginx alpine serve
+# Multi-stage: Node 20 build → Nginx Alpine slim serve
 # ============================================
 
 # ---- Stage 1: Build ----
@@ -28,7 +28,7 @@ RUN npm run build
 
 
 # ---- Stage 2: Serve ----
-FROM nginx:1.27-alpine AS runtime
+FROM nginx:1.30-alpine-slim AS runtime
 
 ENV NODE_ENV=production
 
