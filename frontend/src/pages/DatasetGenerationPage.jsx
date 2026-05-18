@@ -13,8 +13,9 @@ import {
   FileText,
 } from 'lucide-react';
 import { saveDatasetToMyFiles } from '../services/storageApi';
+import { API_ORIGIN } from '../config';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = API_ORIGIN;
 
 /**
  * Dataset Generation page — shows alignment preview and export controls.

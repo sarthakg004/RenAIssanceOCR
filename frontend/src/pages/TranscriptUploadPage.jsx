@@ -18,7 +18,9 @@ import {
  * Accepts TXT, DOCX, PDF, Markdown files.
  * Parses them via the backend and shows page/line counts.
  */
-const API_BASE = 'http://localhost:8000';
+import { API_ORIGIN } from '../config';
+
+const API_BASE = API_ORIGIN;
 
 export default function TranscriptUploadPage({
   onTranscriptParsed,

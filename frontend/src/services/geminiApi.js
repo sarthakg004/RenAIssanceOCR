@@ -3,7 +3,9 @@
  * Handles communication with the FastAPI backend for Gemini-based OCR
  */
 
-const API_BASE = 'http://localhost:8000/api';
+import { API_ORIGIN } from '../config';
+
+const API_BASE = `${API_ORIGIN}/api`;
 
 /**
  * Get available Gemini models

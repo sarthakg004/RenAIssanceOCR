@@ -35,8 +35,9 @@ import {
     downloadBlob,
 } from '../features/ocr/services/ocrApi';
 import { saveTranscriptSession } from '../services/storageApi';
+import { API_ORIGIN } from '../config';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = API_ORIGIN;
 
 // ─── Layout model options (8) ──────────────────────────────
 const LAYOUT_MODELS = [

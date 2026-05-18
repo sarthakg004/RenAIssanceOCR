@@ -3,7 +3,9 @@
  * Consolidates all provider-specific API calls into a single module.
  */
 
-const API_BASE = 'http://localhost:8000/api';
+import { API_ORIGIN } from '../../../config';
+
+const API_BASE = `${API_ORIGIN}/api`;
 
 // ============================================
 // Model fetching (per provider)

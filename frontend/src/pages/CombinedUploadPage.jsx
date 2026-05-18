@@ -14,8 +14,9 @@ import {
   ScrollText,
   ScanSearch,
 } from 'lucide-react';
+import { API_ORIGIN } from '../config';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = API_ORIGIN;
 
 /**
  * CombinedUploadPage — uploads both the book (PDF/images) and

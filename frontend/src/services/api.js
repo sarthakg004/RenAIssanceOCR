@@ -3,8 +3,10 @@
  * Calls backend Python OpenCV-based preprocessing
  */
 
-// Backend API base URL
-const API_BASE = 'http://localhost:8000';
+import { API_ORIGIN } from '../config';
+
+// Backend API base URL (relative in prod/dev — see config.js)
+const API_BASE = API_ORIGIN;
 
 // Simulate network delay (for mock functions only)
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

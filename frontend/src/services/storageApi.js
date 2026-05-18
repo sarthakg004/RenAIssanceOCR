@@ -1,4 +1,6 @@
-const API_BASE = 'http://localhost:8000/api/storage';
+import { API_ORIGIN } from '../config';
+
+const API_BASE = `${API_ORIGIN}/api/storage`;
 
 export async function fetchStorageOverview() {
   const response = await fetch(`${API_BASE}/overview`);
