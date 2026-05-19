@@ -81,21 +81,6 @@ export default function SelectPage({
         </div>
       )}
 
-      {/* Selection summary */}
-      {hasSelection && !isLoading && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-3.5 rounded-full shadow-xl shadow-blue-500/30 flex items-center gap-4 animate-slide-up backdrop-blur-sm">
-          <span className="font-semibold">
-            {selectedPages.length} page{selectedPages.length > 1 ? 's' : ''} selected
-          </span>
-          <button
-            onClick={onNext}
-            className="flex items-center gap-2 px-5 py-2 bg-white text-blue-600 font-bold rounded-full hover:bg-blue-50 transition-all duration-200 shadow-md"
-          >
-            Continue
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

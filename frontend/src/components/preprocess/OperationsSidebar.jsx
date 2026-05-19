@@ -41,6 +41,7 @@ export default function OperationsSidebar({
   onApplyRecommended,
   onReset,
   isProcessing = false,
+  hideHeader = false,
   className = '',
 }) {
   const [expandedCategories, setExpandedCategories] = useState(['basic', 'enhancement', 'binarization', 'cleanup']);
@@ -64,8 +65,9 @@ export default function OperationsSidebar({
   };
 
   return (
-    <div className={`flex flex-col h-full bg-white rounded-xl shadow-card ${className}`}>
+    <div className={`flex flex-col h-full ${hideHeader ? '' : 'bg-white rounded-xl shadow-card'} ${className}`}>
       {/* Header */}
+      {!hideHeader && (
       <div className="flex-shrink-0 px-4 py-3 border-b border-gray-100">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -83,9 +85,9 @@ export default function OperationsSidebar({
           <button
             onClick={onApplyRecommended}
             disabled={isProcessing}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 
-                       bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs font-medium 
-                       rounded-lg hover:from-blue-600 hover:to-blue-700 
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2
+                       bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs font-medium
+                       rounded-lg hover:from-blue-600 hover:to-blue-700
                        disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
           >
             <Sparkles size={14} />
@@ -94,7 +96,7 @@ export default function OperationsSidebar({
           <button
             onClick={onReset}
             disabled={isProcessing}
-            className="px-3 py-2 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg 
+            className="px-3 py-2 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg
                        hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             title="Reset all operations"
           >
@@ -102,6 +104,7 @@ export default function OperationsSidebar({
           </button>
         </div>
       </div>
+      )}
 
       {/* Accordion categories */}
       <div className="flex-1 overflow-y-auto">

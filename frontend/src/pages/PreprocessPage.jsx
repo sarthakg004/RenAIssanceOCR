@@ -29,9 +29,6 @@ import {
   ImageEraser,
 } from '../components/preprocess';
 
-// Import OCR components for resizable panels
-import { ResizablePanels } from '../components/ocr';
-
 // Import existing components
 import ImageCropper from '../components/ImageCropper';
 
@@ -709,338 +706,80 @@ export default function PreprocessPage({
   // ========== RENDER ==========
 
   return (
-    <div className="h-full w-full flex flex-col bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/40 overflow-hidden">
-      {/* ========== TOP BAR ========== */}
-      <header className="flex-shrink-0 px-4 py-3 border-b border-gray-200 bg-white/80 backdrop-blur-sm">
-        <div className="flex items-center justify-between">
-          {/* Left section - Back button and title */}
-          <div className="flex items-center gap-4">
-            <button onClick={onBack} className="btn-ghost">
-              <ArrowLeft className="w-5 h-5" />
-              <span className="hidden sm:inline">Back</span>
-            </button>
+    <div className="h-full w-full flex overflow-hidden bg-gray-50">
 
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg text-white shadow-md">
-                <Sparkles className="w-5 h-5" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-gray-800">
-                  Preprocessing Studio
-                </h1>
-                <p className="text-xs text-gray-500">
-                  {selectedPages.length} page{selectedPages.length > 1 ? 's' : ''} •
-                  {activePipelineCount} operation{activePipelineCount !== 1 ? 's' : ''} active
-                </p>
-              </div>
-            </div>
+      {/* ========== LEFT SIDEBAR ========== */}
+      <aside className="flex-shrink-0 w-[272px] flex flex-col border-r border-gray-200 bg-white overflow-hidden">
+
+        {/* Sidebar header: step badge + title + description + quick actions */}
+        <div className="flex-shrink-0 px-4 pt-4 pb-3 border-b border-gray-100 space-y-3">
+          {/* Step badge */}
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 border border-blue-100 rounded-full text-xs font-semibold text-blue-600">
+              <Sparkles className="w-3 h-3" />
+              Step 3 of 5
+            </span>
           </div>
 
-          {/* Center section - Progress (when processing) */}
-          {isProcessing && (
-            <div className="flex-1 max-w-md mx-8 hidden md:block">
-              <ProgressBarLabeled
-                label={
-                  batchProgress.total > 0
-                    ? `Processing page ${batchProgress.current} of ${batchProgress.total}`
-                    : currentProcessingStep
-                      ? `Running: ${currentProcessingStep}`
-                      : 'Processing...'
-                }
-                progress={processingProgress}
-                variant="primary"
-                size="md"
-                isActive
-              />
-            </div>
-          )}
+          {/* Title + description */}
+          <div>
+            <h2 className="text-base font-bold text-gray-900 leading-tight">Pipeline</h2>
+            <p className="text-xs text-gray-400 mt-0.5">Toggle and tune operations. Preview updates live.</p>
+          </div>
 
-          {/* Right section - Actions */}
-          <div className="flex items-center gap-2">
-            {/* Apply to current */}
+          {/* Quick actions */}
+          <div className="flex gap-2">
             <button
-              onClick={handleApplyToCurrentPage}
-              disabled={isProcessing || activePipelineCount === 0}
-              className="btn-primary flex items-center gap-2"
-              title="Apply pipeline to current page"
-            >
-              <Play className="w-4 h-4" />
-              <span className="hidden sm:inline">Apply</span>
-            </button>
-
-            {/* Apply to all */}
-            <button
-              onClick={handleApplyToAllPages}
-              disabled={isProcessing || activePipelineCount === 0}
-              className="btn-secondary flex items-center gap-2"
-              title="Apply pipeline to all selected pages"
-            >
-              <Layers className="w-4 h-4" />
-              <span className="hidden lg:inline">Apply All</span>
-            </button>
-
-            <div className="w-px h-6 bg-gray-200 mx-1 hidden sm:block" />
-
-            {/* Skip */}
-            <button
-              onClick={onNext}
+              onClick={applyRecommendedPipeline}
               disabled={isProcessing}
-              className="btn-ghost text-gray-500 flex items-center gap-1"
-              title="Skip preprocessing"
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2
+                         bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs font-medium
+                         rounded-lg hover:from-blue-600 hover:to-blue-700
+                         disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
             >
-              <SkipForward className="w-4 h-4" />
-              <span className="hidden md:inline">Skip</span>
+              <Sparkles size={13} />
+              Recommended
             </button>
-
-            {/* Next step */}
             <button
-              onClick={onNext}
-              disabled={!canProceed}
-              className={`flex items-center gap-2 px-4 sm:px-5 py-2 font-semibold rounded-xl transition-all ${canProceed
-                ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-md hover:shadow-lg hover:-translate-y-0.5'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                }`}
+              onClick={handleResetOperations}
+              disabled={isProcessing}
+              className="px-3 py-2 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg
+                         hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Reset all operations"
             >
-              <span className="hidden sm:inline">Next</span>
-              <ArrowRight className="w-4 h-4" />
+              <RotateCcw size={14} />
             </button>
           </div>
         </div>
-      </header>
 
-      {/* ========== MAIN CONTENT - Resizable 3-Panel Layout ========== */}
-      <main className="flex-1 min-h-0 overflow-hidden">
-        <ResizablePanels
-          defaultLeftWidth={280}
-          defaultRightWidth={260}
-          minLeftWidth={220}
-          maxLeftWidth={400}
-          minRightWidth={200}
-          maxRightWidth={380}
-          minCenterWidth={400}
-
-          /* ========== LEFT PANEL - Operations Sidebar ========== */
-          leftPanel={
-            <div className="h-full border-r border-gray-200 overflow-hidden bg-white/50">
-              <OperationsSidebar
-                enabledOperations={enabledOperations}
-                onOperationToggle={toggleOperation}
-                onOperationParamsChange={updateOperationParams}
-                onApplyRecommended={applyRecommendedPipeline}
-                onReset={handleResetOperations}
-                isProcessing={isProcessing}
-                className="h-full rounded-none shadow-none"
-              />
-            </div>
-          }
-
-          /* ========== CENTER PANEL - Preview ========== */
-          centerPanel={
-            <div className="h-full flex flex-col p-3 lg:p-4 overflow-hidden">
-              {/* UX Tip Banner */}
-              {showTipBanner && (
-                <div className="mb-3 flex-shrink-0">
-                  <InfoBanner
-                    message="Tip: Crop images first before applying preprocessing for best results. Cropping after preprocessing may change output quality."
-                    onDismiss={() => setShowTipBanner(false)}
-                    variant="info"
-                  />
-                </div>
-              )}
-
-              {/* Page navigation and crop controls */}
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-3 flex-shrink-0">
-                {/* Left: Crop and Undo controls */}
-                <div className="flex items-center gap-2">
-                  {/* Crop button */}
-                  <button
-                    onClick={() => setShowCropper(true)}
-                    disabled={!currentPage}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${isModified
-                      ? 'bg-orange-100 text-orange-700 hover:bg-orange-200'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      }`}
-                    title="Crop image - changes are saved immediately"
-                  >
-                    <Crop className="w-4 h-4" />
-                    Crop
-                  </button>
-
-                  {/* Eraser button */}
-                  <button
-                    onClick={() => setShowEraser(true)}
-                    disabled={!currentPage}
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    title="Erase artifacts - paint white to clean up"
-                  >
-                    <Eraser className="w-4 h-4" />
-                    Eraser
-                  </button>
-
-                  {/* Undo button (current image) */}
-                  <button
-                    onClick={handleUndo}
-                    disabled={!canUndo}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${canUndo
-                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                      }`}
-                    title="Undo last edit (current image)"
-                  >
-                    <Undo2 className="w-4 h-4" />
-                    <span className="hidden sm:inline">Undo</span>
-                  </button>
-
-                  {/* Redo button — walks the timeline forward */}
-                  <button
-                    onClick={handleRedo}
-                    disabled={!canGlobalRedo}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${canGlobalRedo
-                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                      }`}
-                    title="Redo (Ctrl+Shift+Z)"
-                  >
-                    <Redo2 className="w-4 h-4" />
-                    <span className="hidden sm:inline">Redo</span>
-                  </button>
-
-                  {/* Undo All button (global - reverts last op across all pages) */}
-                  <button
-                    onClick={handleGlobalUndo}
-                    disabled={!canGlobalUndo}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${canGlobalUndo
-                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                      : 'bg-gray-50 text-gray-300 cursor-not-allowed'
-                      }`}
-                    title="Undo last global operation (e.g. Apply All)"
-                  >
-                    <Undo2 className="w-4 h-4" />
-                    <Layers className="w-3 h-3" />
-                    <span className="hidden sm:inline">Undo All</span>
-                  </button>
-
-                  {/* Reset button */}
-                  {isModified && (
-                    <button
-                      onClick={handleResetImage}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Reset to original image"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span className="hidden sm:inline">Reset</span>
-                    </button>
-                  )}
-
-                  {/* Modified indicator */}
-                  {isModified && (
-                    <span className="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded hidden lg:inline">
-                      Modified
-                    </span>
-                  )}
-                </div>
-
-                {/* Center: Page navigation */}
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={handlePrevPage}
-                    disabled={currentPageIndex === 0}
-                    className={`p-1.5 rounded-lg transition-colors ${currentPageIndex === 0 ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-100'
-                      }`}
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-
-                  <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                    {selectedPageData.map((page, idx) => (
-                      <button
-                        key={page.pageNumber}
-                        onClick={() => setCurrentPageIndex(idx)}
-                        className={`relative w-8 h-7 rounded-lg text-xs font-medium transition-all ${idx === currentPageIndex
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                      >
-                        {shortPageLabel(page.pageNumber)}
-                        {/* Status indicators */}
-                        {processedImages[page.pageNumber] && (
-                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-white" />
-                        )}
-                        {!processedImages[page.pageNumber] && imageStates[page.pageNumber]?.current !== page.thumbnail && (
-                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-orange-400 rounded-full border-2 border-white" />
-                        )}
-                      </button>
-                    ))}
+        {/* Operations list or Pipeline Order (toggled by showPipelinePanel) */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {!showPipelinePanel ? (
+            <OperationsSidebar
+              enabledOperations={enabledOperations}
+              onOperationToggle={toggleOperation}
+              onOperationParamsChange={updateOperationParams}
+              onApplyRecommended={applyRecommendedPipeline}
+              onReset={handleResetOperations}
+              isProcessing={isProcessing}
+              hideHeader
+              className="h-full"
+            />
+          ) : (
+            <div className="p-3 space-y-3">
+              {pipeline.length === 0 ? (
+                <div className="mt-2 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                  <div className="flex items-start gap-2">
+                    <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-medium text-blue-700">No operations in pipeline</p>
+                      <p className="text-[10px] text-blue-600 mt-1">
+                        Switch back to Operations view and enable some operations to add them here.
+                      </p>
+                    </div>
                   </div>
-
-                  <button
-                    onClick={handleNextPage}
-                    disabled={currentPageIndex === selectedPageData.length - 1}
-                    className={`p-1.5 rounded-lg transition-colors ${currentPageIndex === selectedPageData.length - 1 ? 'text-gray-300' : 'text-gray-600 hover:bg-gray-100'
-                      }`}
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
                 </div>
-
-                {/* Right: Zoom lens toggle */}
-                <button
-                  onClick={() => setShowZoomLens(!showZoomLens)}
-                  className={`p-2 rounded-lg transition-colors ${showZoomLens ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  title="Toggle zoom lens"
-                >
-                  <Search className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Image preview - Takes remaining height */}
-              <div className="flex-1 min-h-0">
-                <BeforeAfterViewer
-                  originalImage={originalImageState}
-                  processedImage={currentPageProcessed || currentImageState}
-                  isProcessing={isProcessing}
-                  processingLabel={currentProcessingStep ? `Running: ${currentProcessingStep}` : 'Processing...'}
-                  onOpenZoomLens={() => setShowZoomLens(true)}
-                  className="h-full"
-                />
-              </div>
-
-              {/* Status bar */}
-              <div className="flex items-center justify-between mt-2 px-2 text-xs text-gray-500 flex-shrink-0">
-                <div className="flex items-center gap-4">
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-green-500" />
-                    Processed: {Object.keys(processedImages).length}/{selectedPages.length}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-orange-400" />
-                    Modified: {Object.keys(imageStates).filter(k => { const pg = pages.find(p => String(p.pageNumber) === String(k)); return imageStates[k]?.current !== pg?.thumbnail; }).length}
-                  </span>
-                </div>
-                {currentPage && (
-                  <span>Page {shortPageLabel(currentPage.pageNumber)}</span>
-                )}
-              </div>
-            </div>
-          }
-
-          /* ========== RIGHT PANEL - Pipeline Stack ========== */
-          rightPanel={
-            showPipelinePanel ? (
-              <div className="h-full border-l border-gray-200 bg-gray-50/50 p-3 overflow-y-auto">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-blue-500" />
-                    Pipeline
-                  </h3>
-                  {activePipelineCount > 0 && (
-                    <span className="px-2 py-0.5 bg-blue-100 text-blue-600 text-xs font-semibold rounded">
-                      {activePipelineCount}
-                    </span>
-                  )}
-                </div>
-
+              ) : (
                 <PipelineStack
                   pipeline={pipeline}
                   onReorder={reorderPipeline}
@@ -1050,27 +789,329 @@ export default function PreprocessPage({
                   isProcessing={isProcessing}
                   currentStepId={currentProcessingStep}
                 />
+              )}
+            </div>
+          )}
+        </div>
 
-                {/* Quick tips when pipeline empty */}
-                {pipeline.length === 0 && (
-                  <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
-                    <div className="flex items-start gap-2">
-                      <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-xs font-medium text-blue-700">Getting Started</p>
-                        <p className="text-[10px] text-blue-600 mt-1">
-                          Enable operations from the left sidebar or click "Recommended" for a good starting pipeline.
-                        </p>
-                      </div>
-                    </div>
+        {/* Sidebar action bar */}
+        <div className="flex-shrink-0 border-t border-gray-100 p-3 space-y-2 bg-gray-50/60">
+
+          {/* Apply buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={handleApplyToCurrentPage}
+              disabled={isProcessing || activePipelineCount === 0}
+              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3
+                         bg-blue-600 text-white text-xs font-semibold rounded-lg
+                         hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Apply pipeline to current page"
+            >
+              <Play className="w-3.5 h-3.5" />
+              Apply
+            </button>
+            <button
+              onClick={handleApplyToAllPages}
+              disabled={isProcessing || activePipelineCount === 0}
+              className="flex items-center gap-1.5 py-2 px-3
+                         bg-gray-100 text-gray-700 text-xs font-semibold rounded-lg
+                         hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Apply pipeline to all selected pages"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              All
+            </button>
+          </div>
+
+          {/* Edit tools row */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => setShowCropper(true)}
+              disabled={!currentPage}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all
+                ${isModified ? 'bg-orange-100 text-orange-700 hover:bg-orange-200' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}
+                disabled:opacity-40 disabled:cursor-not-allowed`}
+              title="Crop image"
+            >
+              <Crop className="w-3.5 h-3.5" />
+              Crop
+            </button>
+            <button
+              onClick={() => setShowEraser(true)}
+              disabled={!currentPage}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium
+                         bg-gray-100 text-gray-700 hover:bg-gray-200
+                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              title="Erase artifacts"
+            >
+              <Eraser className="w-3.5 h-3.5" />
+              Erase
+            </button>
+
+            {/* Undo / Redo / Undo-All */}
+            <button
+              onClick={handleUndo}
+              disabled={!canUndo}
+              className={`p-1.5 rounded-lg transition-all
+                ${canUndo ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'text-gray-300 cursor-not-allowed'}`}
+              title="Undo (Ctrl+Z)"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={!canGlobalRedo}
+              className={`p-1.5 rounded-lg transition-all
+                ${canGlobalRedo ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'text-gray-300 cursor-not-allowed'}`}
+              title="Redo (Ctrl+Shift+Z)"
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleGlobalUndo}
+              disabled={!canGlobalUndo}
+              className={`flex items-center gap-0.5 p-1.5 rounded-lg transition-all
+                ${canGlobalUndo ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'text-gray-300 cursor-not-allowed'}`}
+              title="Undo last global operation (e.g. Apply All)"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+              <Layers className="w-2.5 h-2.5" />
+            </button>
+
+            {/* Reset page when modified */}
+            {isModified && (
+              <button
+                onClick={handleResetImage}
+                className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-red-600 hover:bg-red-50 transition-colors ml-auto"
+                title="Reset to original image"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Reset
+              </button>
+            )}
+          </div>
+
+          {/* Pipeline order toggle + pipeline count */}
+          <div className="flex items-center justify-between pt-0.5">
+            <button
+              onClick={() => setShowPipelinePanel(!showPipelinePanel)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all
+                ${showPipelinePanel ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              title="Toggle pipeline order view"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              {showPipelinePanel ? 'Operations' : 'Reorder Pipeline'}
+            </button>
+            {activePipelineCount > 0 && (
+              <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                {activePipelineCount} active
+              </span>
+            )}
+          </div>
+        </div>
+      </aside>
+
+      {/* ========== MAIN CONTENT ========== */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* Preview header */}
+        <div className="flex-shrink-0 px-5 py-3 bg-white border-b border-gray-100 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex-shrink-0 p-1.5 bg-blue-500 rounded-lg text-white">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-gray-800 leading-tight">Preprocess preview</h3>
+              <p className="text-xs text-gray-400">Active page · before / after</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Modified badge */}
+            {isModified && (
+              <span className="hidden sm:inline text-xs text-orange-600 bg-orange-50 border border-orange-100 px-2 py-1 rounded-lg">
+                Modified
+              </span>
+            )}
+
+            {/* Page counter badge */}
+            <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold rounded-lg whitespace-nowrap">
+              Page {currentPageIndex + 1} of {selectedPageData.length} selected
+            </span>
+
+            {/* Zoom lens */}
+            <button
+              onClick={() => setShowZoomLens(!showZoomLens)}
+              className={`p-2 rounded-lg transition-colors flex-shrink-0
+                ${showZoomLens ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              title="Toggle zoom lens"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+
+            {/* Skip */}
+            <button
+              onClick={onNext}
+              disabled={isProcessing}
+              className="hidden md:flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40"
+              title="Skip preprocessing"
+            >
+              <SkipForward className="w-3.5 h-3.5" />
+              Skip
+            </button>
+          </div>
+        </div>
+
+        {/* Tip banner */}
+        {showTipBanner && (
+          <div className="flex-shrink-0 px-5 pt-3">
+            <InfoBanner
+              message="Tip: Crop images first before applying preprocessing for best results. Cropping after preprocessing may change output quality."
+              onDismiss={() => setShowTipBanner(false)}
+              variant="info"
+            />
+          </div>
+        )}
+
+        {/* Processing progress bar */}
+        {isProcessing && (
+          <div className="flex-shrink-0 px-5 pt-3">
+            <ProgressBarLabeled
+              label={
+                batchProgress.total > 0
+                  ? `Processing page ${batchProgress.current} of ${batchProgress.total}`
+                  : currentProcessingStep
+                    ? `Running: ${currentProcessingStep}`
+                    : 'Processing...'
+              }
+              progress={processingProgress}
+              variant="primary"
+              size="md"
+              isActive
+            />
+          </div>
+        )}
+
+        {/* Preview area — fills remaining height */}
+        <div className="flex-1 min-h-0 p-4">
+          <BeforeAfterViewer
+            originalImage={originalImageState}
+            processedImage={currentPageProcessed || currentImageState}
+            isProcessing={isProcessing}
+            processingLabel={currentProcessingStep ? `Running: ${currentProcessingStep}` : 'Processing...'}
+            onOpenZoomLens={() => setShowZoomLens(true)}
+            className="h-full"
+          />
+        </div>
+
+        {/* ===== BOTTOM BAR: thumbnail strip + back / next ===== */}
+        <div className="flex-shrink-0 border-t border-gray-100 bg-white px-4 py-2.5">
+          <div className="flex items-center gap-3">
+
+            {/* Prev page arrow */}
+            <button
+              onClick={handlePrevPage}
+              disabled={currentPageIndex === 0}
+              className={`p-1.5 rounded-lg transition-colors flex-shrink-0
+                ${currentPageIndex === 0 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'}`}
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+
+            {/* Page thumbnails */}
+            <div className="flex-1 flex items-end gap-2 overflow-x-auto min-w-0 py-0.5">
+              {selectedPageData.map((page, idx) => (
+                <button
+                  key={page.pageNumber}
+                  onClick={() => setCurrentPageIndex(idx)}
+                  className="relative flex-shrink-0 flex flex-col items-center gap-1 group"
+                >
+                  <div className={`w-[52px] h-[66px] rounded-lg overflow-hidden border-2 transition-all
+                    ${idx === currentPageIndex
+                      ? 'border-blue-500 shadow-md shadow-blue-100'
+                      : 'border-gray-200 hover:border-gray-300 group-hover:shadow-sm'
+                    }`}
+                  >
+                    <img
+                      src={processedImages[page.pageNumber] || imageStates[page.pageNumber]?.current || page.thumbnail}
+                      alt={`Page ${page.pageNumber}`}
+                      className="w-full h-full object-cover"
+                    />
                   </div>
-                )}
-              </div>
-            ) : (
-              <div className="h-full" /> /* Empty placeholder when pipeline panel is hidden */
-            )
-          }
-        />
+                  {/* Status dot */}
+                  {processedImages[page.pageNumber] && (
+                    <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-green-500 rounded-full border border-white shadow-sm" />
+                  )}
+                  {!processedImages[page.pageNumber] && imageStates[page.pageNumber]?.current !== page.thumbnail && (
+                    <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-orange-400 rounded-full border border-white shadow-sm" />
+                  )}
+                  <span className={`text-[10px] font-medium leading-none
+                    ${idx === currentPageIndex ? 'text-blue-600' : 'text-gray-400'}`}
+                  >
+                    Page {shortPageLabel(page.pageNumber)}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {/* Next page arrow */}
+            <button
+              onClick={handleNextPage}
+              disabled={currentPageIndex === selectedPageData.length - 1}
+              className={`p-1.5 rounded-lg transition-colors flex-shrink-0
+                ${currentPageIndex === selectedPageData.length - 1 ? 'text-gray-200 cursor-not-allowed' : 'text-gray-500 hover:bg-gray-100'}`}
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+
+            {/* Status indicators */}
+            <div className="flex-shrink-0 flex items-center gap-2 text-xs text-gray-400 border-l border-gray-100 pl-3">
+              <span className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                {Object.keys(processedImages).length}/{selectedPages.length}
+              </span>
+              {Object.keys(imageStates).filter(k => {
+                const pg = pages.find(p => String(p.pageNumber) === String(k));
+                return imageStates[k]?.current !== pg?.thumbnail;
+              }).length > 0 && (
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+                  {Object.keys(imageStates).filter(k => {
+                    const pg = pages.find(p => String(p.pageNumber) === String(k));
+                    return imageStates[k]?.current !== pg?.thumbnail;
+                  }).length}
+                </span>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="flex-shrink-0 w-px h-8 bg-gray-100" />
+
+            {/* Back */}
+            <button
+              onClick={onBack}
+              className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back
+            </button>
+
+            {/* Continue */}
+            <button
+              onClick={onNext}
+              disabled={!canProceed}
+              className={`flex-shrink-0 flex items-center gap-2 px-5 py-2 text-sm font-semibold rounded-xl transition-all
+                ${canProceed
+                  ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-sm hover:shadow-md hover:-translate-y-0.5'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                }`}
+            >
+              Continue to Text Detection
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       </main>
 
       {/* ========== MODALS ========== */}
@@ -1081,7 +1122,6 @@ export default function PreprocessPage({
           imageSrc={currentImageState}
           onCropComplete={handleCropComplete}
           onCancel={() => setShowCropper(false)}
-          // Multi-page crop support
           availablePages={selectedPageData.map(page => ({
             pageNumber: page.pageNumber,
             thumbnail: imageStates[page.pageNumber]?.current || page.thumbnail,

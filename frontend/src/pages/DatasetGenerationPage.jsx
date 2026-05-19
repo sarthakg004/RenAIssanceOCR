@@ -12,7 +12,7 @@ import {
   ScanSearch,
   FileText,
 } from 'lucide-react';
-import { saveDatasetToMyFiles } from '../services/storageApi';
+import { saveDatasetToMyFiles, fetchStorageOverview } from '../services/storageApi';
 import { API_ORIGIN } from '../config';
 
 const API_BASE = API_ORIGIN;
@@ -222,6 +222,17 @@ export default function DatasetGenerationPage({
     const chosenName = window.prompt('Name this dataset:', defaultName);
     if (chosenName === null) return;                       // user cancelled
     const finalName = chosenName.trim() || defaultName;
+
+    try {
+      const overview = await fetchStorageOverview();
+      const existingNames = (overview.datasets || []).map((d) => (d.name || '').toLowerCase());
+      if (existingNames.includes(finalName.toLowerCase())) {
+        const proceed = window.confirm(`A dataset named "${finalName}" already exists in My Files. Save anyway?`);
+        if (!proceed) return;
+      }
+    } catch {
+      // If the check fails, proceed with saving anyway
+    }
 
     // Preprocessing + detection/layout models carried from step 4, stamped
     // into the saved dataset's My Files metadata/tags.

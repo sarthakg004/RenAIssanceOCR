@@ -14,7 +14,7 @@ import {
     verifyApiKey,
     downloadBlob,
 } from '../services/ocrApi';
-import { saveTranscriptSession } from '../../../services/storageApi';
+import { saveTranscriptSession, fetchStorageOverview } from '../../../services/storageApi';
 import {
     PROVIDER_LABELS,
     FALLBACK_MODELS,
@@ -565,6 +565,17 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
             if (lastSavedSignatureRef.current === signature) {
                 const proceed = window.confirm('No transcript changes were detected since the last save. Save another copy anyway?');
                 if (!proceed) return;
+            }
+
+            try {
+                const overview = await fetchStorageOverview();
+                const existingNames = (overview.transcripts || []).map((t) => (t.name || '').toLowerCase());
+                if (existingNames.includes((bookName || '').toLowerCase())) {
+                    const proceed = window.confirm(`A transcript named "${bookName}" already exists in My Files. Save anyway?`);
+                    if (!proceed) return;
+                }
+            } catch {
+                // If the check fails, proceed with saving anyway
             }
 
             await saveTranscriptSession(

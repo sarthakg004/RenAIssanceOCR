@@ -10,6 +10,7 @@ import {
   Loader2,
   File,
   FileType,
+  BookOpen,
   Edit3,
   Eye,
   Sparkles,
@@ -385,11 +386,12 @@ function TranscriptPanel({
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-4 gap-1.5">
             {[
               { format: 'txt', icon: FileText, label: 'TXT' },
               { format: 'csv', icon: File, label: 'CSV' },
               { format: 'json', icon: FileType, label: 'JSON' },
+              { format: 'pdf', icon: BookOpen, label: 'PDF' },
             ].map(({ format, icon: Icon, label }) => (
               <button
                 key={format}

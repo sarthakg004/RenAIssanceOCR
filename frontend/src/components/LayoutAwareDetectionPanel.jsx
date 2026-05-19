@@ -22,6 +22,7 @@ import {
     FileText as FileTextIcon,
     FileJson,
     FileType,
+    BookOpen,
     RefreshCw,
     Home,
     Plus,
@@ -36,7 +37,7 @@ import {
     exportCRNNResultsAsJSON,
     downloadBlob,
 } from '../features/ocr/services/ocrApi';
-import { saveTranscriptSession } from '../services/storageApi';
+import { saveTranscriptSession, fetchStorageOverview } from '../services/storageApi';
 import {
     getLLMProviders,
     getLLMTemplates,
@@ -526,6 +527,17 @@ export default function LayoutAwareDetectionPage({
         const chosenName = window.prompt('Name this transcript:', defaultName);
         if (chosenName === null) return;                       // user cancelled
         const finalName = chosenName.trim() || defaultName;
+
+        try {
+            const overview = await fetchStorageOverview();
+            const existingNames = (overview.transcripts || []).map((t) => (t.name || '').toLowerCase());
+            if (existingNames.includes(finalName.toLowerCase())) {
+                const proceed = window.confirm(`A transcript named "${finalName}" already exists in My Files. Save anyway?`);
+                if (!proceed) return;
+            }
+        } catch {
+            // If the check fails, proceed with saving anyway
+        }
 
         try {
             await saveTranscriptSession(
@@ -1987,7 +1999,7 @@ export default function LayoutAwareDetectionPage({
                 >
                     Save to My Files
                 </button>
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5">
                     <button
                         disabled={recognizedCount === 0}
                         onClick={() => {
@@ -2068,9 +2080,55 @@ export default function LayoutAwareDetectionPage({
                         <FileType size={15} />
                         CSV
                     </button>
+                    <button
+                        disabled={recognizedCount === 0}
+                        onClick={async () => {
+                            const transcripts = {};
+                            availablePages.forEach((p) => {
+                                if (!(p in recognizedByPage)) return;
+                                const byIndex = {};
+                                (recognizedByPage[p] || []).forEach((r) => { byIndex[r.box_index] = r.text || ''; });
+                                const sorted = (detectedPages[p] || [])
+                                    .map((poly, idx) => {
+                                        const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                                        return { idx, y: (byY[0][1] + byY[1][1]) / 2 };
+                                    })
+                                    .sort((a, b) => a.y - b.y)
+                                    .map((item) => byIndex[item.idx] || '');
+                                const text = sorted.filter((t) => t.trim()).join('\n');
+                                if (text) transcripts[p] = text;
+                            });
+                            if (Object.keys(transcripts).length === 0) return;
+                            try {
+                                const response = await fetch(`${API_BASE}/api/export/pdf`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ transcripts, format: 'pdf' }),
+                                });
+                                if (!response.ok) throw new Error('Export failed');
+                                const blob = await response.blob();
+                                downloadBlob(blob, `layout_aware_transcript_${new Date().toISOString().slice(0, 10)}.pdf`);
+                            } catch (err) {
+                                console.error('PDF export failed:', err);
+                            }
+                        }}
+                        className="flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-white border-gray-200 text-gray-600 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700"
+                    >
+                        <BookOpen size={15} />
+                        PDF
+                    </button>
                 </div>
                 {recognizedCount === 0 && (
                     <p className="text-[10px] text-gray-400 text-center">Run OCR on at least one page to export transcripts.</p>
+                )}
+                {onHome && (
+                    <button
+                        onClick={onHome}
+                        className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-teal-700 hover:border-teal-200 text-[10px] font-semibold transition-all"
+                    >
+                        <Home size={13} />
+                        Back to Home
+                    </button>
                 )}
             </div>
         </div>

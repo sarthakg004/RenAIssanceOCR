@@ -25,7 +25,7 @@ const DEFAULT_BATCH_SIZE = 4;
  * Redesigned with 3-column responsive layout
  * Supports background auto-processing with batch concurrent requests
  */
-export default function TextRecognitionPage({ processedImages, onBack, onComplete }) {
+export default function TextRecognitionPage({ processedImages, onBack, onComplete, onHome }) {
   // API Configuration
   const [apiKey, setApiKey] = useState('');
   const [isKeyValid, setIsKeyValid] = useState(null);
@@ -457,6 +457,7 @@ export default function TextRecognitionPage({ processedImages, onBack, onComplet
     <OCRLayout
       onBack={onBack}
       onComplete={onComplete}
+      onHome={onHome}
       processedCount={processedPages.size}
       totalPages={totalPages}
       hasAnyTranscript={hasAnyTranscript}
