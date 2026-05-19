@@ -146,15 +146,15 @@ export default function CombinedUploadPage({
     <div className="flex flex-col h-full w-full overflow-hidden">
       {/* ── Page header ───────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-8 py-5 border-b border-gray-100/80 bg-white/60 backdrop-blur-sm flex-shrink-0 gap-6">
-        <div className="flex items-center gap-4 min-w-0">
-          <div className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl text-white shadow-lg shadow-emerald-500/30">
+        <div className="flex items-center gap-4 min-w-0 flex-1">
+          <div className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl text-white shadow-lg shadow-emerald-500/30 flex-shrink-0">
             <Upload className="w-5 h-5" />
           </div>
           <div className="min-w-0">
-            <h1 className="text-xl font-bold text-gray-800">
+            <h1 className="text-xl font-bold text-gray-800 truncate">
               {isDetection ? 'Upload Book' : 'Upload Book \u0026 Transcript'}
             </h1>
-            <p className="text-sm text-gray-500 mt-0.5">
+            <p className="text-sm text-gray-500 mt-0.5 truncate">
               {isDetection
                 ? 'Detection mode: only images are needed — line bounding boxes will be exported, no transcript required'
                 : 'Upload both files together — only pages with matching transcripts will be processed'}
@@ -162,6 +162,7 @@ export default function CombinedUploadPage({
           </div>
         </div>
 
+        <div className="flex items-center gap-4 flex-shrink-0">
         {/* Dataset-type toggle */}
         <div className="flex bg-gray-100 rounded-lg p-1 flex-shrink-0">
           <button
@@ -193,7 +194,7 @@ export default function CombinedUploadPage({
         <button
           onClick={handleContinue}
           disabled={!canContinue}
-          className={`flex items-center gap-2.5 px-7 py-3 rounded-xl font-bold text-sm transition-all duration-200 ${
+          className={`flex items-center justify-center gap-2.5 px-7 py-3 rounded-xl font-bold text-sm transition-all duration-200 flex-shrink-0 whitespace-nowrap min-w-[210px] ${
             canContinue
               ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/30 hover:shadow-xl hover:-translate-y-0.5'
               : 'bg-gray-100 text-gray-400 cursor-not-allowed'
@@ -211,6 +212,7 @@ export default function CombinedUploadPage({
             </>
           )}
         </button>
+        </div>
       </div>
 
       {/* ── Main layout: two columns in recognition mode, single column in detection ── */}

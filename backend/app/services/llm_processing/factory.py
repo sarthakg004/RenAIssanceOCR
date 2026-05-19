@@ -13,6 +13,7 @@ UI as a disabled option so the toggle/flow can be built and tested now.
 
 from .gemini_client import post_process_text as _gemini_post_process
 from .openai_compat_client import post_process_text_openai_compat
+from .local_client import post_process_text_local, DEFAULT_LOCAL_MODEL
 
 
 # OpenAI-compatible chat-completions endpoints (same URLs as the OCR providers).
@@ -32,6 +33,7 @@ LLM_PROVIDERS = [
         "id": "gemini",
         "name": "Gemini",
         "enabled": True,
+        "requires_key": True,
         "default_model": "gemini-2.5-flash",
         "models": [
             {"id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash"},
@@ -42,6 +44,7 @@ LLM_PROVIDERS = [
         "id": "openai",
         "name": "OpenAI",
         "enabled": True,
+        "requires_key": True,
         "default_model": "gpt-5-mini",
         "models": [
             {"id": "gpt-5-mini", "name": "GPT-5 Mini"},
@@ -52,6 +55,7 @@ LLM_PROVIDERS = [
         "id": "deepseek",
         "name": "DeepSeek",
         "enabled": True,
+        "requires_key": True,
         "default_model": "deepseek-chat",
         "models": [
             {"id": "deepseek-chat", "name": "DeepSeek Chat"},
@@ -62,6 +66,7 @@ LLM_PROVIDERS = [
         "id": "qwen",
         "name": "Qwen",
         "enabled": True,
+        "requires_key": True,
         "default_model": "qwen-plus",
         "models": [
             {"id": "qwen-plus", "name": "Qwen Plus"},
@@ -70,9 +75,23 @@ LLM_PROVIDERS = [
         ],
     },
     {
+        # Open-weights model run locally in the backend (no API key, offline).
+        "id": "local",
+        "name": "Local LLM (offline)",
+        "enabled": True,
+        "requires_key": False,
+        "default_model": DEFAULT_LOCAL_MODEL,
+        "models": [
+            {"id": "Qwen/Qwen2.5-3B-Instruct", "name": "Qwen2.5 3B Instruct"},
+            {"id": "Qwen/Qwen2.5-7B-Instruct", "name": "Qwen2.5 7B Instruct"},
+        ],
+        "note": "Runs on the server GPU; model is downloaded on first use.",
+    },
+    {
         "id": "local_es",
         "name": "Local fine-tuned (Spanish)",
         "enabled": False,
+        "requires_key": False,
         "default_model": None,
         "models": [],
         "note": "Coming soon — fine-tuned on Spanish historical data.",
@@ -80,11 +99,19 @@ LLM_PROVIDERS = [
 ]
 
 _ENABLED_PROVIDER_IDS = {p["id"] for p in LLM_PROVIDERS if p["enabled"]}
+_KEYLESS_PROVIDER_IDS = {
+    p["id"] for p in LLM_PROVIDERS if not p.get("requires_key", True)
+}
+
+
+def provider_requires_key(provider: str) -> bool:
+    """True unless the provider runs locally (no API key needed)."""
+    return (provider or "").lower() not in _KEYLESS_PROVIDER_IDS
 
 
 def post_process(
     provider: str,
-    api_key: str,
+    api_key: str | None,
     text: str,
     model: str,
     template_name: str = "full_cleanup",
@@ -107,6 +134,9 @@ def post_process(
         raise ValueError(
             f"Unknown LLM provider: '{provider}'. Valid providers: {valid}"
         )
+
+    if provider == "local":
+        return post_process_text_local(text, model, template_name)
 
     if provider == "gemini":
         return _gemini_post_process(api_key, text, model, template_name)

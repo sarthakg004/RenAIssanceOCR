@@ -641,10 +641,16 @@ export default function LayoutAwareDetectionPage({
         return true;
     }, [buildSortedRecognition, llmModel, llmTemplate]);
 
+    // Returns the API key string on success (empty string for keyless local
+    // providers), or null if the selection is invalid. Callers must check
+    // `=== null` since '' is a valid (keyless) result.
     const validateLlmReady = useCallback(() => {
         if (!llmProviderMeta || !llmProviderMeta.enabled) {
             setLlmError('Selected provider is not available yet.');
             return null;
+        }
+        if (llmProviderMeta.requires_key === false) {
+            return '';
         }
         const key = (llmApiKeys[llmProvider] || '').trim();
         if (!key) {
@@ -657,7 +663,7 @@ export default function LayoutAwareDetectionPage({
     const handlePolishPage = useCallback(async () => {
         if (llmProcessing) return;
         const key = validateLlmReady();
-        if (!key) return;
+        if (key === null) return;
         if (!(currentPageNum in recognizedByPage)) {
             setLlmError('Run OCR on this page first.');
             return;
@@ -677,7 +683,7 @@ export default function LayoutAwareDetectionPage({
     const handlePolishAllPages = useCallback(async () => {
         if (llmProcessing) return;
         const key = validateLlmReady();
-        if (!key) return;
+        if (key === null) return;
         const pages = availablePages.filter((p) => p in recognizedByPage);
         if (pages.length === 0) {
             setLlmError('Run OCR on at least one page first.');
@@ -1877,14 +1883,21 @@ export default function LayoutAwareDetectionPage({
                                             </p>
                                         )}
 
-                                        <input
-                                            type="password"
-                                            value={llmApiKeys[llmProvider] || ''}
-                                            onChange={(e) => setLlmApiKeys((prev) => ({ ...prev, [llmProvider]: e.target.value }))}
-                                            placeholder={`${llmProviderMeta?.name || 'Provider'} API key`}
-                                            autoComplete="off"
-                                            className="w-full px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
-                                        />
+                                        {llmProviderMeta?.requires_key === false ? (
+                                            <p className="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 leading-tight">
+                                                Runs offline on the server — no API key needed.
+                                                {llmProviderMeta?.note ? ` ${llmProviderMeta.note}` : ''}
+                                            </p>
+                                        ) : (
+                                            <input
+                                                type="password"
+                                                value={llmApiKeys[llmProvider] || ''}
+                                                onChange={(e) => setLlmApiKeys((prev) => ({ ...prev, [llmProvider]: e.target.value }))}
+                                                placeholder={`${llmProviderMeta?.name || 'Provider'} API key`}
+                                                autoComplete="off"
+                                                className="w-full px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
+                                            />
+                                        )}
 
                                         <div className="grid grid-cols-2 gap-1.5">
                                             <button

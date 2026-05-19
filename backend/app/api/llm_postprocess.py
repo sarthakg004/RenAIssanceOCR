@@ -12,7 +12,11 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from ..services.llm_processing.factory import post_process, LLM_PROVIDERS
+from ..services.llm_processing.factory import (
+    post_process,
+    provider_requires_key,
+    LLM_PROVIDERS,
+)
 from ..services.llm_processing.prompt_templates import list_templates
 
 
@@ -68,7 +72,7 @@ async def post_process_endpoint(
         )
 
     api_key = x_llm_api_key or x_gemini_api_key
-    if not api_key or not api_key.strip():
+    if provider_requires_key(request.provider) and (not api_key or not api_key.strip()):
         raise HTTPException(
             status_code=401,
             detail="Missing API key (X-LLM-API-Key header).",
