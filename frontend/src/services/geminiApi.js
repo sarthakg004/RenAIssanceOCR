@@ -380,3 +380,49 @@ export async function postProcessWithLLM(apiKey, text, model = 'gemini-2.5-flash
 
   return response.json();
 }
+
+/**
+ * List LLM post-processing providers + their text models.
+ * @returns {Promise<{providers: Array<{id,name,enabled,default_model,models,note?}>}>}
+ */
+export async function getLLMProviders() {
+  const response = await fetch(`${API_BASE}/llm/providers`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch LLM providers');
+  }
+  return response.json();
+}
+
+/**
+ * Post-process OCR text using any LLM provider (Gemini, OpenAI, DeepSeek, Qwen).
+ * Sends the key via the generic X-LLM-API-Key header.
+ * @param {string} provider - Provider id (gemini|openai|deepseek|qwen)
+ * @param {string} apiKey - API key for that provider
+ * @param {string} text - Raw OCR text
+ * @param {string} model - Model ID
+ * @param {string} template - Template name
+ * @returns {Promise<{success: boolean, processed_text?: string, error?: string}>}
+ */
+export async function postProcessWithLLMProvider(
+  provider,
+  apiKey,
+  text,
+  model,
+  template = 'full_cleanup',
+) {
+  const response = await fetch(`${API_BASE}/llm/post-process`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-LLM-API-Key': apiKey,
+    },
+    body: JSON.stringify({ provider, text, model, template }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'LLM processing failed' }));
+    throw new Error(err.detail || 'LLM processing failed');
+  }
+
+  return response.json();
+}

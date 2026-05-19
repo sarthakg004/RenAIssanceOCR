@@ -1,1 +1,0 @@
-import{A as e}from"./index-CUIwA0HZ.js";const o=`${e}/api`;async function s(){const t=await fetch(`${o}/llm/templates`);if(!t.ok)throw new Error("Failed to fetch LLM templates");return t.json()}export{s as getLLMTemplates};

@@ -24,6 +24,8 @@ import {
     FileType,
     RefreshCw,
     Home,
+    Plus,
+    Wand2,
 } from 'lucide-react';
 import ResizablePanels from './ocr/ResizablePanels';
 import BBoxEditor from './BBoxEditor';
@@ -35,6 +37,11 @@ import {
     downloadBlob,
 } from '../features/ocr/services/ocrApi';
 import { saveTranscriptSession } from '../services/storageApi';
+import {
+    getLLMProviders,
+    getLLMTemplates,
+    postProcessWithLLMProvider,
+} from '../services/geminiApi';
 import { API_ORIGIN } from '../config';
 
 const API_BASE = API_ORIGIN;
@@ -226,6 +233,22 @@ export default function LayoutAwareDetectionPage({
     const [ocrDevice, setOcrDevice] = useState(null);
     const [ocrTimeMs, setOcrTimeMs] = useState(null);
     const [ocrError, setOcrError] = useState(null);
+
+    // ── LLM post-processing state (OCR mode) ───────────────
+    // Optional pass that sends the recognized page transcript to an LLM
+    // (Gemini / OpenAI / DeepSeek / Qwen) for cleanup. Local Spanish-finetuned
+    // model is registered server-side but disabled for now.
+    const [llmEnabled, setLlmEnabled] = useState(false);
+    const [llmProviders, setLlmProviders] = useState([]);
+    const [llmProvider, setLlmProvider] = useState('gemini');
+    const [llmModel, setLlmModel] = useState('gemini-2.5-flash');
+    const [llmTemplates, setLlmTemplates] = useState([]);
+    const [llmTemplate, setLlmTemplate] = useState('full_cleanup');
+    // Keyed by provider id so switching providers keeps each key entered.
+    const [llmApiKeys, setLlmApiKeys] = useState({});
+    const [llmProcessing, setLlmProcessing] = useState(false);
+    const [llmProgress, setLlmProgress] = useState(null);
+    const [llmError, setLlmError] = useState(null);
 
     // ── Hover state for bidirectional highlight ─────────────
     // Single source of truth: `hoveredBoxIndex` identifies the polygon index.
@@ -533,6 +556,150 @@ export default function LayoutAwareDetectionPage({
         });
     }, [currentPageNum, sortedBoxIndices]);
 
+    // ── LLM post-processing ────────────────────────────────
+    // Lazily fetch provider + template lists the first time the feature is
+    // toggled on (keeps the initial page render light, mirrors TranscriptPanel).
+    useEffect(() => {
+        if (!llmEnabled || llmProviders.length > 0) return;
+        getLLMProviders()
+            .then((data) => {
+                const provs = data.providers || [];
+                setLlmProviders(provs);
+                const firstEnabled = provs.find((p) => p.enabled);
+                if (firstEnabled) {
+                    setLlmProvider(firstEnabled.id);
+                    if (firstEnabled.default_model) setLlmModel(firstEnabled.default_model);
+                }
+            })
+            .catch(() => setLlmError('Could not load LLM providers.'));
+        getLLMTemplates()
+            .then((data) => setLlmTemplates(data.templates || []))
+            .catch(() => { /* fallback <option>s are hardcoded in the UI */ });
+    }, [llmEnabled, llmProviders.length]);
+
+    const llmProviderMeta = useMemo(
+        () => llmProviders.find((p) => p.id === llmProvider) || null,
+        [llmProviders, llmProvider],
+    );
+
+    // Switch provider → reset model to that provider's default.
+    const handleLlmProviderChange = useCallback((nextId) => {
+        setLlmProvider(nextId);
+        setLlmError(null);
+        const meta = llmProviders.find((p) => p.id === nextId);
+        if (meta && meta.default_model) setLlmModel(meta.default_model);
+        else if (meta && meta.models && meta.models.length > 0) setLlmModel(meta.models[0].id);
+    }, [llmProviders]);
+
+    // Recognized lines for a page, ordered top-to-bottom by box position —
+    // identical ordering to the export / save logic so the polished text maps
+    // straight back onto the same boxes.
+    const buildSortedRecognition = useCallback((pageNum) => {
+        const byIndex = {};
+        (recognizedByPage[pageNum] || []).forEach((r) => {
+            byIndex[r.box_index] = r.text || '';
+        });
+        const orderedIdx = (detectedPages[pageNum] || [])
+            .map((poly, idx) => {
+                const byY = [...poly].sort((a, b) => a[1] - b[1]);
+                return { idx, y: (byY[0][1] + byY[1][1]) / 2 };
+            })
+            .sort((a, b) => a.y - b.y)
+            .map((item) => item.idx);
+        return { orderedIdx, lines: orderedIdx.map((i) => byIndex[i] || '') };
+    }, [recognizedByPage, detectedPages]);
+
+    // Polish one page: whole-page transcript → LLM → split back onto the same
+    // boxes in order. Extra returned lines are appended to the last box so no
+    // cleaned text is ever dropped from the exportable transcript.
+    const polishPage = useCallback(async (pageNum, provider, apiKey) => {
+        const { orderedIdx, lines } = buildSortedRecognition(pageNum);
+        const text = lines.join('\n').trim();
+        if (!text) return false;
+
+        const res = await postProcessWithLLMProvider(
+            provider, apiKey, text, llmModel, llmTemplate,
+        );
+        if (!res.success) {
+            throw new Error(res.error || 'Post-processing failed');
+        }
+        const cleaned = (res.processed_text || '').split('\n');
+
+        setRecognizedByPage((prev) => {
+            const rows = orderedIdx.map((boxIdx, i) => ({
+                box_index: boxIdx,
+                text: cleaned[i] !== undefined ? cleaned[i] : '',
+            }));
+            if (cleaned.length > orderedIdx.length && rows.length > 0) {
+                rows[rows.length - 1] = {
+                    ...rows[rows.length - 1],
+                    text: cleaned.slice(orderedIdx.length - 1).join('\n'),
+                };
+            }
+            return { ...prev, [pageNum]: rows };
+        });
+        return true;
+    }, [buildSortedRecognition, llmModel, llmTemplate]);
+
+    const validateLlmReady = useCallback(() => {
+        if (!llmProviderMeta || !llmProviderMeta.enabled) {
+            setLlmError('Selected provider is not available yet.');
+            return null;
+        }
+        const key = (llmApiKeys[llmProvider] || '').trim();
+        if (!key) {
+            setLlmError(`Enter an API key for ${llmProviderMeta.name}.`);
+            return null;
+        }
+        return key;
+    }, [llmProviderMeta, llmApiKeys, llmProvider]);
+
+    const handlePolishPage = useCallback(async () => {
+        if (llmProcessing) return;
+        const key = validateLlmReady();
+        if (!key) return;
+        if (!(currentPageNum in recognizedByPage)) {
+            setLlmError('Run OCR on this page first.');
+            return;
+        }
+        setLlmProcessing(true);
+        setLlmError(null);
+        try {
+            const did = await polishPage(currentPageNum, llmProvider, key);
+            if (!did) setLlmError('No recognized text on this page to polish.');
+        } catch (err) {
+            setLlmError(err.message || 'Post-processing failed');
+        } finally {
+            setLlmProcessing(false);
+        }
+    }, [llmProcessing, validateLlmReady, currentPageNum, recognizedByPage, polishPage, llmProvider]);
+
+    const handlePolishAllPages = useCallback(async () => {
+        if (llmProcessing) return;
+        const key = validateLlmReady();
+        if (!key) return;
+        const pages = availablePages.filter((p) => p in recognizedByPage);
+        if (pages.length === 0) {
+            setLlmError('Run OCR on at least one page first.');
+            return;
+        }
+        setLlmProcessing(true);
+        setLlmError(null);
+        try {
+            for (let i = 0; i < pages.length; i += 1) {
+                setLlmProgress({ current: i + 1, total: pages.length });
+                // Sequential on purpose — keeps provider rate limits happy.
+                // eslint-disable-next-line no-await-in-loop
+                await polishPage(pages[i], llmProvider, key);
+            }
+        } catch (err) {
+            setLlmError(err.message || 'Post-processing failed');
+        } finally {
+            setLlmProcessing(false);
+            setLlmProgress(null);
+        }
+    }, [llmProcessing, validateLlmReady, availablePages, recognizedByPage, polishPage, llmProvider]);
+
     useEffect(() => {
         if (!isCurrentDetected) return;
         // Only seed once per page — skip if already seeded or already has rows
@@ -644,6 +811,22 @@ export default function LayoutAwareDetectionPage({
             };
 
             return [...rows.slice(0, lineIndex), firstRow, secondRow, ...rows.slice(lineIndex + 1)];
+        });
+    }, [currentPageNum, updateAlignmentRows]);
+
+    // Insert a new, empty, unassigned line at any position. `atIndex` is
+    // clamped to [0, rows.length] so it works for "add at top", "insert
+    // below row N", and "append at end" alike. Combined with the existing
+    // move-up/down controls this lets a line be added anywhere.
+    const insertLineAt = useCallback((atIndex) => {
+        updateAlignmentRows(currentPageNum, (rows) => {
+            const at = Math.max(0, Math.min(atIndex, rows.length));
+            const newRow = {
+                id: `${currentPageNum}-ins-${nextRowId()}`,
+                text: '',
+                boxIndex: null,
+            };
+            return [...rows.slice(0, at), newRow, ...rows.slice(at)];
         });
     }, [currentPageNum, updateAlignmentRows]);
 
@@ -1307,6 +1490,16 @@ export default function LayoutAwareDetectionPage({
                     </div>
                 )}
 
+                {isCurrentDetected && currentAlignmentRows.length > 0 && (
+                    <button
+                        onClick={() => insertLineAt(0)}
+                        className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-dashed border-teal-300 bg-teal-50/50 text-teal-600 hover:bg-teal-100/60 text-[11px] font-semibold transition-colors"
+                        title="Add a new line at the top"
+                    >
+                        <Plus size={12} /> Add line at top
+                    </button>
+                )}
+
                 {isCurrentDetected && currentAlignmentRows.map((row, lineIndex) => {
                     const assignedBoxIdx = row.boxIndex;
                     const isHighlighted = assignedBoxIdx !== null && assignedBoxIdx !== undefined && hoveredBoxIndex === assignedBoxIdx;
@@ -1373,6 +1566,13 @@ export default function LayoutAwareDetectionPage({
                                     >
                                         <Split size={12} />
                                     </button>
+                                    <button
+                                        onClick={() => insertLineAt(lineIndex + 1)}
+                                        className="p-1 rounded border border-teal-200 bg-teal-50 text-teal-600 hover:bg-teal-100"
+                                        title="Insert a new line below"
+                                    >
+                                        <Plus size={12} />
+                                    </button>
                                 </div>
                             </div>
 
@@ -1400,10 +1600,18 @@ export default function LayoutAwareDetectionPage({
                     );
                 })}
 
-                {/* Extra unassigned lines beyond available boxes */}
-                {isCurrentDetected && currentAlignmentRows.length === 0 && transcriptKeyForCurrentPage && (
-                    <div className="text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2">
-                        No transcript lines found for this page.
+                {/* No rows yet — let the user start adding lines manually */}
+                {isCurrentDetected && currentAlignmentRows.length === 0 && (
+                    <div className="space-y-1.5">
+                        <div className="text-xs text-gray-500 bg-white rounded-lg border border-gray-200 px-3 py-2">
+                            No transcript lines for this page yet.
+                        </div>
+                        <button
+                            onClick={() => insertLineAt(0)}
+                            className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-teal-300 bg-teal-50/50 text-teal-700 hover:bg-teal-100/60 text-xs font-semibold transition-colors"
+                        >
+                            <Plus size={13} /> Add a line
+                        </button>
                     </div>
                 )}
             </div>
@@ -1417,14 +1625,24 @@ export default function LayoutAwareDetectionPage({
                     </span>
                 )}
                 {isCurrentDetected && currentAlignmentRows.length > 0 && (
-                    <button
-                        onClick={realignCurrentPage}
-                        title="Re-pair transcript lines with boxes in their current top-to-bottom order"
-                        className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:border-teal-300 font-semibold transition-colors shrink-0"
-                    >
-                        <RefreshCw size={11} />
-                        Realign
-                    </button>
+                    <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                        <button
+                            onClick={() => insertLineAt(currentAlignmentRows.length)}
+                            title="Add a new line at the end"
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:border-teal-300 font-semibold transition-colors"
+                        >
+                            <Plus size={11} />
+                            Add line
+                        </button>
+                        <button
+                            onClick={realignCurrentPage}
+                            title="Re-pair transcript lines with boxes in their current top-to-bottom order"
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:border-teal-300 font-semibold transition-colors"
+                        >
+                            <RefreshCw size={11} />
+                            Realign
+                        </button>
+                    </div>
                 )}
             </div>
         </div>
@@ -1564,6 +1782,143 @@ export default function LayoutAwareDetectionPage({
                                 </div>
                             );
                         })}
+                    </div>
+                )}
+            </div>
+
+            {/* ── AI Post-processing ───────────────────────────── */}
+            <div className="shrink-0 border-t border-gray-100 p-3 bg-gradient-to-r from-purple-50/40 to-white space-y-2">
+                <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-gray-600 uppercase tracking-wider flex items-center gap-1.5">
+                        <div className="p-1 bg-gradient-to-br from-purple-500 to-pink-500 rounded text-white">
+                            <Wand2 size={10} />
+                        </div>
+                        AI Post-processing
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => { setLlmEnabled((v) => !v); setLlmError(null); }}
+                        title="Toggle LLM post-processing"
+                        className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${llmEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}
+                    >
+                        <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${llmEnabled ? 'translate-x-4' : ''}`} />
+                    </button>
+                </div>
+
+                {llmEnabled && (
+                    <div className="space-y-2">
+                        <p className="text-[10px] text-gray-500 leading-tight">
+                            Sends the recognized page transcript to an LLM for cleanup, then maps the result back onto the same lines.
+                        </p>
+
+                        {llmProviders.length === 0 ? (
+                            <div className="text-[11px] text-gray-500 flex items-center gap-1.5">
+                                <Loader2 size={12} className="animate-spin" /> Loading providers...
+                            </div>
+                        ) : (
+                            <>
+                                <div className="grid grid-cols-2 gap-1.5">
+                                    <select
+                                        value={llmProvider}
+                                        onChange={(e) => handleLlmProviderChange(e.target.value)}
+                                        disabled={llmProcessing}
+                                        className="px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
+                                    >
+                                        {llmProviders.map((p) => (
+                                            <option key={p.id} value={p.id} disabled={!p.enabled}>
+                                                {p.name}{p.enabled ? '' : ' (soon)'}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <select
+                                        value={llmModel}
+                                        onChange={(e) => setLlmModel(e.target.value)}
+                                        disabled={llmProcessing || !llmProviderMeta || (llmProviderMeta.models || []).length === 0}
+                                        className="px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none disabled:bg-gray-50 disabled:text-gray-400"
+                                    >
+                                        {(llmProviderMeta?.models || []).length > 0 ? (
+                                            llmProviderMeta.models.map((m) => (
+                                                <option key={m.id} value={m.id}>{m.name}</option>
+                                            ))
+                                        ) : (
+                                            <option value="">—</option>
+                                        )}
+                                    </select>
+                                </div>
+
+                                {llmProviderMeta && !llmProviderMeta.enabled ? (
+                                    <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                                        {llmProviderMeta.note || 'This provider is not available yet.'}
+                                    </div>
+                                ) : (
+                                    <>
+                                        <select
+                                            value={llmTemplate}
+                                            onChange={(e) => setLlmTemplate(e.target.value)}
+                                            disabled={llmProcessing}
+                                            className="w-full px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
+                                        >
+                                            {llmTemplates.length > 0 ? (
+                                                llmTemplates.map((t) => (
+                                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                                ))
+                                            ) : (
+                                                <>
+                                                    <option value="full_cleanup">Full Cleanup</option>
+                                                    <option value="spelling_correction">Spelling Correction</option>
+                                                    <option value="formatting">Format & Structure</option>
+                                                    <option value="historical_normalization">Historical Normalization</option>
+                                                </>
+                                            )}
+                                        </select>
+                                        {llmTemplates.length > 0 && (
+                                            <p className="text-[10px] text-gray-400 leading-tight">
+                                                {llmTemplates.find((t) => t.id === llmTemplate)?.description || ''}
+                                            </p>
+                                        )}
+
+                                        <input
+                                            type="password"
+                                            value={llmApiKeys[llmProvider] || ''}
+                                            onChange={(e) => setLlmApiKeys((prev) => ({ ...prev, [llmProvider]: e.target.value }))}
+                                            placeholder={`${llmProviderMeta?.name || 'Provider'} API key`}
+                                            autoComplete="off"
+                                            className="w-full px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
+                                        />
+
+                                        <div className="grid grid-cols-2 gap-1.5">
+                                            <button
+                                                onClick={handlePolishPage}
+                                                disabled={llmProcessing || !(currentPageNum in recognizedByPage)}
+                                                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-white transition-all disabled:bg-gray-300 disabled:cursor-not-allowed bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                                            >
+                                                {llmProcessing && !llmProgress ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                                                Polish Page
+                                            </button>
+                                            <button
+                                                onClick={handlePolishAllPages}
+                                                disabled={llmProcessing || recognizedCount === 0}
+                                                className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed bg-gradient-to-r from-fuchsia-500 to-purple-600 text-white hover:from-fuchsia-600 hover:to-purple-700"
+                                            >
+                                                {llmProcessing && llmProgress ? <Loader2 size={13} className="animate-spin" /> : <Layers size={13} />}
+                                                Polish All
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+
+                                {llmProgress && (
+                                    <div className="text-[11px] text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-2 py-1.5">
+                                        Polishing page {llmProgress.current}/{llmProgress.total}
+                                    </div>
+                                )}
+                                {llmError && (
+                                    <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+                                        {llmError}
+                                    </div>
+                                )}
+                            </>
+                        )}
                     </div>
                 )}
             </div>
