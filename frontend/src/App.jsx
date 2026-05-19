@@ -41,6 +41,11 @@ function App() {
 
   const [ocrDetectionCache, setOcrDetectionCache] = useState({ pages: {}, alignment: {} });
 
+  // Applied preprocessing op list (from PreprocessPage) + detection/layout
+  // models chosen in step 4 — saved into My Files metadata/tags downstream.
+  const [preprocessing, setPreprocessing] = useState([]);
+  const [detectionModelInfo, setDetectionModelInfo] = useState({});
+
   // PDF preview hook
   const {
     pages,
@@ -112,13 +117,7 @@ function App() {
       try {
         const loadedPages = await loadImages(files);
         setSelectedPages(loadedPages.map((p) => p.pageNumber));
-        // In dataset mode: step 2 is Select, then step 3 is Transcript
-        // In OCR mode: skip to step 3 (Preprocess)
-        if (mode === 'dataset') {
-          setCurrentStep(2);
-        } else {
-          setCurrentStep(3);
-        }
+        setCurrentStep(2);
       } catch (err) {
         console.error('Failed to load images:', err);
       }
@@ -193,6 +192,7 @@ function App() {
             onBack={() => goToStep(backStep)}
             onNext={() => goToStep(4)}
             onProcessedImagesChange={setProcessedImages}
+            onPipelineChange={setPreprocessing}
           />
         </div>
       );
@@ -206,15 +206,17 @@ function App() {
             selectedPages={selectedPages}
             processedImages={processedImages}
             transcript={parsedTranscript}
+            preprocessing={preprocessing}
             onBack={() => goToStep(3)}
             onHome={handleReset}
             datasetMode={true}
             initialDetectedPages={detectionCache.pages}
             initialAlignmentByPage={detectionCache.alignment}
             onStateChange={(cache) => setDetectionCache(cache)}
-            onDatasetNext={({ boxesByPage, alignedTranscriptByPage: alignedMap }) => {
+            onDatasetNext={({ boxesByPage, alignedTranscriptByPage: alignedMap, modelInfo }) => {
               setAllPagesBoxes(boxesByPage || {});
               setAlignedTranscriptByPage(alignedMap || {});
+              if (modelInfo) setDetectionModelInfo(modelInfo);
               goToStep(5);
             }}
           />
@@ -231,6 +233,8 @@ function App() {
             processedImages={processedImages}
             transcript={Object.keys(alignedTranscriptByPage).length > 0 ? alignedTranscriptByPage : parsedTranscript}
             allPagesBoxes={allPagesBoxes}
+            preprocessing={preprocessing}
+            modelInfo={detectionModelInfo}
             onBack={() => goToStep(4)}
             onHome={handleReset}
             bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'dataset'}
@@ -342,9 +346,10 @@ function App() {
             pages={pages}
             selectedPages={selectedPages}
             initialProcessedImages={processedImages}
-            onBack={() => goToStep(files[0]?.type === 'application/pdf' ? 2 : 1)}
+            onBack={() => goToStep(2)}
             onNext={() => goToStep(4)}
             onProcessedImagesChange={setProcessedImages}
+            onPipelineChange={setPreprocessing}
           />
         </div>
       ) : currentStep === 6 ? (
@@ -353,6 +358,7 @@ function App() {
             pages={pages}
             selectedPages={selectedPages}
             processedImages={processedImages}
+            preprocessing={preprocessing}
             bookName={files?.[0]?.name?.replace(/\.[^.]+$/, '') || 'transcript'}
             onBack={() => goToStep(4)}
             onHome={handleReset}

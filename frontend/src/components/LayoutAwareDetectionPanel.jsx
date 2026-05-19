@@ -180,6 +180,7 @@ export default function LayoutAwareDetectionPage({
     processedImages,
     transcript = {},
     bookName = 'transcript',
+    preprocessing = [],
     onBack,
     onHome,
     datasetMode = false,
@@ -249,6 +250,9 @@ export default function LayoutAwareDetectionPage({
     const [llmProcessing, setLlmProcessing] = useState(false);
     const [llmProgress, setLlmProgress] = useState(null);
     const [llmError, setLlmError] = useState(null);
+    // Records the last successful LLM polish (provider/model/template) so it
+    // can be stamped into the saved transcript's My Files metadata.
+    const [lastLlmRun, setLastLlmRun] = useState(null);
 
     // ── Hover state for bidirectional highlight ─────────────
     // Single source of truth: `hoveredBoxIndex` identifies the polygon index.
@@ -514,9 +518,14 @@ export default function LayoutAwareDetectionPage({
 
         const signature = JSON.stringify(transcriptByPage);
         if (lastSavedSignatureRef.current === signature) {
-            const proceed = window.confirm('No transcript changes were detected since the last save. Save another copy anyway?');
-            if (!proceed) return;
+            window.alert('Already saved — this exact transcript is already in My Files.');
+            return;
         }
+
+        const defaultName = bookName && bookName !== 'transcript' ? bookName : 'My Transcript';
+        const chosenName = window.prompt('Name this transcript:', defaultName);
+        if (chosenName === null) return;                       // user cancelled
+        const finalName = chosenName.trim() || defaultName;
 
         try {
             await saveTranscriptSession(
@@ -524,20 +533,22 @@ export default function LayoutAwareDetectionPage({
                 'layout-aware ocr',
                 'recognition',
                 transcriptImages,
-                bookName,
+                finalName,
                 {
+                    preprocessing,
                     ocr_provider: 'local',
                     ocr_model: selectedOcrModel,
                     layout_model: selectedLayoutModel,
                     detection_model: selectedDetModel,
+                    llm_postprocess: lastLlmRun || { used: false },
                 },
             );
             lastSavedSignatureRef.current = signature;
-            window.alert('Transcript and page images saved to My Files.');
+            window.alert(`Saved "${finalName}" to My Files.`);
         } catch (err) {
             setOcrError(err.message || 'Failed to save transcript session');
         }
-    }, [availablePages, bookName, detectedPages, getImageUrl, recognizedByPage, recognizedCount, selectedDetModel, selectedLayoutModel, selectedOcrModel, toDataUrl]);
+    }, [availablePages, bookName, detectedPages, getImageUrl, recognizedByPage, recognizedCount, selectedDetModel, selectedLayoutModel, selectedOcrModel, toDataUrl, preprocessing, lastLlmRun]);
 
     const updateRecognizedText = useCallback((lineIndex, value) => {
         const boxIndex = sortedBoxIndices[lineIndex];
@@ -555,6 +566,14 @@ export default function LayoutAwareDetectionPage({
             return { ...prev, [currentPageNum]: next };
         });
     }, [currentPageNum, sortedBoxIndices]);
+
+    // Grow a borderless line <textarea> to fit its content so the recognized
+    // transcript reads like one continuous page instead of fixed-size boxes.
+    const autoGrowLine = useCallback((el) => {
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+    }, []);
 
     // ── LLM post-processing ────────────────────────────────
     // Lazily fetch provider + template lists the first time the feature is
@@ -638,6 +657,7 @@ export default function LayoutAwareDetectionPage({
             }
             return { ...prev, [pageNum]: rows };
         });
+        setLastLlmRun({ used: true, provider, model: llmModel, template: llmTemplate });
         return true;
     }, [buildSortedRecognition, llmModel, llmTemplate]);
 
@@ -1763,7 +1783,14 @@ export default function LayoutAwareDetectionPage({
                 )}
 
                 {isCurrentDetected && sortedBoxIndices.length > 0 && (
-                    <div className="space-y-1.5">
+                    // Continuous "page" — lines flow together like a document
+                    // instead of separate cards. Per-line hover still drives the
+                    // shared `hoveredBoxIndex`, so the bbox overlay highlights
+                    // in sync (and vice-versa via the SVG polygons + scroll).
+                    <div
+                        className="bg-white rounded-lg border border-gray-200 shadow-inner px-3 py-3"
+                        onMouseLeave={() => setHoveredBoxIndex(null)}
+                    >
                         {sortedBoxIndices.map((boxIndex, lineIndex) => {
                             const isHighlighted = hoveredBoxIndex === boxIndex;
                             return (
@@ -1771,19 +1798,32 @@ export default function LayoutAwareDetectionPage({
                                     key={`${currentPageNum}-${boxIndex}`}
                                     ref={(el) => setLineRef(boxIndex, el)}
                                     onMouseEnter={() => setHoveredBoxIndex(boxIndex)}
-                                    onMouseLeave={() => setHoveredBoxIndex(null)}
-                                    className={`rounded-lg p-2 space-y-1 border transition-colors ${
-                                        isHighlighted
-                                            ? 'bg-orange-50 border-orange-300 shadow-sm'
-                                            : 'bg-white border-gray-200'
+                                    className={`group flex items-start gap-2 -mx-2 px-2 rounded-md transition-colors ${
+                                        isHighlighted ? 'bg-orange-100/70' : 'hover:bg-gray-50'
                                     }`}
                                 >
-                                    <div className={`text-[11px] font-semibold ${isHighlighted ? 'text-orange-600' : 'text-gray-500'}`}>Line {lineIndex + 1}</div>
+                                    <span
+                                        className={`select-none w-6 shrink-0 text-right text-[10px] leading-6 tabular-nums transition-colors ${
+                                            isHighlighted
+                                                ? 'text-orange-500 font-bold'
+                                                : 'text-gray-300 group-hover:text-gray-400'
+                                        }`}
+                                        title={`Line ${lineIndex + 1}`}
+                                    >
+                                        {lineIndex + 1}
+                                    </span>
                                     <textarea
                                         value={currentRecognitionByIndex[boxIndex] || ''}
-                                        onChange={(e) => updateRecognizedText(lineIndex, e.target.value)}
-                                        rows={2}
-                                        className="w-full px-2 py-1.5 bg-white border border-gray-200 rounded text-xs text-gray-700 resize-y focus:outline-none focus:ring-1 focus:ring-blue-200 focus:border-blue-400"
+                                        onChange={(e) => {
+                                            updateRecognizedText(lineIndex, e.target.value);
+                                            autoGrowLine(e.target);
+                                        }}
+                                        ref={autoGrowLine}
+                                        rows={1}
+                                        spellCheck={false}
+                                        className={`flex-1 bg-transparent border-0 outline-none resize-none overflow-hidden py-0.5 text-sm leading-6 text-gray-800 rounded focus:bg-blue-50/50 ${
+                                            isHighlighted ? 'text-orange-900' : ''
+                                        }`}
                                     />
                                 </div>
                             );
@@ -2101,6 +2141,11 @@ export default function LayoutAwareDetectionPage({
                                     onDatasetNext({
                                         boxesByPage: detectedPages,
                                         alignedTranscriptByPage,
+                                        modelInfo: {
+                                            preprocessing,
+                                            detection_model: selectedDetModel,
+                                            layout_model: selectedLayoutModel,
+                                        },
                                     });
                                 }
                             }}

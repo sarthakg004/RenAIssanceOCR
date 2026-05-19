@@ -46,6 +46,7 @@ class SaveDatasetRequest(BaseModel):
     book_name: str = "dataset"
     bbox_format: str = "txt"
     mode: str = "recognition"
+    model_info: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.get("/health")
@@ -126,12 +127,14 @@ async def save_dataset(request: SaveDatasetRequest):
             source=request.source,
             book_name=request.book_name,
             bbox_format=request.bbox_format,
+            model_info=request.model_info,
         )
     else:
         metadata = save_recognition_dataset(
             pages_data=pages_data,
             source=request.source,
             book_name=request.book_name,
+            model_info=request.model_info,
         )
 
     return {"success": True, "item": metadata}

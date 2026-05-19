@@ -106,6 +106,7 @@ export default function PreprocessPage({
   onBack,
   onNext,
   onProcessedImagesChange,
+  onPipelineChange,
 }) {
   // ========== STATE ==========
 
@@ -236,6 +237,17 @@ export default function PreprocessPage({
     });
     onProcessedImagesChangeRef.current(combinedImages);
   }, [processedImages, imageStates, selectedPageData]);
+
+  // Report the applied preprocessing op list upward so it can be saved into
+  // the My Files metadata/tags. Pinned the same way to avoid prop-identity
+  // re-fires; the real dependency is the pipeline contents.
+  const onPipelineChangeRef = useRef(onPipelineChange);
+  useEffect(() => { onPipelineChangeRef.current = onPipelineChange; }, [onPipelineChange]);
+
+  useEffect(() => {
+    if (!onPipelineChangeRef.current) return;
+    onPipelineChangeRef.current(buildPipelineConfig().map((s) => s.op));
+  }, [pipeline, buildPipelineConfig]);
 
   // ========== IMAGE STATE HANDLERS ==========
 

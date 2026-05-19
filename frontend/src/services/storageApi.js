@@ -39,7 +39,7 @@ export async function saveTranscriptSession(
   return response.json();
 }
 
-export async function saveDatasetToMyFiles(pages, { source = 'dataset generation', bookName = 'dataset', bboxFormat = 'txt', mode = 'recognition' } = {}) {
+export async function saveDatasetToMyFiles(pages, { source = 'dataset generation', bookName = 'dataset', bboxFormat = 'txt', mode = 'recognition', modelInfo = {} } = {}) {
   const response = await fetch(`${API_BASE}/datasets`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -49,6 +49,7 @@ export async function saveDatasetToMyFiles(pages, { source = 'dataset generation
       book_name: bookName,
       bbox_format: bboxFormat,
       mode,
+      model_info: modelInfo,
     }),
   });
 

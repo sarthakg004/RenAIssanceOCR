@@ -43,6 +43,8 @@ export default function DatasetGenerationPage({
   onHome = null,
   bookName = 'dataset',
   forceMode = null,        // 'detection' to lock the toggle to detection-only
+  preprocessing = [],
+  modelInfo = {},          // detection/layout models carried from step 4
 }) {
   const [isExporting, setIsExporting] = useState(false);
   const [isSavingLocal, setIsSavingLocal] = useState(false);
@@ -215,6 +217,22 @@ export default function DatasetGenerationPage({
   };
 
   const handleSaveLocal = async () => {
+    // Ask for a name before showing the saving state so a cancel is clean.
+    const defaultName = bookName && bookName !== 'dataset' ? bookName : 'My Dataset';
+    const chosenName = window.prompt('Name this dataset:', defaultName);
+    if (chosenName === null) return;                       // user cancelled
+    const finalName = chosenName.trim() || defaultName;
+
+    // Preprocessing + detection/layout models carried from step 4, stamped
+    // into the saved dataset's My Files metadata/tags.
+    const combinedModelInfo = {
+      ...modelInfo,
+      preprocessing:
+        modelInfo.preprocessing && modelInfo.preprocessing.length
+          ? modelInfo.preprocessing
+          : preprocessing,
+    };
+
     setIsSavingLocal(true);
     setExportError(null);
 
@@ -228,20 +246,21 @@ export default function DatasetGenerationPage({
 
         const signature = JSON.stringify({
           mode: 'detection',
-          bookName,
+          bookName: finalName,
           bboxFormat,
           pages: pagesPayload.map((p) => ({ page_key: p.page_key, boxes: p.boxes.length })),
         });
         if (lastSavedSignatureRef.current === signature) {
-          const proceed = window.confirm('No dataset changes were detected since the last save. Save another copy anyway?');
-          if (!proceed) return;
+          window.alert('Already saved — this exact dataset is already in My Files.');
+          return;
         }
 
         await saveDatasetToMyFiles(pagesPayload, {
           source: 'dataset generation',
-          bookName,
+          bookName: finalName,
           bboxFormat,
           mode: 'detection',
+          modelInfo: combinedModelInfo,
         });
         lastSavedSignatureRef.current = signature;
       } else {
@@ -254,7 +273,7 @@ export default function DatasetGenerationPage({
 
         const signature = JSON.stringify({
           mode: 'recognition',
-          bookName,
+          bookName: finalName,
           pages: pagesPayload.map((p) => ({
             page_key: p.page_key,
             boxes: p.boxes.length,
@@ -263,19 +282,20 @@ export default function DatasetGenerationPage({
           })),
         });
         if (lastSavedSignatureRef.current === signature) {
-          const proceed = window.confirm('No dataset changes were detected since the last save. Save another copy anyway?');
-          if (!proceed) return;
+          window.alert('Already saved — this exact dataset is already in My Files.');
+          return;
         }
 
         await saveDatasetToMyFiles(pagesPayload, {
           source: 'dataset generation',
-          bookName,
+          bookName: finalName,
           mode: 'recognition',
+          modelInfo: combinedModelInfo,
         });
         lastSavedSignatureRef.current = signature;
       }
 
-      window.alert('Dataset saved to My Files.');
+      window.alert(`Saved "${finalName}" to My Files.`);
     } catch (err) {
       setExportError(`Save failed: ${err.message}`);
     } finally {

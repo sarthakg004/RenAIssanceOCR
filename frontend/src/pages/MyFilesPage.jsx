@@ -28,6 +28,19 @@ function formatDate(value) {
   return date.toLocaleString();
 }
 
+function TagChips({ tags }) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1 mt-2">
+      {tags.map((tag) => (
+        <span key={tag} className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function EmptyState({ title, description, color }) {
   return (
     <div className={`rounded-2xl border border-dashed p-8 text-center ${color}`}>
@@ -228,11 +241,7 @@ export default function MyFilesPage({ onBack }) {
                           <Calendar className="w-3 h-3" /> {formatDate(item.created_at)}
                         </p>
                         <p className="text-xs text-blue-700 mt-1">{item.num_pages || item.num_files || 0} pages</p>
-                        {(item.model_info?.ocr_provider || item.model_info?.ocr_model) && (
-                          <p className="text-xs text-blue-600 mt-1">
-                            {(item.model_info?.ocr_provider || 'provider')} • {(item.model_info?.ocr_model || 'model')}
-                          </p>
-                        )}
+                        <TagChips tags={item.tags} />
                       </div>
                     </div>
 
@@ -290,6 +299,7 @@ export default function MyFilesPage({ onBack }) {
                     <p className="text-xs text-emerald-700 mt-1">
                       {item.dataset_type || item.mode} • {item.num_samples || item.num_files || 0} samples • {item.format || 'unknown format'}
                     </p>
+                    <TagChips tags={item.tags} />
 
                     <div className="mt-3 flex items-center gap-2">
                       <button
@@ -327,11 +337,7 @@ export default function MyFilesPage({ onBack }) {
               <div>
                 <p className="font-semibold text-gray-800">{viewingTranscript.metadata?.name || viewingTranscript.metadata?.id}</p>
                 <p className="text-xs text-gray-500">{formatDate(viewingTranscript.metadata?.created_at)}</p>
-                {(viewingTranscript.metadata?.model_info?.ocr_provider || viewingTranscript.metadata?.model_info?.ocr_model) && (
-                  <p className="text-xs text-blue-600 mt-1">
-                    {(viewingTranscript.metadata?.model_info?.ocr_provider || 'provider')} • {(viewingTranscript.metadata?.model_info?.ocr_model || 'model')}
-                  </p>
-                )}
+                <TagChips tags={viewingTranscript.metadata?.tags} />
               </div>
               <button
                 onClick={() => setViewingTranscript(null)}
@@ -342,11 +348,25 @@ export default function MyFilesPage({ onBack }) {
             </div>
 
             <div className="p-4 overflow-y-auto space-y-3">
-              <div className="grid md:grid-cols-5 gap-3 text-xs text-gray-600">
+              <div className="grid md:grid-cols-3 gap-2 text-xs text-gray-600 bg-gray-50 rounded-xl p-3 border border-gray-100">
                 <p><span className="font-semibold text-gray-700">Mode:</span> {viewingTranscript.metadata?.mode || 'n/a'}</p>
                 <p><span className="font-semibold text-gray-700">Pages:</span> {viewingTranscript.metadata?.num_pages || viewingTranscript.metadata?.num_files || 0}</p>
-                <p><span className="font-semibold text-gray-700">Images:</span> {viewingTranscript.metadata?.num_images || 0}</p>
                 <p><span className="font-semibold text-gray-700">Source:</span> {viewingTranscript.metadata?.source || 'n/a'}</p>
+                {viewingTranscript.metadata?.model_info?.preprocessing?.length > 0 && (
+                  <p className="md:col-span-2"><span className="font-semibold text-gray-700">Preprocessing:</span> {viewingTranscript.metadata.model_info.preprocessing.join(', ')}</p>
+                )}
+                {viewingTranscript.metadata?.model_info?.detection_model && (
+                  <p><span className="font-semibold text-gray-700">Detection:</span> {viewingTranscript.metadata.model_info.detection_model}</p>
+                )}
+                {viewingTranscript.metadata?.model_info?.layout_model && (
+                  <p><span className="font-semibold text-gray-700">Layout:</span> {viewingTranscript.metadata.model_info.layout_model}</p>
+                )}
+                {(viewingTranscript.metadata?.model_info?.ocr_provider || viewingTranscript.metadata?.model_info?.ocr_model) && (
+                  <p><span className="font-semibold text-gray-700">OCR:</span> {viewingTranscript.metadata.model_info.ocr_provider} / {viewingTranscript.metadata.model_info.ocr_model}</p>
+                )}
+                {viewingTranscript.metadata?.model_info?.llm_postprocess && (
+                  <p><span className="font-semibold text-gray-700">LLM:</span> {viewingTranscript.metadata.model_info.llm_postprocess.used ? `${viewingTranscript.metadata.model_info.llm_postprocess.provider} / ${viewingTranscript.metadata.model_info.llm_postprocess.model}` : 'none'}</p>
+                )}
                 <p><span className="font-semibold text-gray-700">ID:</span> {viewingTranscript.metadata?.id}</p>
               </div>
 
@@ -396,6 +416,7 @@ export default function MyFilesPage({ onBack }) {
               <div>
                 <p className="font-semibold text-gray-800">{viewingDataset.metadata?.book_name || viewingDataset.metadata?.id}</p>
                 <p className="text-xs text-gray-500">{formatDate(viewingDataset.metadata?.created_at)}</p>
+                <TagChips tags={viewingDataset.metadata?.tags} />
               </div>
               <button
                 onClick={() => setViewingDataset(null)}
@@ -405,10 +426,25 @@ export default function MyFilesPage({ onBack }) {
               </button>
             </div>
             <div className="p-4 space-y-4 overflow-y-auto">
-              <div className="grid md:grid-cols-5 gap-3 text-sm">
+              <div className="grid md:grid-cols-3 gap-2 text-xs text-gray-600 bg-gray-50 rounded-xl p-3 border border-gray-100">
                 <p><span className="font-semibold text-gray-700">Mode:</span> {viewingDataset.metadata?.dataset_type || viewingDataset.metadata?.mode}</p>
                 <p><span className="font-semibold text-gray-700">Samples:</span> {viewingDataset.metadata?.num_samples || viewingDataset.metadata?.num_files || 0}</p>
                 <p><span className="font-semibold text-gray-700">Format:</span> {viewingDataset.metadata?.format || 'unknown'}</p>
+                {viewingDataset.metadata?.model_info?.preprocessing?.length > 0 && (
+                  <p className="md:col-span-2"><span className="font-semibold text-gray-700">Preprocessing:</span> {viewingDataset.metadata.model_info.preprocessing.join(', ')}</p>
+                )}
+                {viewingDataset.metadata?.model_info?.detection_model && (
+                  <p><span className="font-semibold text-gray-700">Detection:</span> {viewingDataset.metadata.model_info.detection_model}</p>
+                )}
+                {viewingDataset.metadata?.model_info?.layout_model && (
+                  <p><span className="font-semibold text-gray-700">Layout:</span> {viewingDataset.metadata.model_info.layout_model}</p>
+                )}
+                {(viewingDataset.metadata?.model_info?.ocr_provider || viewingDataset.metadata?.model_info?.ocr_model) && (
+                  <p><span className="font-semibold text-gray-700">OCR:</span> {viewingDataset.metadata.model_info.ocr_provider} / {viewingDataset.metadata.model_info.ocr_model}</p>
+                )}
+                {viewingDataset.metadata?.model_info?.llm_postprocess && (
+                  <p><span className="font-semibold text-gray-700">LLM:</span> {viewingDataset.metadata.model_info.llm_postprocess.used ? `${viewingDataset.metadata.model_info.llm_postprocess.provider} / ${viewingDataset.metadata.model_info.llm_postprocess.model}` : 'none'}</p>
+                )}
                 <p><span className="font-semibold text-gray-700">Source:</span> {viewingDataset.metadata?.source || 'n/a'}</p>
                 <p><span className="font-semibold text-gray-700">ID:</span> {viewingDataset.metadata?.id}</p>
               </div>
