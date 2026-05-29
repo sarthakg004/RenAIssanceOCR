@@ -10,12 +10,20 @@ class SignupRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
     name: str = Field(..., min_length=1, max_length=128)
     email: EmailStr
-    institute: str | None = Field(default=None, max_length=255)
+    # Required; defaults to "personal" so a user who doesn't change it still
+    # has a value (the frontend pre-fills "personal").
+    institute: str = Field(default="personal", min_length=1, max_length=255)
 
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=255)
     password: str = Field(..., min_length=1, max_length=128)
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    email: EmailStr
+    institute: str = Field(default="personal", min_length=1, max_length=255)
 
 
 class UserOut(BaseModel):

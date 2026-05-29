@@ -15,6 +15,7 @@ import { TextRecognitionPage } from './features/ocr';
 import LayoutAwareDetectionPage from './components/LayoutAwareDetectionPanel';
 import { usePdfPreview } from './hooks/usePdfPreview';
 import AuthPage from './features/auth/AuthPage';
+import ProfilePage from './features/auth/ProfilePage';
 import { fetchMe, logout as apiLogout } from './features/auth/authApi';
 
 
@@ -22,6 +23,7 @@ function App() {
   // ── Auth gate ─────────────────────────────────────────────────────
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
 
   // ── Mode: null (home), 'ocr', 'dataset', 'files' ─────────────────
   const [mode, setMode] = useState(null);
@@ -212,7 +214,23 @@ function App() {
   // Show HomePage when no mode is selected
   // ════════════════════════════════════════════════════════════════════
   if (!mode) {
-    return <HomePage onSelectMode={handleSelectMode} user={user} onLogout={handleLogout} />;
+    return (
+      <>
+        <HomePage
+          onSelectMode={handleSelectMode}
+          user={user}
+          onLogout={handleLogout}
+          onProfile={() => setShowProfile(true)}
+        />
+        {showProfile && (
+          <ProfilePage
+            user={user}
+            onClose={() => setShowProfile(false)}
+            onUpdated={setUser}
+          />
+        )}
+      </>
+    );
   }
 
   if (mode === 'files') {

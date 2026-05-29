@@ -1,12 +1,12 @@
 import React from 'react';
-import { FileText, Database, ArrowRight, BookOpen, Archive, LogOut } from 'lucide-react';
+import { FileText, Database, ArrowRight, BookOpen, Archive, LogOut, UserCircle } from 'lucide-react';
 import homeImage from '../assets/home-image.png';
 
 /**
  * Landing page — light blue/white theme, full-viewport hero with a
  * decorative manuscript image and the two workflow cards.
  */
-export default function HomePage({ onSelectMode, user, onLogout }) {
+export default function HomePage({ onSelectMode, user, onLogout, onProfile }) {
   return (
     <div className="relative h-screen w-screen overflow-hidden flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50">
       {/* Decorative background blobs */}
@@ -28,12 +28,19 @@ export default function HomePage({ onSelectMode, user, onLogout }) {
             </div>
           </div>
 
-          {/* Signed-in user + logout */}
+          {/* Signed-in user + profile + logout */}
           {user && (
-            <div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-3">
-              <span className="hidden sm:inline text-sm text-gray-600">
-                Hi, <span className="font-semibold text-gray-800">{user.name || user.username}</span>
-              </span>
+            <div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+              <button
+                onClick={onProfile}
+                className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg transition-all duration-200"
+                title="Edit your profile"
+              >
+                <UserCircle className="w-4 h-4" />
+                <span className="hidden sm:inline font-semibold text-gray-800">
+                  {user.name || user.username}
+                </span>
+              </button>
               <button
                 onClick={onLogout}
                 className="flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg transition-all duration-200"

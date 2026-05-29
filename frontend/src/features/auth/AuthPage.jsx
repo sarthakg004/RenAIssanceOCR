@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Loader2, Mail, CheckCircle2, AlertCircle } from 'lucide-react';
+import { BookOpen, Loader2, Mail, CheckCircle2, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { login as apiLogin, signup as apiSignup } from './authApi';
 
 /**
@@ -16,8 +16,9 @@ export default function AuthPage({ onAuthSuccess }) {
     password: '',
     name: '',
     email: '',
-    institute: '',
+    institute: 'personal',
   });
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -161,10 +162,10 @@ export default function AuthPage({ onAuthSuccess }) {
                 />
                 <Field
                   label="Institute"
-                  optional
                   value={form.institute}
                   onChange={update('institute')}
                   autoComplete="organization"
+                  required
                   placeholder="University / organization"
                 />
               </>
@@ -172,13 +173,24 @@ export default function AuthPage({ onAuthSuccess }) {
 
             <Field
               label="Password"
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               value={form.password}
               onChange={update('password')}
               autoComplete={isSignup ? 'new-password' : 'current-password'}
               required
               placeholder={isSignup ? 'At least 6 characters' : 'Your password'}
               minLength={isSignup ? 6 : undefined}
+              rightSlot={
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((s) => !s)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              }
             />
 
             <button
@@ -215,18 +227,23 @@ export default function AuthPage({ onAuthSuccess }) {
   );
 }
 
-function Field({ label, optional, type = 'text', ...props }) {
+function Field({ label, optional, type = 'text', rightSlot, ...props }) {
   return (
     <label className="block">
       <span className="block mb-1 text-sm font-medium text-gray-700">
         {label}
         {optional && <span className="ml-1 text-xs text-gray-400">(optional)</span>}
       </span>
-      <input
-        type={type}
-        className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-400 transition-all duration-200"
-        {...props}
-      />
+      <div className="relative">
+        <input
+          type={type}
+          className={`w-full px-3.5 py-2.5 ${rightSlot ? 'pr-10' : ''} rounded-xl border border-gray-200 bg-white text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-400 transition-all duration-200`}
+          {...props}
+        />
+        {rightSlot && (
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3">{rightSlot}</div>
+        )}
+      </div>
     </label>
   );
 }

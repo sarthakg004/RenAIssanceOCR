@@ -19,15 +19,19 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth.db import get_db
-from ..auth.email_utils import send_verification_email
 from ..auth.models import User
-from ..auth.tracking import track_user_now
-from ..auth.schemas import AuthResponse, LoginRequest, SignupRequest, UserOut
+from ..auth.tracking import track_user_now, update_tracked_profile
+from ..auth.schemas import (
+    AuthResponse,
+    LoginRequest,
+    ProfileUpdateRequest,
+    SignupRequest,
+    UserOut,
+)
 from ..auth.security import (
     SESSION_COOKIE,
     create_session_token,
     hash_password,
-    new_verification_token,
     read_session_token,
     verify_password,
 )
@@ -85,24 +89,17 @@ def signup(
         field = "username" if existing.username == username else "email"
         raise HTTPException(status_code=409, detail=f"That {field} is already registered")
 
-    token = new_verification_token()
     user = User(
         username=username,
         email=email,
         name=payload.name.strip(),
-        institute=(payload.institute or "").strip() or None,
+        institute=(payload.institute or "").strip() or "personal",
         password_hash=hash_password(payload.password),
-        is_verified=False,
-        verification_token=token,
+        # Email verification is intentionally skipped — accounts are usable
+        # immediately. This is lightweight usage tracking, not a security gate.
+        is_verified=True,
+        verification_token=None,
     )
-
-    # Send the verification email. If SMTP is not configured this returns
-    # False and logs the link — we then auto-verify so the account is usable
-    # immediately (verification is for tracking, not a security gate).
-    email_sent = send_verification_email(email, user.name, token)
-    if not email_sent:
-        user.is_verified = True
-        user.verification_token = None
 
     db.add(user)
     db.commit()
@@ -114,7 +111,7 @@ def signup(
     background_tasks.add_task(track_user_now, user.id)
 
     _set_session_cookie(response, user.id)
-    return AuthResponse(user=UserOut(**user.public_dict()), email_sent=email_sent)
+    return AuthResponse(user=UserOut(**user.public_dict()), email_sent=False)
 
 
 # ── Login ───────────────────────────────────────────────────────────────────
@@ -149,6 +146,45 @@ def logout(response: Response):
 
 @router.get("/api/auth/me", response_model=UserOut)
 def me(user: User = Depends(current_user)):
+    return UserOut(**user.public_dict())
+
+
+@router.patch("/api/auth/me", response_model=UserOut)
+def update_profile(
+    payload: ProfileUpdateRequest,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Update the logged-in user's name / email / institute (username is fixed).
+
+    Changes are saved locally and synced to the central Supabase row by the
+    user's previous email (best-effort, after the response).
+    """
+    old_email = user.email
+    new_email = str(payload.email).strip().lower()
+
+    if new_email != user.email:
+        clash = db.scalar(
+            select(User).where(User.email == new_email, User.id != user.id)
+        )
+        if clash is not None:
+            raise HTTPException(status_code=409, detail="That email is already registered")
+
+    user.name = payload.name.strip()
+    user.institute = (payload.institute or "").strip() or "personal"
+    user.email = new_email
+    db.commit()
+    db.refresh(user)
+
+    background_tasks.add_task(
+        update_tracked_profile,
+        old_email,
+        user.username,
+        user.name,
+        user.email,
+        user.institute,
+    )
     return UserOut(**user.public_dict())
 
 

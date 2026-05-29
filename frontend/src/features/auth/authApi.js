@@ -59,3 +59,7 @@ export function login({ username, password }) {
 export function logout() {
   return request('/logout', { method: 'POST' });
 }
+
+export function updateProfile({ name, email, institute }) {
+  return request('/me', { method: 'PATCH', body: { name, email, institute } });
+}

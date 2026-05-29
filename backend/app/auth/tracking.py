@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import httpx
 from sqlalchemy import select
@@ -120,6 +121,40 @@ def track_user_now(user_id: int) -> None:
             logger.info("[tracking] Recorded signup %s centrally", user.email)
     finally:
         db.close()
+
+
+def update_tracked_profile(
+    old_email: str, username: str, name: str, email: str, institute: str | None
+) -> None:
+    """Best-effort PATCH of the central row when a user edits their profile.
+
+    Matches the existing row by its previous email. Requires the UPDATE RLS
+    policy on the central table. If the row was never pushed yet (offline
+    signup), this matches nothing and the pending INSERT later carries the new
+    values anyway. Never raises.
+    """
+    if not tracking_enabled():
+        return
+    url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/users?email=eq.{quote(old_email)}"
+    headers = {
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_PUBLISHABLE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    payload = {"username": username, "name": name, "email": email, "institute": institute}
+    try:
+        resp = httpx.patch(url, headers=headers, json=payload, timeout=8.0)
+        if resp.status_code < 300:
+            logger.info("[tracking] Synced profile update for %s", email)
+        else:
+            logger.warning(
+                "[tracking] Profile sync returned %s: %s",
+                resp.status_code,
+                resp.text[:300],
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[tracking] Profile sync failed: %s", exc)
 
 
 async def retry_loop() -> None:
