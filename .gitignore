@@ -4,7 +4,10 @@ __pycache__
 *.pyc
 improvements.txt
 RenAIssanceExperimental
-storage
+# Runtime data dir at the repo root ONLY (datasets/transcripts/users.db).
+# Anchored with a leading slash so it does NOT also match the source package
+# backend/app/storage/, which must be committed and shipped in the image.
+/storage/
 # Large model weights — tracked out-of-band, not in git.
 # See README for download instructions (HuggingFace trocr + custom CRNN).
 backend/models/weights/
