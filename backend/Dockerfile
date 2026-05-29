@@ -115,6 +115,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FLAGS_enable_pir_api=0 \
     FLAGS_enable_pir_in_executor=0
 
+# Central user-tracking endpoint, baked into the published image so every
+# self-hosted instance reports signups to the one shared Supabase table.
+# These are PUBLIC-by-design values: the publishable (anon) key can only add a
+# signup row (INSERT-only Row Level Security) — it cannot read/edit/delete any
+# data, and the Postgres password / service_role key are never included here.
+# Override at runtime with -e SUPABASE_URL / -e SUPABASE_PUBLISHABLE_KEY.
+ENV SUPABASE_URL=https://hljxjbcarzbsbvwffmzu.supabase.co \
+    SUPABASE_PUBLISHABLE_KEY=sb_publishable_wKkx48mKpDZBk9h3gwDfOw_c6MxHIiz
+
 # Install ONLY the Python 3.11 runtime (no -dev, no pip) plus the shared
 # libraries that native extensions need at runtime.
 # IMPORTANT: same deadsnakes PPA + same Python 3.11 as the builder so every

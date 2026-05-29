@@ -24,9 +24,11 @@ services:
       dockerfile: Dockerfile
     image: renaissance-backend:local
     container_name: renaissance-backend
-    # API keys (GEMINI_API_KEY, OPENAI_API_KEY, ...) are read from the
-    # repo-root .env at startup. .env is gitignored and excluded from the
-    # image via backend/.dockerignore, so it is injected only at runtime.
+    # API keys (GEMINI_API_KEY, OPENAI_API_KEY, ...) AND the user-tracking /
+    # auth secrets (DATABASE_URL, SECRET_KEY, ADMIN_TOKEN, SMTP_*, ...) are all
+    # read from the repo-root .env at startup. .env is gitignored and excluded
+    # from the image via backend/.dockerignore, so secrets are injected only at
+    # runtime — never baked into the image and never shipped to the frontend.
     env_file:
       - .env
     environment:
