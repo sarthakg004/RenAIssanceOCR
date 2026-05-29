@@ -202,6 +202,9 @@ export default function LayoutAwareDetectionPage({
     // ── UI state ───────────────────────────────────────────
     const [viewingPageIndex, setViewingPageIndex] = useState(0);
     const [loading, setLoading] = useState(false);
+    // First-time PaddleOCR model download UX: null=unknown, true=cached, false=needs download
+    const [modelsReady, setModelsReady] = useState(null);
+    const [downloadingModels, setDownloadingModels] = useState(false);
     const [detectedPages, setDetectedPages] = useState(() => initialDetectedPages);
     const [error, setError] = useState(null);
     const [warning, setWarning] = useState(null);
@@ -954,6 +957,18 @@ export default function LayoutAwareDetectionPage({
         return fd;
     }, [selectedLayoutModel, selectedDetModel, tuningParams]);
 
+    // ── First-time model download status ──────────────────
+    // PaddleOCR downloads several GB of models lazily on the first detection.
+    // Probe the cache so we can show a one-time "downloading models" notice.
+    useEffect(() => {
+        let active = true;
+        fetch(`${API_BASE}/api/detect/models-status?use_gpu=true`)
+            .then((r) => r.json())
+            .then((d) => { if (active) setModelsReady(!!d.models_ready); })
+            .catch(() => { if (active) setModelsReady(null); });
+        return () => { active = false; };
+    }, []);
+
     // ── Single page detection ──────────────────────────────
     const handleDetect = async () => {
         if (!currentImageUrl) return;
@@ -961,6 +976,8 @@ export default function LayoutAwareDetectionPage({
         setError(null);
         setWarning(null);
         setProcessingTime(null);
+        // Show the one-time download notice if models aren't cached yet.
+        if (modelsReady === false) setDownloadingModels(true);
 
         try {
             const blob = await urlToBlob(currentImageUrl);
@@ -981,6 +998,7 @@ export default function LayoutAwareDetectionPage({
                 setDetectedPages(prev => ({ ...prev, [currentPageNum]: data.lines || [] }));
                 setProcessingTime(data.processing_time_ms);
                 if (data.warning) setWarning(data.warning);
+                setModelsReady(true);  // a successful detection means models are cached now
                 console.log('[handleDetect] stored', (data.lines || []).length, 'lines for page', currentPageNum);
             }
         } catch (err) {
@@ -988,6 +1006,7 @@ export default function LayoutAwareDetectionPage({
             setError(`Request failed: ${err.message}`);
         } finally {
             setLoading(false);
+            setDownloadingModels(false);
         }
     };
 
@@ -997,6 +1016,7 @@ export default function LayoutAwareDetectionPage({
         setProcessingAll(true);
         setError(null);
         setWarning(null);
+        if (modelsReady === false) setDownloadingModels(true);
 
         const total = availablePages.length;
         let lastWarning = null;
@@ -1034,6 +1054,9 @@ export default function LayoutAwareDetectionPage({
                 setDetectedPages(prev => ({ ...prev, [pageNum]: data.lines || [] }));
                 alreadyDetected.add(pageNum);
                 if (data.warning) lastWarning = data.warning;
+                // First page succeeded -> models are cached; drop the notice.
+                setModelsReady(true);
+                setDownloadingModels(false);
 
                 // Small delay between pages to allow GC + UI updates
                 await new Promise(r => setTimeout(r, 100));
@@ -1046,6 +1069,7 @@ export default function LayoutAwareDetectionPage({
         } finally {
             setProcessingAll(false);
             setProcessAllProgress(null);
+            setDownloadingModels(false);
         }
     };
 
@@ -1158,6 +1182,27 @@ export default function LayoutAwareDetectionPage({
                             >
                                 Reset to defaults
                             </button>
+                        </div>
+                    )}
+
+                    {/* First-time model download notice */}
+                    {downloadingModels && (
+                        <div className="mb-2 p-3 rounded-lg border border-amber-200 bg-amber-50 animate-fade-in">
+                            <div className="flex items-start gap-2">
+                                <Loader2 size={16} className="animate-spin text-amber-600 mt-0.5 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-bold text-amber-800">
+                                        Setting up detection models (one-time)
+                                    </p>
+                                    <p className="text-[11px] text-amber-700 mt-0.5 leading-snug">
+                                        Downloading PaddleOCR models on first use — about <b>15–20 min</b> depending
+                                        on your connection. Please keep this tab open; this only happens once.
+                                    </p>
+                                    <div className="mt-2 h-1.5 w-full bg-amber-200 rounded-full overflow-hidden">
+                                        <div className="h-full w-1/3 bg-amber-500 rounded-full animate-indeterminate" />
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
 

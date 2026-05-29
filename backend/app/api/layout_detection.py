@@ -31,11 +31,24 @@ from fastapi import APIRouter, File, Form, UploadFile
 
 from ..services.layout_detection import (
     check_system_resources,
+    models_cached,
     run_layout_aware_detection,
     select_tier,
 )
 
 router = APIRouter()
+
+
+@router.get("/api/detect/models-status")
+async def detection_models_status(use_gpu: bool = True):
+    """Report whether the detection models are already downloaded.
+
+    The frontend calls this before the first detection so it can show a
+    one-time "downloading models (~15-20 min)" notice while PaddleX lazily
+    fetches the weights on the first run. Pure filesystem check — fast, never
+    imports paddle.
+    """
+    return {"models_ready": models_cached(use_gpu)}
 
 # Serializes detection work within a single worker process. FastAPI runs async
 # handlers on the event loop concurrently; without this, two pages posted in

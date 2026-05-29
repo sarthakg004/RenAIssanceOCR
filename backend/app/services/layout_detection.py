@@ -100,6 +100,46 @@ MOBILE_MODELS = {
 }
 
 
+def _model_cache_root() -> str:
+    """Root dir where PaddleX caches official models.
+
+    In Docker this is /paddle_models (set via PADDLE_PDX_MODEL_CACHE_HOME);
+    locally it defaults to ~/.paddlex. Models land under `<root>/official_models/`.
+    """
+    root = (
+        os.environ.get("PADDLE_PDX_MODEL_CACHE_HOME")
+        or os.environ.get("PADDLE_PDX_CACHE_HOME")
+    )
+    if root:
+        return root
+    return os.path.join(os.path.expanduser("~"), ".paddlex")
+
+
+def models_cached(use_gpu: bool = True) -> bool:
+    """True when the model set for this tier is already downloaded.
+
+    Used by the UI to show a one-time "downloading models" notice on the first
+    detection (PaddleX fetches several GB lazily on first use). A dir counts as
+    present only if it exists and is non-empty.
+    """
+    root = _model_cache_root()
+    names = SERVER_MODELS if use_gpu else MOBILE_MODELS
+    bases = [os.path.join(root, "official_models"), root]
+    for model_name in names.values():
+        present = False
+        for base in bases:
+            d = os.path.join(base, model_name)
+            try:
+                if os.path.isdir(d) and any(os.scandir(d)):
+                    present = True
+                    break
+            except OSError:
+                continue
+        if not present:
+            return False
+    return True
+
+
 def select_tier(use_gpu: bool) -> Dict[str, Any]:
     """
     Pick device + model tier based on currently-free VRAM and RAM.

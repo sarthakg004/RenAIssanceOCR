@@ -462,6 +462,15 @@ input[type="checkbox"]:focus {
   animation: progress-pulse 1.5s ease-in-out infinite;
 }
 
+/* Indeterminate progress bar (e.g. first-time model download with unknown ETA) */
+@keyframes indeterminate-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(420%); }
+}
+.animate-indeterminate {
+  animation: indeterminate-slide 1.6s ease-in-out infinite;
+}
+
 /* Pipeline step drag indicator */
 .pipeline-drag-over {
   @apply border-blue-400 border-2 bg-blue-50;
