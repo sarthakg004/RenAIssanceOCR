@@ -31,9 +31,31 @@ from .api.dataset import router as dataset_router
 from .api.recognition import router as recognition_router
 from .api.llm_postprocess import router as llm_router
 from .api.storage import router as storage_router
+from .api.auth import router as auth_router
+from .auth.db import init_db
+from .auth.tracking import retry_loop, tracking_enabled
 
 # Create FastAPI app
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    # Create the user-tracking table(s) if they don't exist. No-op when they do.
+    init_db()
+    # Start the background retry loop that pushes any unsent signups to
+    # Supabase (and back-fills ones missed while it was down/unconfigured).
+    if tracking_enabled():
+        import asyncio
+
+        app.state.tracking_task = asyncio.create_task(retry_loop())
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    task = getattr(app.state, "tracking_task", None)
+    if task is not None:
+        task.cancel()
 
 # CORS for frontend
 app.add_middleware(
@@ -54,6 +76,7 @@ app.include_router(dataset_router)
 app.include_router(recognition_router)
 app.include_router(llm_router)
 app.include_router(storage_router)
+app.include_router(auth_router)
 
 
 # ============================================

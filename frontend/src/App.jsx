@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { FileText, Database, BookOpen } from 'lucide-react';
 import Stepper from './components/Stepper';
 import DatasetStepper from './components/DatasetStepper';
@@ -14,9 +14,15 @@ import { TextDetectionPage } from './features/ocr';
 import { TextRecognitionPage } from './features/ocr';
 import LayoutAwareDetectionPage from './components/LayoutAwareDetectionPanel';
 import { usePdfPreview } from './hooks/usePdfPreview';
+import AuthPage from './features/auth/AuthPage';
+import { fetchMe, logout as apiLogout } from './features/auth/authApi';
 
 
 function App() {
+  // ── Auth gate ─────────────────────────────────────────────────────
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
   // ── Mode: null (home), 'ocr', 'dataset', 'files' ─────────────────
   const [mode, setMode] = useState(null);
 
@@ -164,11 +170,49 @@ function App() {
     setCurrentStep(1);
   }, []);
 
+  // ── Auth: check existing session on first load ────────────────────
+  useEffect(() => {
+    let active = true;
+    fetchMe().then((u) => {
+      if (active) {
+        setUser(u);
+        setAuthChecked(true);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await apiLogout();
+    } finally {
+      handleReset();
+      setUser(null);
+    }
+  }, [handleReset]);
+
+  // ════════════════════════════════════════════════════════════════════
+  // Auth gate — must be logged in before the app loads
+  // ════════════════════════════════════════════════════════════════════
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen w-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50">
+        <div className="h-10 w-10 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthPage onAuthSuccess={setUser} />;
+  }
+
   // ════════════════════════════════════════════════════════════════════
   // Show HomePage when no mode is selected
   // ════════════════════════════════════════════════════════════════════
   if (!mode) {
-    return <HomePage onSelectMode={handleSelectMode} />;
+    return <HomePage onSelectMode={handleSelectMode} user={user} onLogout={handleLogout} />;
   }
 
   if (mode === 'files') {
