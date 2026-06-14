@@ -16,8 +16,6 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * In real implementation, this would call the Python backend
  */
 export async function pdfToImages(pdfFile, options = {}) {
-  console.log('Mock API: pdfToImages called', { pdfFile, options });
-
   // Simulate PDF processing delay
   await delay(1500);
 
@@ -80,8 +78,6 @@ export async function pdfToImages(pdfFile, options = {}) {
  * Sends image to Python backend for processing
  */
 export async function preprocessImage(imageUrl, pipeline) {
-  console.log('API: preprocessImage called', { imageUrl: imageUrl?.substring(0, 50), pipeline });
-
   try {
     // Convert pipeline format to backend format
     const operations = pipeline.map(step => ({
@@ -128,8 +124,6 @@ export async function preprocessImage(imageUrl, pipeline) {
  * For UI progress display during processing
  */
 export async function preprocessImageWithProgress(imageUrl, pipeline, onProgress) {
-  console.log('API: preprocessImageWithProgress called', { pipeline });
-
   try {
     // Notify starting
     if (onProgress) {
@@ -214,8 +208,6 @@ export async function getAvailableOperations() {
  * Process multiple pages (batch preprocessing)
  */
 export async function preprocessBatch(images, pipeline, onProgress) {
-  console.log('API: preprocessBatch called', { imageCount: images.length });
-
   const results = [];
 
   for (let i = 0; i < images.length; i++) {
