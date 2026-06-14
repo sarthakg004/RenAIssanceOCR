@@ -13,3 +13,8 @@ RenAIssanceExperimental
 # See README for download instructions (HuggingFace trocr + custom CRNN).
 backend/models/weights/
 .claude
+
+# Test / native-run artifacts
+.pytest_cache/
+backend/.pytest-storage/
+backend/.venv-native/

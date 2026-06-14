@@ -22,6 +22,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        VARIANT: gpu
+        RUNTIME_BASE: nvidia/cuda:12.6.3-runtime-ubuntu24.04
     image: renaissance-backend:local
     container_name: renaissance-backend
     # API keys (GEMINI_API_KEY, OPENAI_API_KEY, ...) AND the user-tracking /

@@ -19,7 +19,10 @@
 
 services:
   backend:
-    image: saarthakg004/renaissance-backend:latest
+    # GPU variant. `:latest` is kept as an alias of `:latest-gpu` for backward
+    # compatibility, but the launcher pins the explicit tag so the variant is
+    # never ambiguous. CPU hosts use docker-compose.images.cpu.yml instead.
+    image: saarthakg004/renaissance-backend:latest-gpu
     container_name: renaissance-backend
     # Optional .env (SECRET_KEY, ADMIN_TOKEN, SMTP_*, DATABASE_URL overrides).
     # NOT required to run: the Supabase tracking URL + publishable key are

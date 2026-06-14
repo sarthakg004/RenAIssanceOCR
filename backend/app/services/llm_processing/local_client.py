@@ -48,7 +48,9 @@ def _load(model_name: str):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        from app.utils.torch_device import select_torch_device
+
+        device = select_torch_device()
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,

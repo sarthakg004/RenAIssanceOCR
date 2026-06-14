@@ -1,30 +1,49 @@
 # ============================================
 # RenAIssance OCR Backend
-# Multi-stage GPU build
+# Multi-stage build — one Dockerfile, two variants (GPU / CPU)
+#
+#   Build the GPU image (default):
+#     docker build -t renaissance-backend:gpu ./backend
+#   Build the CPU image (Mac / no-NVIDIA hosts):
+#     docker build --build-arg VARIANT=cpu \
+#                  --build-arg RUNTIME_BASE=ubuntu:24.04 \
+#                  -t renaissance-backend:cpu ./backend
+#
+# The two variants differ ONLY in the torch + paddle wheels and the runtime
+# base image; all application code and other pins are identical. The app
+# already selects cuda/mps/cpu at runtime, so the same code runs on either.
 #
 # Stage 1 — ubuntu:24.04  (+Python 3.11 deadsnakes)
-#            Installs all Python deps into /opt/venv
+#            Installs all Python deps into /opt/venv (variant-specific wheels)
 #
-# Stage 2 — nvidia/cuda:12.6.3-runtime-ubuntu24.04  (+Python 3.11 deadsnakes)
-#            Copies /opt/venv; provides libcuda / CUDA runtime libs
+# Stage 2 — ${RUNTIME_BASE}  (+Python 3.11 deadsnakes)
+#            gpu: nvidia/cuda:12.6.3-runtime-ubuntu24.04 (provides CUDA libs)
+#            cpu: ubuntu:24.04 (no CUDA — paddlepaddle CPU build)
+#            Copies /opt/venv from the builder.
 #
 # WHY the same base OS for both stages:
 #   Native extensions (.so wheels) are linked against the host distro's
 #   glibc, OpenSSL and libstdc++.  Copying a venv from Debian 12 into
 #   Ubuntu 24.04 (or vice-versa) causes "GLIBC_2.38 not found" /
-#   "OPENSSL_3.3.0 not found" errors.  Using ubuntu:24.04 in the builder
-#   guarantees the same ABI as the CUDA runtime image.
+#   "OPENSSL_3.3.0 not found" errors.  Both RUNTIME_BASE options are
+#   Ubuntu 24.04, so they share the builder's ABI.
 #
-# GPU requirements on the host:
+# GPU variant requirements on the host:
 #   - NVIDIA driver >= 560 (supports CUDA 12.6)
 #   - NVIDIA Container Toolkit installed
 #   - Run:  docker run --gpus all -p 8000:8000 <image>
 # ============================================
 
+# Global build args (consumed in the stages below; re-declared per stage).
+ARG VARIANT=gpu
+ARG RUNTIME_BASE=nvidia/cuda:12.6.3-runtime-ubuntu24.04
+
 ############################
 # Stage 1 — dependency builder
 ############################
 FROM ubuntu:24.04 AS builder
+
+ARG VARIANT
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -55,11 +74,17 @@ WORKDIR /build
 COPY requirements.txt .
 
 # Install Python dependencies in two steps to sidestep a hard conflict
-# between torch and paddlepaddle-gpu over their nvidia-*-cu12 pins (torch
-# pins one set of CUDA user-space libs, paddle pins another; pip's resolver
-# cannot satisfy both simultaneously). Both wheels bundle their own CUDA
-# libs internally, so the duplicate site-packages nvidia-* entries are not
-# needed at runtime — installing paddle with --no-deps avoids the conflict.
+# between torch and paddle over their nvidia-*-cu12 pins (torch pins one set
+# of CUDA user-space libs, paddle pins another; pip's resolver cannot satisfy
+# both simultaneously). Both wheels bundle their own CUDA libs internally, so
+# the duplicate site-packages nvidia-* entries are not needed at runtime —
+# installing paddle with --no-deps avoids the conflict.
+#
+# Variant split:
+#   gpu: torch 2.5.1 CUDA build (PyPI default) + paddlepaddle-gpu 3.3.0 (cu126)
+#   cpu: torch 2.5.1 CPU build (pytorch cpu index) + paddlepaddle 3.3.0 (cpu).
+#        torch CPU is installed FIRST so `-r requirements.txt` finds it already
+#        satisfied and does not pull the multi-GB CUDA wheel.
 #
 # BuildKit cache mount keeps ~/.cache/pip warm across builds so rebuilds
 # after a requirements.txt edit don't re-download multi-GB PyTorch/Paddle
@@ -67,10 +92,18 @@ COPY requirements.txt .
 # modern Docker).
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip && \
-    pip install -r requirements.txt && \
-    pip install --no-deps \
-        --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
-        paddlepaddle-gpu==3.3.0
+    if [ "$VARIANT" = "cpu" ]; then \
+        pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 && \
+        pip install -r requirements.txt && \
+        pip install --no-deps \
+            --index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
+            paddlepaddle==3.3.0 ; \
+    else \
+        pip install -r requirements.txt && \
+        pip install --no-deps \
+            --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+            paddlepaddle-gpu==3.3.0 ; \
+    fi
 
 # Pre-download paddlex fonts into site-packages. At first paddleocr
 # import, paddlex.utils.fonts tries to download PingFang-SC-Regular.ttf
@@ -98,15 +131,19 @@ RUN find /opt/venv -type d -name '__pycache__' -prune -exec rm -rf {} + && \
 
 
 ############################
-# Stage 2 — CUDA runtime
+# Stage 2 — runtime (CUDA for gpu, plain Ubuntu for cpu)
 ############################
-FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+FROM ${RUNTIME_BASE}
+
+ARG VARIANT
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     HOME=/home/appuser \
+    # Surfaced to the entrypoint preflight + the app so it can tailor messages.
+    RENAISSANCE_VARIANT=${VARIANT} \
     # venv from builder; takes precedence over any system Python
     PATH="/opt/venv/bin:$PATH" \
     # PaddleX / PaddleOCR model cache — mapped to a named Docker volume
@@ -177,7 +214,8 @@ COPY --chown=appuser:appgroup . .
 # fine-tuned weights. See the script for details. Ownership is reset so
 # appuser can read the regenerated files at runtime.
 RUN python /app/scripts/normalize_trocr_config.py && \
-    chown -R appuser:appgroup /app/models/weights/trocr /home/appuser
+    chown -R appuser:appgroup /app/models/weights/trocr /home/appuser && \
+    chmod +x /app/scripts/entrypoint.sh
 
 USER appuser
 
@@ -186,6 +224,14 @@ VOLUME ["/app/storage"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+
+# Entrypoint runs a non-blocking preflight (logs a clear message if a GPU
+# image is started without GPU access, or if RAM is low) then exec's the CMD.
+# It NEVER aborts boot: Gemini OCR, preprocessing and export work without a
+# GPU; only PaddleOCR layout detection requires one. The hard "specs do not
+# meet requirements" gate lives in the host launcher (run.sh / run.ps1),
+# which checks before pulling the multi-GB image.
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 
 # Single worker on purpose: PaddleOCR server-class models (~1.5 GB each,
 # loaded fresh per detection call and freed after) would otherwise be
