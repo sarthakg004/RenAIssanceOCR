@@ -35,16 +35,33 @@ function shortPageLabel(pageNumber) {
 }
 
 /**
- * Convert any PaddleOCR polygon to an axis-aligned rectangle stored as 4 corner points.
- * Always computes the axis-aligned bounding box so all boxes are rectangles.
+ * Order 4 polygon points into [TL, TR, BR, BL] so the editor's corner-resize /
+ * rotate math (which assumes that vertex order) works on rotated boxes.
+ */
+function orderQuad(poly) {
+    const byY = [...poly].sort((a, b) => a[1] - b[1]);
+    const [tl, tr] = byY.slice(0, 2).sort((a, b) => a[0] - b[0]);   // top: left, right
+    const [bl, br] = byY.slice(2, 4).sort((a, b) => a[0] - b[0]);   // bottom: left, right
+    return [[tl[0], tl[1]], [tr[0], tr[1]], [br[0], br[1]], [bl[0], bl[1]]];
+}
+
+/**
+ * Convert a PaddleOCR polygon to the editor's 4-corner box representation.
+ * 4-point quads keep their rotation (angled line boxes stay accurate); polygons
+ * with a different vertex count fall back to their axis-aligned bounding rect.
  */
 function polyToBox(poly, id) {
     if (!poly || poly.length === 0) return null;
-    const xs = poly.map(p => p[0]);
-    const ys = poly.map(p => p[1]);
-    const x1 = Math.min(...xs), y1 = Math.min(...ys);
-    const x2 = Math.max(...xs), y2 = Math.max(...ys);
-    const pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+    let pts;
+    if (poly.length === 4) {
+        pts = orderQuad(poly);
+    } else {
+        const xs = poly.map(p => p[0]);
+        const ys = poly.map(p => p[1]);
+        const x1 = Math.min(...xs), y1 = Math.min(...ys);
+        const x2 = Math.max(...xs), y2 = Math.max(...ys);
+        pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
+    }
     return { id: id ?? uid(), points: pts, selected: false };
     // points order: [TL, TR, BR, BL]
 }
@@ -170,10 +187,18 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
     // ── Refs ───────────────────────────────────────────────────────────────
     const bgCanvasRef = useRef(null);
     const overlayCanvasRef = useRef(null);
-    const containerRef = useRef(null);    const outerRef = useRef(null);
+    const containerRef = useRef(null);
+    const outerRef = useRef(null);
+    // The active page button in the bottom strip — scrolled into view on nav so
+    // later pages stay reachable even with a large number of pages.
+    const activePageBtnRef = useRef(null);
 
     // Grab keyboard focus when the editor opens so arrow keys work immediately
     useEffect(() => { outerRef.current?.focus(); }, []);
+    // Keep the active page button visible in the (horizontally scrolling) strip.
+    useEffect(() => {
+        activePageBtnRef.current?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }, [currentIdx]);
     // ── Box state ──────────────────────────────────────────────────────────
     const [boxes, setBoxes] = useState([]);
     const [undoStack, setUndoStack] = useState([]);
@@ -816,7 +841,7 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
 
             {/* ── BOTTOM: page nav + shortcuts ─────────────────────────── */}
             <div className="flex-shrink-0 px-4 py-2 bg-gray-900 border-t border-gray-800 flex items-center justify-between">
-                <div className="flex items-center gap-4 text-[11px] text-gray-500">
+                <div className="hidden lg:flex items-center gap-4 text-[11px] text-gray-500 shrink min-w-0 overflow-hidden">
                     <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">N</kbd> Add box</span>
                     <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">Del</kbd> Delete</span>
                     <span><kbd className="px-1 py-0.5 bg-gray-800 text-gray-400 rounded font-mono text-[10px]">D</kbd> Duplicate</span>
@@ -828,18 +853,22 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                 </div>
 
                 {pages.length > 1 && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-1 min-w-0 justify-center px-3">
+                        <span className="shrink-0 text-[11px] text-gray-500 font-mono">{currentIdx + 1}/{pages.length}</span>
                         <button onClick={() => goToPage(currentIdx - 1)} disabled={currentIdx === 0}
-                            className={`p-1.5 rounded-lg ${currentIdx === 0 ? 'text-gray-700' : 'text-gray-300 hover:text-white hover:bg-gray-800'}`}>
+                            className={`shrink-0 p-1.5 rounded-lg ${currentIdx === 0 ? 'text-gray-700' : 'text-gray-300 hover:text-white hover:bg-gray-800'}`}>
                             <ChevronLeft size={18} />
                         </button>
-                        <div className="flex items-center gap-1 overflow-x-auto max-w-xs scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+                        <div className="flex items-center gap-1 overflow-x-auto min-w-0 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
                             {pages.map((page, idx) => {
+                                // Fall back to the original detected polygon count so
+                                // not-yet-visited pages don't misleadingly show "0"
+                                // (which looked like detection had been reverted).
                                 const pageBoxCount = idx === currentIdx
                                     ? boxes.length
-                                    : (pageBoxesRef.current[page.pageNumber]?.length ?? 0);
+                                    : (pageBoxesRef.current[page.pageNumber]?.length ?? page.polygons?.length ?? 0);
                                 return (
-                                <button key={page.pageNumber} onClick={() => goToPage(idx)} title={`Page ${page.pageNumber} — ${pageBoxCount} boxes`}
+                                <button key={page.pageNumber} ref={idx === currentIdx ? activePageBtnRef : null} onClick={() => goToPage(idx)} title={`Page ${page.pageNumber} — ${pageBoxCount} boxes`}
                                     className={`relative shrink-0 min-w-[2rem] px-1.5 py-1 rounded-lg transition-all flex flex-col items-center leading-none ${idx === currentIdx ? 'bg-orange-500 text-white shadow-sm' : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-white'}`}>
                                     <span className="text-xs font-semibold">{shortPageLabel(page.pageNumber)}</span>
                                     <span className="text-[9px] opacity-70">{pageBoxCount}</span>
@@ -851,13 +880,13 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
                             })}
                         </div>
                         <button onClick={() => goToPage(currentIdx + 1)} disabled={currentIdx === pages.length - 1}
-                            className={`p-1.5 rounded-lg ${currentIdx === pages.length - 1 ? 'text-gray-700' : 'text-gray-300 hover:text-white hover:bg-gray-800'}`}>
+                            className={`shrink-0 p-1.5 rounded-lg ${currentIdx === pages.length - 1 ? 'text-gray-700' : 'text-gray-300 hover:text-white hover:bg-gray-800'}`}>
                             <ChevronRight size={18} />
                         </button>
                     </div>
                 )}
 
-                <span className="text-[11px] text-gray-600">
+                <span className="hidden md:block shrink-0 text-[11px] text-gray-600">
                     {imageSize.w > 0 && `${imageSize.w} × ${imageSize.h} px`}
                 </span>
             </div>

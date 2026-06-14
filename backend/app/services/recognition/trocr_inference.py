@@ -14,6 +14,8 @@ import torch
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
+from app.utils.torch_device import empty_device_cache, select_torch_device
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +76,7 @@ class TrOCRRecognizer:
         self._model: Optional[VisionEncoderDecoderModel] = None
 
         if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = select_torch_device()
         else:
             self.device = device
 
@@ -118,8 +120,7 @@ class TrOCRRecognizer:
             del self._processor
             self._processor = None
         gc.collect()
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
+        empty_device_cache(self.device)
 
 
 _recognizer_cache: dict[str, TrOCRRecognizer] = {}

@@ -981,7 +981,6 @@ export default function LayoutAwareDetectionPage({
 
         try {
             const blob = await urlToBlob(currentImageUrl);
-            console.log('[handleDetect] blob size', blob.size, 'type', blob.type);
 
             const formData = buildFormData(blob);
 
@@ -990,7 +989,6 @@ export default function LayoutAwareDetectionPage({
                 body: formData,
             });
             const data = await response.json();
-            console.log('[handleDetect] response', JSON.stringify(data).slice(0, 500));
 
             if (data.error) {
                 setError(data.error);
@@ -999,7 +997,6 @@ export default function LayoutAwareDetectionPage({
                 setProcessingTime(data.processing_time_ms);
                 if (data.warning) setWarning(data.warning);
                 setModelsReady(true);  // a successful detection means models are cached now
-                console.log('[handleDetect] stored', (data.lines || []).length, 'lines for page', currentPageNum);
             }
         } catch (err) {
             console.error('[handleDetect] error', err);

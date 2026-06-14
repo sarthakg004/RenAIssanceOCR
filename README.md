@@ -14,18 +14,58 @@ with PaddleOCR, and transcribe with your choice of provider.
 
 - **Docker** ≥ 24 with Compose v2
 - **~15 GB** free disk for images + model weights
-- **NVIDIA GPU + driver ≥ 560 + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)** (optional but strongly recommended; CPU works but layout detection is slow)
+- **NVIDIA GPU + driver ≥ 560 + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)** for GPU acceleration. No NVIDIA GPU? The launcher automatically runs the **CPU image** instead (works everywhere, just slower).
 - A **Gemini** or **OpenAI** API key if you want to use those providers — they're entered in the UI, not baked into the image
+
+> **Apple Silicon / macOS note.** Docker on macOS cannot access the GPU (no
+> Metal passthrough into containers), so the Docker image runs on CPU there. To
+> use the Apple GPU, run **natively** instead: `./run.sh --native` (PyTorch MPS
+> accelerates TrOCR/CRNN/local-LLM; PaddleOCR detection stays on CPU — it has no
+> Metal backend).
 
 ---
 
-## Run it (prebuilt images)
+## Run it (one command)
 
-### Recommended: Docker Compose
+Clone the repo (or download the `run.*` + `docker-compose.*.yml` files) and run
+the launcher for your OS. It **detects your GPU, checks your specs before
+pulling**, and starts the correct image (GPU or CPU) automatically:
 
-The simplest way — Compose wires the network, volumes, GPU, and service names
-for you (the frontend reaches the backend automatically), and picks up an
-optional `.env`:
+```bash
+# macOS / Linux / WSL
+./run.sh                 # auto-detect: GPU image if an NVIDIA GPU is usable, else CPU
+./run.sh --cpu           # force the CPU image
+./run.sh --native        # macOS only: run natively to use the Apple GPU (MPS)
+./run.sh --build         # build locally from source instead of pulling images
+./run.sh --down          # stop everything
+# then open http://localhost:5173
+```
+
+```powershell
+# Windows (PowerShell)
+.\run.ps1                # auto-detect GPU/CPU
+.\run.ps1 -Cpu           # force CPU image
+.\run.ps1 -Down          # stop
+```
+
+If your machine doesn't meet the GPU requirements (driver too old, no NVIDIA
+Container Toolkit, too little VRAM/RAM), the launcher prints exactly what's
+missing **before** downloading the multi-GB image and offers to fall back to the
+CPU image.
+
+### Under the hood: Docker Compose
+
+The launcher just selects the right Compose file. You can run them directly:
+
+| Host | File |
+|------|------|
+| NVIDIA GPU (published images) | `docker-compose.images.yml` |
+| No GPU / Mac (published images) | `docker-compose.images.cpu.yml` |
+| NVIDIA GPU (local build) | `docker-compose.yml` |
+| No GPU / Mac (local build) | `docker-compose.cpu.yml` |
+
+Compose wires the network, volumes, GPU, and service names for you (the
+frontend reaches the backend automatically), and picks up an optional `.env`:
 
 ```bash
 # Grab the compose file (or clone the repo)
@@ -167,11 +207,29 @@ name, email, and institute.
   (enables `GET /api/admin/users`), `DATABASE_URL` (use your own Postgres
   instead of SQLite). See `.env.example`.
 
+## Development & tests
+
+```bash
+# Backend test suite (CPU-safe — no GPU needed). Runs in CI on every push.
+cd backend
+pip install -r requirements-dev.txt
+pytest tests -q
+
+# Real-GPU smoke test (run on a machine with an NVIDIA GPU):
+python tests/smoke_gpu.py
+```
+
+CI (`.github/workflows/docker-build.yml`) runs the CPU test suite, builds both
+the **`-gpu`** and **`-cpu`** backend image variants from the single
+`backend/Dockerfile`, and boots the CPU image to verify `/api/health` before
+tagging a release.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Backend exits immediately on `--gpus all` | NVIDIA Container Toolkit not installed or Docker not restarted after install |
+| `run.sh`/`run.ps1` says "does not meet the GPU requirements" | Install/repair the NVIDIA driver (≥ 560) + Container Toolkit, or run with `--cpu` to use the CPU image |
+| GPU image logs "started WITHOUT a usable CUDA device" | Container launched without GPU access — use the launcher, add `--gpus all`, or run the CPU image. The server still starts; only PaddleOCR detection is unavailable. |
 | Signup/login returns **502** + nginx `backend could not be resolved` | The backend container isn't reachable as `backend`. Use Compose, or add `--network-alias backend` to the manual `docker run`. |
 | Layout detection falls back to CPU (`cuda_compiled=False`) | Container launched without `--gpus all`, or host driver < 560 |
 | PaddleOCR re-downloads on every start | `paddle_models` volume was removed; it will repopulate on next run |

@@ -19,6 +19,8 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
+from app.utils.torch_device import empty_device_cache, select_torch_device
+
 logger = logging.getLogger(__name__)
 
 
@@ -215,7 +217,7 @@ class CRNNRecognizer:
 
         # Auto-select device
         if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = select_torch_device()
         else:
             self.device = device
 
@@ -300,8 +302,7 @@ class CRNNRecognizer:
             del self._model
             self._model = None
             gc.collect()
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
+            empty_device_cache(self.device)
             logger.info("CRNN model unloaded")
 
 

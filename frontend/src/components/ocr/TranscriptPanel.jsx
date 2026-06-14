@@ -17,6 +17,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
+import { getLLMTemplates } from '../../services/geminiApi';
 
 /**
  * Regex to match special OCR markers like [illegible], [margin], [unclear], etc.
@@ -126,15 +127,13 @@ function TranscriptPanel({
   useEffect(() => {
     if (!llmEnabled) return;
     let cancelled = false;
-    import('../../services/geminiApi').then(({ getLLMTemplates }) => {
-      getLLMTemplates()
-        .then(data => {
-          if (!cancelled && data.templates) {
-            setLlmTemplates(data.templates);
-          }
-        })
-        .catch(() => {}); // Silently fail - templates will just not show
-    });
+    getLLMTemplates()
+      .then(data => {
+        if (!cancelled && data.templates) {
+          setLlmTemplates(data.templates);
+        }
+      })
+      .catch(() => {}); // Silently fail - templates will just not show
     return () => { cancelled = true; };
   }, [llmEnabled]);
 
