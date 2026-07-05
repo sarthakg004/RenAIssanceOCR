@@ -4,6 +4,7 @@
  */
 
 import { API_ORIGIN } from '../../../config';
+import { toDataUrl } from '../../../utils/imageUrl';
 
 const API_BASE = `${API_ORIGIN}/api`;
 
@@ -128,7 +129,8 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
 
     const endpoint = endpoints[provider] || endpoints.gemini;
     const requestBody = {
-        image_data: imageData,
+        // Page images are blob: object URLs in app state; backends want base64.
+        image_data: await toDataUrl(imageData),
         model: model,
     };
     if (customPrompt && customPrompt.trim()) {
