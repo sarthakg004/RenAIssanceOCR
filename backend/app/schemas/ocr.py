@@ -44,7 +44,7 @@ class PreprocessRequest(BaseModel):
 class GeminiOCRRequest(BaseModel):
     """Request model for Gemini OCR JSON endpoint"""
     image_data: str
-    model: str = "gemini-3-flash-preview"
+    model: str = "gemini-3.1-flash-lite"
     custom_prompt: Optional[str] = None
 
 
@@ -81,7 +81,7 @@ class BatchOCRItem(BaseModel):
 class BatchOCRRequest(BaseModel):
     """Request body for batch OCR"""
     items: list[BatchOCRItem]
-    model: str = "gemini-3-flash-preview"
+    model: str = "gemini-3.1-flash-lite"
     custom_prompt: Optional[str] = None
 
 

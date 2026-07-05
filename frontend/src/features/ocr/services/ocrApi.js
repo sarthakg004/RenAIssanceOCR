@@ -145,10 +145,14 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
 
     if (response.status === 429) {
         const errorData = await response.json().catch(() => ({}));
+        const detail = errorData.detail;
+        if (detail && detail.error === 'quota_exceeded') {
+            return { success: false, error: 'quota_exceeded', message: detail.message };
+        }
         return {
             success: false,
             error: 'rate_limited',
-            waitSeconds: errorData.detail?.wait_seconds || 20,
+            waitSeconds: detail?.wait_seconds || 20,
         };
     }
 
@@ -161,9 +165,11 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
 
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        const detail = errorData.detail;
+        const message = typeof detail === 'object' ? detail?.message : detail;
         return {
             success: false,
-            error: errorData.detail || 'OCR processing failed',
+            error: message || `OCR failed (HTTP ${response.status})`,
         };
     }
 

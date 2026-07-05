@@ -21,10 +21,11 @@ export const PROVIDER_LABELS = {
 // Fallback models for each provider when backend is offline
 export const FALLBACK_MODELS = {
     gemini: [
-        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', description: 'Latest and fastest (recommended)' },
-        { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', description: 'Most capable preview model' },
-        { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Stable pro model' },
-        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable flash model' },
+        { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Fast and light, best free-tier quota (recommended)' },
+        { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', description: 'Fast, high quality for most documents' },
+        { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Higher quality flash model' },
+        { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', description: 'Most capable (low daily quota)' },
+        { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable fallback' },
     ],
     chatgpt: [
         { id: 'gpt-5.2', name: 'GPT-5.2', description: 'Latest and most capable multimodal model' },
@@ -44,7 +45,7 @@ export const FALLBACK_MODELS = {
 
 // Default model per provider
 export const DEFAULT_MODELS = {
-    gemini: 'gemini-3-flash-preview',
+    gemini: 'gemini-3.1-flash-lite',
     chatgpt: 'gpt-5.2',
     deepseek: 'deepseek-chat',
     qwen: 'qwen-vl-max',

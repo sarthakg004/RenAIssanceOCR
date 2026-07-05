@@ -107,7 +107,7 @@ async def get_rate_limit_status():
 @router.post("/api/gemini-ocr-page", response_model=OCRResponse)
 async def gemini_ocr_page(
     image: UploadFile = File(...),
-    model: str = Form(default="gemini-3-flash-preview"),
+    model: str = Form(default="gemini-3.1-flash-lite"),
     custom_prompt: Optional[str] = Form(default=None),
     x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
 ):
@@ -131,7 +131,7 @@ async def gemini_ocr_page(
 @router.post("/api/gemini-ocr-base64", response_model=OCRResponse)
 async def gemini_ocr_base64(
     image_data: str = Form(...),
-    model: str = Form(default="gemini-3-flash-preview"),
+    model: str = Form(default="gemini-3.1-flash-lite"),
     custom_prompt: Optional[str] = Form(default=None),
     x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
 ):
