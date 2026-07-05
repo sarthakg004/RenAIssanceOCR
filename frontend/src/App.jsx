@@ -14,6 +14,7 @@ import { TextDetectionPage } from './features/ocr';
 import { TextRecognitionPage } from './features/ocr';
 import LayoutAwareDetectionPage from './components/LayoutAwareDetectionPanel';
 import { usePdfPreview } from './hooks/usePdfPreview';
+import { revokeObjectUrls } from './utils/imageUrl';
 import AuthPage from './features/auth/AuthPage';
 import ProfilePage from './features/auth/ProfilePage';
 import { fetchMe, logout as apiLogout } from './features/auth/authApi';
@@ -154,6 +155,8 @@ function App() {
     setCurrentStep(1);
     setFiles(null);
     setSelectedPages([]);
+    // Processed pages are Blob-backed object URLs — free them for the next book.
+    revokeObjectUrls(Object.values(processedImages));
     setProcessedImages({});
     setDetectionMethod(null);
     setDetectionProvider(null);
@@ -163,8 +166,11 @@ function App() {
     setAlignedTranscriptByPage({});
     setIsProcessingBook(false);
     setOcrDetectionCache({ pages: {}, alignment: {} });
+    setDetectionCache({ pages: {}, alignment: {} });
+    setPreprocessing([]);
+    setDetectionModelInfo({});
     resetPdfPreview();
-  }, [resetPdfPreview]);
+  }, [resetPdfPreview, processedImages]);
 
   // ── Mode selection from HomePage ──────────────────────────────────
   const handleSelectMode = useCallback((selectedMode) => {

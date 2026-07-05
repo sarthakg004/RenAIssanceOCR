@@ -4,6 +4,7 @@
  */
 
 import { API_ORIGIN } from '../config';
+import { toDataUrl } from '../utils/imageUrl';
 
 const API_BASE = `${API_ORIGIN}/api`;
 
@@ -73,7 +74,8 @@ export async function processPageOCR(imageData, model, apiKey) {
       'X-Gemini-API-Key': apiKey,
     },
     body: JSON.stringify({
-      image_data: imageData,
+      // Page images are blob: object URLs in app state; the backend wants base64.
+      image_data: await toDataUrl(imageData),
       model: model,
     }),
   });
@@ -142,10 +144,10 @@ export async function processBatchOCR(items, model, apiKey) {
         'X-Gemini-API-Key': apiKey,
       },
       body: JSON.stringify({
-        items: items.map(item => ({
+        items: await Promise.all(items.map(async item => ({
           page_index: item.pageIndex,
-          image_data: item.imageData,
-        })),
+          image_data: await toDataUrl(item.imageData),
+        }))),
         model: model,
       }),
     });

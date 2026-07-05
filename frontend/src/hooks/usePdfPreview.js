@@ -8,6 +8,11 @@ import { useState, useCallback, useEffect, useRef } from 'react';
  * ~1 Hz in background tabs, which is what made progress appear to "freeze"
  * when switching tabs.
  *
+ * Page images are stored as Blob-backed object URLs, not base64 data URLs:
+ * a data URL keeps the whole encoded image on the JS heap per page (hundreds
+ * of MB → GBs for large books, which made the UI lag), while an object URL is
+ * a ~50-char pointer with the pixels in browser-managed storage.
+ *
  * Image loading is parallelised with a small concurrency cap (workers don't
  * help here because <img> decode + <canvas> ops only exist on the main thread,
  * but parallel I/O drains the queue regardless of timer throttling).
@@ -29,22 +34,36 @@ export function usePdfPreview() {
   const [progress, setProgress] = useState(0);
 
   const workerRef = useRef(null);
+  // Object URLs created for the current page set; revoked on reset / reload.
+  const objectUrlsRef = useRef([]);
 
-  // Tear down worker on unmount.
+  const revokeAllUrls = useCallback(() => {
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current = [];
+  }, []);
+
+  const trackUrl = useCallback((url) => {
+    objectUrlsRef.current.push(url);
+    return url;
+  }, []);
+
+  // Tear down worker + URLs on unmount.
   useEffect(() => {
     return () => {
       if (workerRef.current) {
         workerRef.current.terminate();
         workerRef.current = null;
       }
+      revokeAllUrls();
     };
-  }, []);
+  }, [revokeAllUrls]);
 
   const extractPages = useCallback(async (file, options = {}) => {
     setIsLoading(true);
     setError(null);
     setProgress(0);
     setPages([]);
+    revokeAllUrls();
 
     // Recreate the worker per extraction so a stuck one can't poison later runs.
     if (workerRef.current) workerRef.current.terminate();
@@ -53,6 +72,18 @@ export function usePdfPreview() {
 
     const requestId = Date.now() + Math.random();
     const collected = [];
+    // Buffer streamed pages and flush at most a few times per second — a
+    // setPages per page re-renders the whole thumbnail grid N times for an
+    // N-page book.
+    let pending = [];
+    let flushTimer = null;
+    const flush = () => {
+      flushTimer = null;
+      if (pending.length === 0) return;
+      const batch = pending;
+      pending = [];
+      setPages((prev) => [...prev, ...batch]);
+    };
 
     try {
       const fileBuffer = await file.arrayBuffer();
@@ -62,12 +93,15 @@ export function usePdfPreview() {
           const msg = e.data || {};
           if (msg.id !== requestId) return;
           if (msg.type === 'page') {
-            collected.push(msg.page);
-            // Stream pages into state so the UI can show partial results.
-            setPages((prev) => [...prev, msg.page]);
+            const { blob, ...rest } = msg.page;
+            const page = { ...rest, thumbnail: trackUrl(URL.createObjectURL(blob)) };
+            collected.push(page);
+            pending.push(page);
+            if (!flushTimer) flushTimer = setTimeout(flush, 200);
           } else if (msg.type === 'progress') {
             setProgress(msg.progress);
           } else if (msg.type === 'done') {
+            flush();
             resolve(collected);
           } else if (msg.type === 'error') {
             reject(new Error(msg.error));
@@ -88,11 +122,12 @@ export function usePdfPreview() {
       setError(err.message || 'Failed to extract PDF pages');
       throw err;
     } finally {
+      if (flushTimer) clearTimeout(flushTimer);
       setIsLoading(false);
       // Keep worker alive in case the caller starts another extraction soon;
       // it'll be replaced on next call or torn down on unmount.
     }
-  }, []);
+  }, [revokeAllUrls, trackUrl]);
 
   const loadImages = useCallback(async (files, options = {}) => {
     const { splitDoublePages = true } = options;
@@ -101,6 +136,7 @@ export function usePdfPreview() {
     setError(null);
     setProgress(0);
     setPages([]);
+    revokeAllUrls();
 
     try {
       const total = files.length;
@@ -108,21 +144,23 @@ export function usePdfPreview() {
       // Preserve original order: index → page(s).
       const slots = new Array(total);
 
+      const canvasToUrl = (canvas) => new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) resolve(trackUrl(URL.createObjectURL(blob)));
+          else reject(new Error('Failed to encode split page'));
+        }, 'image/png');
+      });
+
       const processOne = async (file, index) => {
         const fileIndex = index + 1;
-
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(new Error('Failed to read file'));
-          reader.readAsDataURL(file);
-        });
+        // The file itself backs the object URL — no read, no re-encode.
+        const fileUrl = trackUrl(URL.createObjectURL(file));
 
         const imgData = await new Promise((resolve, reject) => {
           const img = new Image();
           img.onload = () => resolve({ width: img.width, height: img.height, img });
           img.onerror = () => reject(new Error('Failed to load image'));
-          img.src = dataUrl;
+          img.src = fileUrl;
         });
 
         let produced;
@@ -146,7 +184,7 @@ export function usePdfPreview() {
           produced = [
             {
               pageNumber: `${fileIndex}_left`,
-              thumbnail: leftCanvas.toDataURL('image/png'),
+              thumbnail: await canvasToUrl(leftCanvas),
               width: halfWidth,
               height: imgData.height,
               fileName: file.name,
@@ -155,7 +193,7 @@ export function usePdfPreview() {
             },
             {
               pageNumber: `${fileIndex}_right`,
-              thumbnail: rightCanvas.toDataURL('image/png'),
+              thumbnail: await canvasToUrl(rightCanvas),
               width: halfWidth,
               height: imgData.height,
               fileName: file.name,
@@ -166,7 +204,7 @@ export function usePdfPreview() {
         } else {
           produced = [{
             pageNumber: fileIndex,
-            thumbnail: dataUrl,
+            thumbnail: fileUrl,
             width: imgData.width,
             height: imgData.height,
             fileName: file.name,
@@ -200,18 +238,19 @@ export function usePdfPreview() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [revokeAllUrls, trackUrl]);
 
   const reset = useCallback(() => {
     setPages([]);
     setIsLoading(false);
     setError(null);
     setProgress(0);
+    revokeAllUrls();
     if (workerRef.current) {
       workerRef.current.terminate();
       workerRef.current = null;
     }
-  }, []);
+  }, [revokeAllUrls]);
 
   return {
     pages,

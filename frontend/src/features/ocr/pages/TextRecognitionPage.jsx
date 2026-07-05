@@ -58,6 +58,9 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
     const [transcripts, setTranscripts] = useState({});
     const [originalTranscripts, setOriginalTranscripts] = useState({});
     const [processedPages, setProcessedPages] = useState(new Set());
+    // Pages that errored (not rate-limit/quota) — don't auto-resend the same
+    // image forever; each page is attempted once per auto-run.
+    const [failedPages, setFailedPages] = useState(new Set());
 
     // Rate limit
     const [rateLimitReady, setRateLimitReady] = useState(true);
@@ -219,6 +222,10 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
             } else if (result.error === 'rate_limited') {
                 setRateLimitReady(false);
                 setWaitSeconds(result.waitSeconds || 20);
+            } else if (result.error === 'quota_exceeded') {
+                setDailyLimitReached(true);
+                setIsAutoProcessing(false);
+                setError(result.message || 'Daily API quota reached. Try again tomorrow or use a different API key.');
             } else if (result.error === 'invalid_api_key') {
                 setIsKeyValid(false);
                 setError('Invalid API key');
@@ -272,6 +279,8 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     }
 
                     // Process each result
+                    let quotaHit = false;
+                    const failures = [];
                     result.results.forEach(item => {
                         const pageLabel = pageLabels[item.page_index];
                         if (item.success) {
@@ -282,13 +291,25 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                             // Check individual errors for quota issues
                             const errLower = (item.error || '').toLowerCase();
                             if (errLower.includes('quota') || errLower.includes('resource_exhausted')) {
-                                setDailyLimitReached(true);
-                                setIsAutoProcessing(false);
-                                setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
+                                quotaHit = true;
+                            } else {
+                                // Real per-page failure — mark it so auto-processing
+                                // moves on instead of resending the same image.
+                                setFailedPages(prev => new Set([...prev, pageLabel]));
+                                failures.push(`Page ${pageLabel}: ${item.error || 'failed'}`);
                             }
                             console.error(`Page ${pageLabel} failed:`, item.error);
                         }
                     });
+
+                    // Tell the user about failures (quota, 503 busy, etc.)
+                    if (quotaHit) {
+                        setDailyLimitReached(true);
+                        setIsAutoProcessing(false);
+                        setError('Daily API quota reached. Try again tomorrow, pick a different model, or use another API key.');
+                    } else if (failures.length > 0) {
+                        setError(failures.join(' • '));
+                    }
 
                     // Mark key as valid since at least some OCR succeeded
                     if (result.successfulCount > 0) {
@@ -346,9 +367,13 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                             setIsAutoProcessing(false);
                             break;
                         } else {
+                            setFailedPages(prev => new Set([...prev, pageLabel]));
+                            setError(`Page ${pageLabel}: ${result.error || 'failed'}`);
                             console.error(`Page ${pageLabel} failed:`, result.error);
                         }
                     } catch (err) {
+                        setFailedPages(prev => new Set([...prev, pageLabel]));
+                        setError(`Page ${pageLabel}: ${err.message}`);
                         console.error(`Page ${pageLabel} error:`, err.message);
                     }
                 }
@@ -374,13 +399,13 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         if (batchInProgressRef.current) return;
         if (dailyLimitReached) return;
 
-        // Find all unprocessed pages
+        // Find all unprocessed pages (skip ones that already errored this run)
         const unprocessedIndices = processedImages
             .map((_, i) => i)
-            .filter(i => !processedPages.has(pageLabels[i]));
+            .filter(i => !processedPages.has(pageLabels[i]) && !failedPages.has(pageLabels[i]));
 
         if (unprocessedIndices.length === 0) {
-            // All pages processed
+            // All pages processed (or errored)
             setIsAutoProcessing(false);
             setIsWaitingForRateLimit(false);
             pollRetryCountRef.current = 0;
@@ -446,7 +471,7 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }, 200);
 
         return () => clearTimeout(timeoutId);
-    }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, processedImages, processBatch, provider, pageLabels]);
+    }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, failedPages, processedImages, processBatch, provider, pageLabels]);
 
     // Handle transcript change
     const handleTranscriptChange = useCallback((value) => {
@@ -612,6 +637,9 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                 batchInProgressRef.current = false;
                 pollRetryCountRef.current = 0;
                 setError(null);
+            } else {
+                // Starting a fresh run — allow previously-failed pages to retry.
+                setFailedPages(new Set());
             }
             return !prev;
         });

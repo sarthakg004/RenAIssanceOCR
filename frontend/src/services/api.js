@@ -4,6 +4,7 @@
  */
 
 import { API_ORIGIN } from '../config';
+import { toDataUrl, dataUrlToObjectUrl } from '../utils/imageUrl';
 
 // Backend API base URL (relative in prod/dev — see config.js)
 const API_BASE = API_ORIGIN;
@@ -92,7 +93,8 @@ export async function preprocessImage(imageUrl, pipeline) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        image_data: imageUrl,
+        // Page images are blob: object URLs in app state; the backend wants base64.
+        image_data: await toDataUrl(imageUrl),
         operations: operations,
         preview_mode: false,
       }),
@@ -109,8 +111,9 @@ export async function preprocessImage(imageUrl, pipeline) {
       console.warn('Preprocessing had errors:', result.errors);
     }
 
-    // Return the processed image data URL
-    return result.processed_image || imageUrl;
+    // Re-wrap the returned base64 as an object URL so holding processed
+    // results for every page of a large book doesn't bloat the JS heap.
+    return result.processed_image ? dataUrlToObjectUrl(result.processed_image) : imageUrl;
 
   } catch (error) {
     console.error('Preprocessing API error:', error);
@@ -148,7 +151,7 @@ export async function preprocessImageWithProgress(imageUrl, pipeline, onProgress
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        image_data: imageUrl,
+        image_data: await toDataUrl(imageUrl),
         operations: operations,
         preview_mode: false,
       }),
@@ -171,7 +174,7 @@ export async function preprocessImageWithProgress(imageUrl, pipeline, onProgress
 
     return {
       success: result.success,
-      processedImage: result.processed_image || imageUrl,
+      processedImage: result.processed_image ? dataUrlToObjectUrl(result.processed_image) : imageUrl,
       progressInfo: result.progress_info,
       errors: result.errors,
     };

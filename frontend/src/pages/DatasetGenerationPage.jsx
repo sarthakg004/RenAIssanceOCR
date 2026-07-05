@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { saveDatasetToMyFiles, fetchStorageOverview } from '../services/storageApi';
 import { API_ORIGIN } from '../config';
+import { toDataUrl } from '../utils/imageUrl';
 
 const API_BASE = API_ORIGIN;
 
@@ -137,12 +138,12 @@ export default function DatasetGenerationPage({
     setExportError(null);
 
     try {
-      const pagesPayload = alignmentData.map((d) => ({
+      const pagesPayload = await Promise.all(alignmentData.map(async (d) => ({
         page_key: String(d.pageNumber),
-        image_data: d.imageSrc,
+        image_data: await toDataUrl(d.imageSrc),
         boxes: d.boxes,
         lines: d.lines,
-      }));
+      })));
 
       const res = await fetch(`${API_BASE}/api/dataset/export`, {
         method: 'POST',
@@ -179,11 +180,11 @@ export default function DatasetGenerationPage({
     setExportError(null);
 
     try {
-      const pagesPayload = detectionData.map((d) => ({
+      const pagesPayload = await Promise.all(detectionData.map(async (d) => ({
         page_key: String(d.pageNumber),
-        image_data: d.imageSrc,
+        image_data: await toDataUrl(d.imageSrc),
         boxes: d.boxes,
-      }));
+      })));
 
       const res = await fetch(`${API_BASE}/api/dataset/export-detection`, {
         method: 'POST',
@@ -249,11 +250,11 @@ export default function DatasetGenerationPage({
 
     try {
       if (isDetection) {
-        const pagesPayload = detectionData.map((d) => ({
+        const pagesPayload = await Promise.all(detectionData.map(async (d) => ({
           page_key: String(d.pageNumber),
-          image_data: d.imageSrc,
+          image_data: await toDataUrl(d.imageSrc),
           boxes: d.boxes,
-        }));
+        })));
 
         const signature = JSON.stringify({
           mode: 'detection',
@@ -275,12 +276,12 @@ export default function DatasetGenerationPage({
         });
         lastSavedSignatureRef.current = signature;
       } else {
-        const pagesPayload = alignmentData.map((d) => ({
+        const pagesPayload = await Promise.all(alignmentData.map(async (d) => ({
           page_key: String(d.pageNumber),
-          image_data: d.imageSrc,
+          image_data: await toDataUrl(d.imageSrc),
           boxes: d.boxes,
           lines: d.lines,
-        }));
+        })));
 
         const signature = JSON.stringify({
           mode: 'recognition',

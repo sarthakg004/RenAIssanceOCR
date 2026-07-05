@@ -154,8 +154,22 @@ def run_ocr(
         error_msg = str(exc)
         if "API_KEY_INVALID" in error_msg or "401" in error_msg:
             raise HTTPException(status_code=401, detail="Invalid API key")
-        if "QUOTA_EXCEEDED" in error_msg or "429" in error_msg:
-            raise HTTPException(status_code=429, detail="API quota exceeded")
+        # Daily/free-tier quota (Google RESOURCE_EXHAUSTED) is NOT the same as our
+        # short sliding-window limit — it won't clear for hours, so flag it as
+        # quota_exceeded so the UI can tell the user instead of silently retrying.
+        if "RESOURCE_EXHAUSTED" in error_msg or "QUOTA_EXCEEDED" in error_msg or "quota" in error_msg.lower():
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": "Daily Gemini quota reached. Try again tomorrow, pick a different model, or use another API key.",
+                },
+            )
+        if "429" in error_msg:
+            raise HTTPException(
+                status_code=429,
+                detail={"error": "rate_limited", "wait_seconds": 20},
+            )
 
         return OCRResponse(
             success=False,

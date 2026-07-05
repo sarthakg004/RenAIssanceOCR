@@ -49,16 +49,9 @@ class OffscreenCanvasFactory {
   }
 }
 
-async function offscreenToDataURL(canvas) {
-  // OffscreenCanvas has no toDataURL — go via blob → FileReader.
-  const blob = await canvas.convertToBlob({ type: 'image/png' });
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error('Failed to encode page as data URL'));
-    reader.readAsDataURL(blob);
-  });
-}
+// Pages are shipped to the main thread as Blobs (structured-clone is cheap
+// and the pixels stay out of the JS string heap); the receiving hook wraps
+// them in object URLs.
 
 async function renderPage(pdf, pageNum, scale, splitDoublePages) {
   const page = await pdf.getPage(pageNum);
@@ -71,11 +64,11 @@ async function renderPage(pdf, pageNum, scale, splitDoublePages) {
   const isDouble = splitDoublePages && viewport.width > viewport.height * 1.19;
 
   if (!isDouble) {
-    const dataUrl = await offscreenToDataURL(canvas);
+    const blob = await canvas.convertToBlob({ type: 'image/png' });
     return [{
       pageNumber: pageNum,
       originalPageNumber: pageNum,
-      thumbnail: dataUrl,
+      blob,
       width: viewport.width,
       height: viewport.height,
       isSplit: false,
@@ -90,11 +83,11 @@ async function renderPage(pdf, pageNum, scale, splitDoublePages) {
     const sideCtx = sideCanvas.getContext('2d');
     const srcX = side === 'left' ? 0 : halfWidth;
     sideCtx.drawImage(canvas, srcX, 0, halfWidth, viewport.height, 0, 0, halfWidth, viewport.height);
-    const dataUrl = await offscreenToDataURL(sideCanvas);
+    const blob = await sideCanvas.convertToBlob({ type: 'image/png' });
     out.push({
       pageNumber: `${pageNum}_${side}`,
       originalPageNumber: pageNum,
-      thumbnail: dataUrl,
+      blob,
       width: halfWidth,
       height: viewport.height,
       isSplit: true,

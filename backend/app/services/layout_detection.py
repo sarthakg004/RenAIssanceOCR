@@ -37,21 +37,27 @@ import psutil
 # a clear error is returned to the caller if paddle is unavailable.
 # ---------------------------------------------------------------------------
 _paddle = None
-_PPStructureV3 = None
+_create_model = None
 _PaddleOCR = None
 _PADDLE_IMPORT_ERROR: str = ""
 
 
 def _ensure_paddle() -> None:
     """Lazy-import paddle and paddleocr on first call; raises RuntimeError if unavailable."""
-    global _paddle, _PPStructureV3, _PaddleOCR, _PADDLE_IMPORT_ERROR
+    global _paddle, _create_model, _PaddleOCR, _PADDLE_IMPORT_ERROR
     if _paddle is not None:
         return
     try:
         import paddle as _p
-        from paddleocr import PPStructureV3 as _S, PaddleOCR as _O
+        from paddleocr import PaddleOCR as _O
+        # Single-model layout predictor. We used to build a full PPStructureV3
+        # pipeline here just to read layout_det_res — but PPStructureV3
+        # downloads and wires EVERY sub-model it knows (tables, seals,
+        # formulas, PP-Chart2Table, …) even with all use_* flags off:
+        # several GB of weights the app never runs.
+        from paddlex import create_model as _cm
         _paddle = _p
-        _PPStructureV3 = _S
+        _create_model = _cm
         _PaddleOCR = _O
     except Exception as exc:
         _PADDLE_IMPORT_ERROR = str(exc)
@@ -103,7 +109,8 @@ MOBILE_MODELS = {
 def _model_cache_root() -> str:
     """Root dir where PaddleX caches official models.
 
-    In Docker this is /paddle_models (set via PADDLE_PDX_MODEL_CACHE_HOME);
+    In Docker this is /paddle_models (set via PADDLE_PDX_CACHE_HOME — the
+    variable paddlex itself reads, so downloads land in the named volume);
     locally it defaults to ~/.paddlex. Models land under `<root>/official_models/`.
     """
     root = (
@@ -630,19 +637,8 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
     pipeline = None
     try:
         _free_memory()  # clear any lingering allocations before loading model
-        pipeline = _PPStructureV3(
-            layout_detection_model_name=model_name,
-            device=device,
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_table_recognition=False,
-            use_formula_recognition=False,
-            use_chart_recognition=False,
-            use_seal_recognition=False,
-            use_region_detection=False,
-        )
-
-        results = pipeline.predict(input=resized)
+        pipeline = _create_model(model_name=model_name, device=device)
+        results = pipeline.predict(resized, batch_size=1)
     except (MemoryError, RuntimeError) as exc:
         # RuntimeError is raised by PaddlePaddle on GPU OOM
         _free_memory()
@@ -660,7 +656,7 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
 
     layout_boxes = []
     for res in results:
-        for b in res["layout_det_res"]["boxes"]:
+        for b in res["boxes"]:
             label = b["label"]
             score = float(b["score"])
             x1, y1, x2, y2 = b["coordinate"]

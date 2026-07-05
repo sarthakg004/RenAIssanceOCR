@@ -17,16 +17,20 @@
 #            Installs all Python deps into /opt/venv (variant-specific wheels)
 #
 # Stage 2 — ${RUNTIME_BASE}  (+Python 3.11 deadsnakes)
-#            gpu: nvidia/cuda:12.6.3-runtime-ubuntu24.04 (provides CUDA libs)
-#            cpu: ubuntu:24.04 (no CUDA — paddlepaddle CPU build)
-#            Copies /opt/venv from the builder.
+#            ubuntu:24.04 for BOTH variants. The GPU variant does NOT need
+#            the multi-GB nvidia/cuda runtime base: torch ships its CUDA
+#            user-space libs as nvidia-*-cu12 pip wheels and paddle RPATHs
+#            into the same site-packages/nvidia directory, while the host
+#            driver (libcuda.so.1) is injected at `docker run --gpus all`
+#            time by the NVIDIA Container Toolkit. Dropping the CUDA base
+#            saves ~3.5 GB of system CUDA libraries nothing ever loads.
 #
 # WHY the same base OS for both stages:
 #   Native extensions (.so wheels) are linked against the host distro's
 #   glibc, OpenSSL and libstdc++.  Copying a venv from Debian 12 into
 #   Ubuntu 24.04 (or vice-versa) causes "GLIBC_2.38 not found" /
-#   "OPENSSL_3.3.0 not found" errors.  Both RUNTIME_BASE options are
-#   Ubuntu 24.04, so they share the builder's ABI.
+#   "OPENSSL_3.3.0 not found" errors.  Both stages are Ubuntu 24.04,
+#   so they share the builder's ABI.
 #
 # GPU variant requirements on the host:
 #   - NVIDIA driver >= 560 (supports CUDA 12.6)
@@ -35,8 +39,10 @@
 # ============================================
 
 # Global build args (consumed in the stages below; re-declared per stage).
+# RUNTIME_BASE stays overridable but ubuntu:24.04 is correct for both
+# variants — see the Stage 2 note above.
 ARG VARIANT=gpu
-ARG RUNTIME_BASE=nvidia/cuda:12.6.3-runtime-ubuntu24.04
+ARG RUNTIME_BASE=ubuntu:24.04
 
 ############################
 # Stage 1 — dependency builder
@@ -120,14 +126,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends wget \
     && apt-get purge -y --auto-remove wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Slim the venv before copying it into the runtime stage: strip all
-# __pycache__ dirs and *.pyc/*.pyo files. Python will regenerate them
-# lazily on first import — worth it because the builder-time bytecode
-# for torch + paddle + transformers alone is several hundred MB of
-# dead weight in the shipped image. We intentionally keep pip and
-# setuptools installed; paddlex introspects pkg_resources at runtime.
-RUN find /opt/venv -type d -name '__pycache__' -prune -exec rm -rf {} + && \
-    find /opt/venv -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+# Slim the venv before copying it into the runtime stage.
+#
+# 1. Deduplicate OpenCV: requirements pin opencv-python-headless but
+#    paddleocr → paddlex ALSO pulls opencv-contrib-python, so the image
+#    ends up with two full OpenCV builds sharing one cv2/ directory.
+#    paddlex verifies its [ocr] extra by installed-package METADATA, so
+#    contrib must be the one that stays (removing it breaks PPStructureV3
+#    creation with a "requires additional dependencies" error even though
+#    the cv2 module itself would import fine). Force-reinstall contrib
+#    LAST so the shared cv2/ directory is complete. Saves ~170 MB.
+RUN pip uninstall -y opencv-python-headless opencv-python 2>/dev/null; \
+    pip install --no-deps --force-reinstall --no-cache-dir opencv-contrib-python==4.10.0.84
+#
+# 1b. paddleocr hard-depends on the LangChain/OpenAI client stack for its
+#     PP-ChatOCR document-chat pipelines, which this app never uses (we
+#     only run PPStructureV3 + PaddleOCR detection). The paddlex [ocr]
+#     dependency check passes without them — verified by running layout
+#     detection after removal. Saves ~150 MB and a large dep surface.
+RUN pip uninstall -y \
+        langchain langchain-community langchain-core langchain-openai \
+        langchain-text-splitters langsmith openai tiktoken \
+        dataclasses-json marshmallow typing-inspect jsonpatch \
+        requests-toolbelt 2>/dev/null || true
+#
+# 2. Inference-only cuts (GPU variant; the CPU wheels never install these):
+#    - triton: JIT compiler backend for torch.compile — this app only runs
+#      eager inference, torch imports it lazily and works without it.
+#      (NCCL must stay: libtorch_cuda.so declares DT_NEEDED libnccl.so.2,
+#      so `import torch` fails without it even for single-GPU inference.)
+#    - C/C++ headers (torch/include, nvidia/**/include, triton headers are
+#      gone with triton): only needed to compile extensions, never shipped.
+#    - *.a static libs: link-time only.
+# 3. Strip all __pycache__ dirs and *.pyc/*.pyo files. Python regenerates
+#    them lazily on first import — the builder-time bytecode for torch +
+#    paddle + transformers alone is several hundred MB of dead weight.
+#    We intentionally keep pip and setuptools installed; paddlex
+#    introspects pkg_resources at runtime.
+RUN SP=/opt/venv/lib/python3.11/site-packages && \
+    rm -rf "$SP/triton" "$SP"/triton-*.dist-info \
+           "$SP/torch/include" "$SP/torch/test" && \
+    find "$SP/nvidia" -maxdepth 2 -type d -name include -exec rm -rf {} + 2>/dev/null; \
+    find /opt/venv -type f \( -name '*.a' -o -name '*.pyc' -o -name '*.pyo' \) -delete && \
+    find /opt/venv -type d -name '__pycache__' -prune -exec rm -rf {} +
 
 
 ############################
@@ -146,11 +187,23 @@ ENV DEBIAN_FRONTEND=noninteractive \
     RENAISSANCE_VARIANT=${VARIANT} \
     # venv from builder; takes precedence over any system Python
     PATH="/opt/venv/bin:$PATH" \
-    # PaddleX / PaddleOCR model cache — mapped to a named Docker volume
-    PADDLE_PDX_MODEL_CACHE_HOME=/paddle_models \
+    # PaddleX / PaddleOCR model cache — mapped to a named Docker volume.
+    # PADDLE_PDX_CACHE_HOME is the variable paddlex actually reads
+    # (paddlex/utils/cache.py); the previous PADDLE_PDX_MODEL_CACHE_HOME
+    # was only read by our own code, so models silently re-downloaded to
+    # the ephemeral ~/.paddlex on EVERY container recreation instead of
+    # persisting in the volume.
+    PADDLE_PDX_CACHE_HOME=/paddle_models \
     # Disable experimental Paddle PIR to avoid ConvertPirAttribute errors
     FLAGS_enable_pir_api=0 \
-    FLAGS_enable_pir_in_executor=0
+    FLAGS_enable_pir_in_executor=0 \
+    # Plain-Ubuntu base: tell the NVIDIA Container Toolkit what to inject
+    # when the container is started with --gpus / a device reservation.
+    # (The nvidia/cuda images set these for you; ubuntu:24.04 does not.
+    # Harmless for the cpu variant — without a device request the toolkit
+    # never engages.)
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # Central user-tracking endpoint, baked into the published image so every
 # self-hosted instance reports signups to the one shared Supabase table.
