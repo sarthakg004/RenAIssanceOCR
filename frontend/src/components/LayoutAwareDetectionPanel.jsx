@@ -745,7 +745,14 @@ export default function LayoutAwareDetectionPage({
         if (!isCurrentDetected) return;
         // Only seed once per page — skip if already seeded or already has rows
         // (handleBBoxSave manages alignment after that point).
-        if (seededPages.current.has(currentPageNum)) return;
+        if (seededPages.current.has(String(currentPageNum))) return;
+        // Rows restored from the parent cache (navigating back from export
+        // remounts this component and resets the seeded ref) must never be
+        // overwritten with the raw transcript — the user may have edited them.
+        if ((alignmentByPage[currentPageNum] || []).length > 0) {
+            seededPages.current.add(String(currentPageNum));
+            return;
+        }
 
         const transcriptKey = resolveTranscriptKey(transcript, currentPageNum);
         const transcriptLines = transcriptKey ? (transcript[transcriptKey] || []) : [];
@@ -758,12 +765,12 @@ export default function LayoutAwareDetectionPage({
             boxIndex: index < sortedBoxIndices.length ? sortedBoxIndices[index] : null,
         }));
 
-        seededPages.current.add(currentPageNum);
+        seededPages.current.add(String(currentPageNum));
         setAlignmentByPage((prev) => ({
             ...prev,
             [currentPageNum]: initialRows,
         }));
-    }, [isCurrentDetected, currentPageNum, sortedBoxIndices, transcript]);
+    }, [isCurrentDetected, currentPageNum, sortedBoxIndices, transcript, alignmentByPage]);
 
     // Reset hover state when navigating pages
     useEffect(() => {
@@ -1017,8 +1024,10 @@ export default function LayoutAwareDetectionPage({
 
         const total = availablePages.length;
         let lastWarning = null;
-        // Snapshot already-detected pages to avoid stale closure
-        const alreadyDetected = new Set(Object.keys(detectedPages).map(Number));
+        // Snapshot already-detected pages to avoid stale closure. String keys:
+        // split pages ("3_left") would become NaN under Number() and get
+        // re-detected, silently overwriting any manual box edits.
+        const alreadyDetected = new Set(Object.keys(detectedPages));
 
         try {
             cancelProcessingRef.current = false;
@@ -1029,7 +1038,7 @@ export default function LayoutAwareDetectionPage({
                 // Do NOT force viewingPageIndex — user can navigate freely while processing
 
                 // Skip already detected pages
-                if (alreadyDetected.has(pageNum)) continue;
+                if (alreadyDetected.has(String(pageNum))) continue;
 
                 const imageUrl = getImageUrl(pageNum);
                 if (!imageUrl) continue;
@@ -1049,7 +1058,7 @@ export default function LayoutAwareDetectionPage({
                 }
 
                 setDetectedPages(prev => ({ ...prev, [pageNum]: data.lines || [] }));
-                alreadyDetected.add(pageNum);
+                alreadyDetected.add(String(pageNum));
                 if (data.warning) lastWarning = data.warning;
                 // First page succeeded -> models are cached; drop the notice.
                 setModelsReady(true);
@@ -1306,7 +1315,7 @@ export default function LayoutAwareDetectionPage({
                                     pageLabel={shortPageLabel(pageNum)}
                                 />
                                 {/* Edited indicator badge */}
-                                {editedPages.has(pageNum) && (
+                                {editedPages.has(String(pageNum)) && (
                                     <span className="absolute top-1 left-1 px-1 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded shadow-sm leading-none">
                                         edited
                                     </span>
@@ -1348,8 +1357,10 @@ export default function LayoutAwareDetectionPage({
         setAlignmentByPage(prevAlignment => {
             const next = { ...prevAlignment };
 
-            Object.entries(results).forEach(([pageNumStr, newPolygons]) => {
-                const pageNum = Number(pageNumStr);
+            Object.entries(results).forEach(([pageNum, newPolygons]) => {
+                // NOTE: keep the raw string key — page numbers can be
+                // "3_left"/"3_right" for split spreads; Number() would turn
+                // those into NaN and save the alignment under the wrong key.
 
                 // Step 1 — re-sort polygon indices top→bottom
                 const sortedIdxs = newPolygons
@@ -1385,7 +1396,7 @@ export default function LayoutAwareDetectionPage({
 
                 next[pageNum] = newRows;
                 // Mark as seeded so the seed effect won't overwrite this on re-render.
-                seededPages.current.add(pageNum);
+                seededPages.current.add(String(pageNum));
             });
 
             return next;
@@ -1393,7 +1404,7 @@ export default function LayoutAwareDetectionPage({
 
         setEditedPages(prev => {
             const next = new Set(prev);
-            Object.keys(results).forEach(k => next.add(Number(k)));
+            Object.keys(results).forEach(k => next.add(String(k)));
             return next;
         });
         setShowBBoxEditor(false);
@@ -1437,7 +1448,7 @@ export default function LayoutAwareDetectionPage({
                     {isCurrentDetected && !loading && (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-full">
                             <CheckCircle2 size={12} /> {currentLines.length} lines
-                            {editedPages.has(currentPageNum) && (
+                            {editedPages.has(String(currentPageNum)) && (
                                 <span className="ml-1 text-[9px] bg-amber-100 text-amber-700 px-1 rounded font-semibold">edited</span>
                             )}
                         </span>
@@ -2186,6 +2197,7 @@ export default function LayoutAwareDetectionPage({
             {showBBoxEditor && bboxEditorPages.length > 0 && (
                 <BBoxEditor
                     pages={bboxEditorPages}
+                    initialPageNumber={currentPageNum}
                     onSave={handleBBoxSave}
                     onCancel={() => setShowBBoxEditor(false)}
                 />

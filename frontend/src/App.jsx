@@ -163,6 +163,9 @@ function App() {
     setAlignedTranscriptByPage({});
     setIsProcessingBook(false);
     setOcrDetectionCache({ pages: {}, alignment: {} });
+    setDetectionCache({ pages: {}, alignment: {} });
+    setPreprocessing([]);
+    setDetectionModelInfo({});
     resetPdfPreview();
   }, [resetPdfPreview]);
 

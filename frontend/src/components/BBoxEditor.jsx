@@ -176,10 +176,21 @@ function resizeRotatedCorner(pts, cornerIdx, nx, ny) {
 // ─────────────────────────────────────────────────────────────────────────────
 // BBoxEditor — multi-page, supports angled bounding boxes
 // ─────────────────────────────────────────────────────────────────────────────
-export default function BBoxEditor({ pages = [], onSave, onCancel }) {
+export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, initialPageNumber = null }) {
 
     // ── Multi-page ─────────────────────────────────────────────────────────
-    const [currentIdx, setCurrentIdx] = useState(0);
+    // Freeze the page list at mount. The parent recomputes it whenever
+    // detection results change, so a batch detection running behind this
+    // modal would grow/reorder the list and silently shift `currentIdx`
+    // onto a different page — edits would then be saved under the wrong
+    // page number and appear to "revert".
+    const pagesRef = useRef(pagesProp);
+    const pages = pagesRef.current;
+    const [currentIdx, setCurrentIdx] = useState(() => {
+        if (initialPageNumber == null) return 0;
+        const idx = pagesRef.current.findIndex(p => String(p.pageNumber) === String(initialPageNumber));
+        return idx === -1 ? 0 : idx;
+    });
     const pageBoxesRef = useRef({});
     const [modifiedPages, setModifiedPages] = useState(new Set());
     const currentPage = pages[currentIdx];
@@ -255,6 +266,10 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
         const initialBoxes = saved ?? (page.polygons || []).map(poly => polyToBox(poly)).filter(Boolean);
         if (!saved) pageBoxesRef.current[page.pageNumber] = initialBoxes;
         setBoxes(initialBoxes);
+        // Sync the ref immediately — it normally updates in an effect after
+        // paint, and a fast page-to-page navigation in that window would save
+        // the PREVIOUS page's boxes under the next page's number.
+        boxesRef.current = initialBoxes;
 
         const img = new Image();
         img.crossOrigin = 'anonymous';
@@ -277,7 +292,7 @@ export default function BBoxEditor({ pages = [], onSave, onCancel }) {
         img.src = page.imageSrc;
     }, []);
 
-    useEffect(() => { if (pages.length > 0) loadPage(pages[0]); }, []); // eslint-disable-line
+    useEffect(() => { if (pages.length > 0) loadPage(pages[currentIdx] || pages[0]); }, []); // eslint-disable-line
 
     const goToPage = useCallback((idx) => {
         if (idx < 0 || idx >= pages.length || idx === currentIdx) return;
