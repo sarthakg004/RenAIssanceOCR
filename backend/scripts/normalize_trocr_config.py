@@ -1,23 +1,17 @@
-"""Normalize a TrOCR checkpoint for transformers 4.44.x + tokenizers 0.19.x.
+"""Normalize a TrOCR checkpoint's processor assets to a canonical layout.
 
-The shipped checkpoint at backend/models/weights/trocr/ contains only the
+The shipped checkpoint at backend/models/weights/trocr/ contains the
 fine-tuned artifacts (config.json, generation_config.json, model.safetensors)
-plus processor configs that were serialized by a newer transformers/tokenizers
-release than this image pins (tokenizers 0.19.1, pinned transitively by
-paddlex 3.0.0). Two concrete incompatibilities:
+plus processor configs. transformers 4.53 (the pinned version) reads those
+natively, so this is now a belt-and-suspenders normalization rather than a
+hard requirement: it guarantees the directory is loadable regardless of which
+transformers/tokenizers release originally serialized the processor.
 
-  1. processor_config.json bundles the image-processor settings under an
-     "image_processor" key. transformers 4.44.x only reads a standalone
-     preprocessor_config.json with those fields at the top level.
-  2. tokenizer.json uses a ModelWrapper enum variant that tokenizers 0.19.x
-     can't deserialize (added in 0.20).
-
-Both are fully recoverable because the user fine-tuned from
-microsoft/trocr-base-printed (per training config) — the processor side
-(image normalization stats + Roberta tokenizer vocabulary) matches the base
-exactly. We pull the base processor from HuggingFace at build time, save its
-assets next to the fine-tuned weights, and the resulting directory loads
-cleanly with the pinned library versions.
+It works because the user fine-tuned from microsoft/trocr-base-printed (per
+training config) — the processor side (image normalization stats + Roberta
+tokenizer vocabulary) matches the base exactly. We pull the base processor
+from HuggingFace at build time, save its assets next to the fine-tuned
+weights, and the resulting directory loads cleanly.
 
 No-op when the trocr checkpoint directory is absent so local dev builds
 without weights still succeed.

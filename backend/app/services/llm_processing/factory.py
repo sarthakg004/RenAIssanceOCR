@@ -6,14 +6,18 @@ for text→text cleanup instead of image OCR. Gemini goes through the google-gen
 SDK (gemini_client); OpenAI / DeepSeek / Qwen share the OpenAI-compatible
 chat-completions client (openai_compat_client).
 
-`local_es` is registered but disabled — it is the placeholder for the
-Spanish-finetuned local model that will be wired in later. It surfaces in the
-UI as a disabled option so the toggle/flow can be built and tested now.
+`local_es` is our Spanish-finetuned corrector (Qwen3-4B + LoRA adapter, 4-bit).
+It runs per-line and requires a GPU (see local_client.post_process_text_finetuned).
 """
 
 from .gemini_client import post_process_text as _gemini_post_process
 from .openai_compat_client import post_process_text_openai_compat
-from .local_client import post_process_text_local, DEFAULT_LOCAL_MODEL
+from .local_client import (
+    post_process_text_local,
+    post_process_text_finetuned,
+    DEFAULT_LOCAL_MODEL,
+    FINETUNED_BASE_MODEL,
+)
 
 
 # OpenAI-compatible chat-completions endpoints (same URLs as the OCR providers).
@@ -88,13 +92,17 @@ LLM_PROVIDERS = [
         "note": "Runs on the server GPU; model is downloaded on first use.",
     },
     {
+        # Spanish-finetuned corrector: Qwen3-4B + LoRA adapter shipped in the
+        # image, loaded 4-bit and run per-line. GPU-only.
         "id": "local_es",
         "name": "Local fine-tuned (Spanish)",
-        "enabled": False,
+        "enabled": True,
         "requires_key": False,
-        "default_model": None,
-        "models": [],
-        "note": "Coming soon — fine-tuned on Spanish historical data.",
+        "default_model": FINETUNED_BASE_MODEL,
+        "models": [
+            {"id": FINETUNED_BASE_MODEL, "name": "Qwen3-4B Spanish (fine-tuned)"},
+        ],
+        "note": "Fine-tuned on Spanish historical OCR; runs 4-bit on the server GPU (base weights downloaded on first use).",
     },
 ]
 
@@ -137,6 +145,9 @@ def post_process(
 
     if provider == "local":
         return post_process_text_local(text, model, template_name)
+
+    if provider == "local_es":
+        return post_process_text_finetuned(text, model, template_name)
 
     if provider == "gemini":
         return _gemini_post_process(api_key, text, model, template_name)

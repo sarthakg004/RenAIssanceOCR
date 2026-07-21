@@ -92,9 +92,15 @@ class TrOCRRecognizer:
 
         logger.info("Loading TrOCR checkpoint: %s", self.model_dir)
         self._processor = TrOCRProcessor.from_pretrained(self.model_dir, local_files_only=True)
+        # fp16 on GPU is the best quantization variant measured in
+        # checkpoints/trocr_quantization/quantization_results.csv: half the
+        # footprint (~640 MB) and ~3x faster than fp32 with negligible CER
+        # change. CPU stays fp32 (no fp16 kernels).
+        dtype = torch.float16 if self.device == "cuda" else torch.float32
         self._model = VisionEncoderDecoderModel.from_pretrained(
             self.model_dir,
             local_files_only=True,
+            torch_dtype=dtype,
         ).to(self.device)
         self._model.eval()
 
@@ -104,7 +110,9 @@ class TrOCRRecognizer:
         self._ensure_loaded()
 
         rgb_images = [img.convert("RGB") for img in images]
-        pixel_values = self._processor(images=rgb_images, return_tensors="pt").pixel_values.to(self.device)
+        pixel_values = self._processor(images=rgb_images, return_tensors="pt").pixel_values.to(
+            self.device, dtype=self._model.dtype
+        )
 
         with torch.no_grad():
             generated_ids = self._model.generate(pixel_values, max_new_tokens=96)

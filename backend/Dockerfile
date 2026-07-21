@@ -194,6 +194,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # the ephemeral ~/.paddlex on EVERY container recreation instead of
     # persisting in the volume.
     PADDLE_PDX_CACHE_HOME=/paddle_models \
+    # HuggingFace cache for the local post-processing LLMs (Qwen3-4B base for
+    # the fine-tuned corrector, ~8 GB, and the general Qwen2.5 model). Point it
+    # at the SAME persisted named volume as the paddle models so first-use
+    # downloads survive container recreation instead of re-downloading — same
+    # fix the paddle weights got. The LoRA adapter itself is baked into the
+    # image (models/weights/postprocess), only the base weights download.
+    HF_HOME=/paddle_models/hf \
     # Disable experimental Paddle PIR to avoid ConvertPirAttribute errors
     FLAGS_enable_pir_api=0 \
     FLAGS_enable_pir_in_executor=0 \
@@ -258,13 +265,12 @@ RUN groupadd --system appgroup && \
 WORKDIR /app
 COPY --chown=appuser:appgroup . .
 
-# Normalize the TrOCR checkpoint for transformers 4.44.x + tokenizers 0.19.x.
-# The processor assets (image processor + tokenizer) shipped alongside the
-# fine-tuned weights were saved by a newer tokenizers release and can't be
-# deserialized by the pinned versions. Since the checkpoint was fine-tuned
-# from microsoft/trocr-base-printed (shares processor + vocabulary exactly),
-# we pull that processor at build time and drop its assets next to the
-# fine-tuned weights. See the script for details. Ownership is reset so
+# Normalize the TrOCR checkpoint's processor assets. transformers 4.53 reads
+# the shipped processor_config.json/tokenizer.json natively, so this is now a
+# belt-and-suspenders step: it re-derives the processor from the base model
+# (microsoft/trocr-base-printed, shared vocabulary) so the directory is
+# guaranteed loadable by the pinned versions regardless of how the checkpoint
+# was serialized. No-op if the trocr dir is absent. Ownership is reset so
 # appuser can read the regenerated files at runtime.
 RUN python /app/scripts/normalize_trocr_config.py && \
     chown -R appuser:appgroup /app/models/weights/trocr /home/appuser && \
