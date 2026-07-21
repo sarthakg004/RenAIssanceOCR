@@ -95,6 +95,47 @@ const PARAM_DEFS = [
 let _rowIdCounter = 0;
 const nextRowId = () => ++_rowIdCounter;
 
+// Word-level diff (LCS) for the post-processing before/after view. Returns two
+// token lists: `before` tokens flagged `removed`, `after` tokens flagged
+// `added`. Splitting on whitespace is fine here — OCR-correction edits are
+// small (diacritics, glyph fixes), and the view only needs to point at the
+// words that changed.
+function diffWords(before, after) {
+    const a = before.split(/\s+/).filter(Boolean);
+    const b = after.split(/\s+/).filter(Boolean);
+    const n = a.length;
+    const m = b.length;
+    // LCS length table.
+    const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i -= 1) {
+        for (let j = m - 1; j >= 0; j -= 1) {
+            lcs[i][j] = a[i] === b[j]
+                ? lcs[i + 1][j + 1] + 1
+                : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+        }
+    }
+    const beforeTokens = [];
+    const afterTokens = [];
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+        if (a[i] === b[j]) {
+            beforeTokens.push({ text: a[i], removed: false });
+            afterTokens.push({ text: b[j], added: false });
+            i += 1; j += 1;
+        } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+            beforeTokens.push({ text: a[i], removed: true });
+            i += 1;
+        } else {
+            afterTokens.push({ text: b[j], added: true });
+            j += 1;
+        }
+    }
+    while (i < n) { beforeTokens.push({ text: a[i], removed: true }); i += 1; }
+    while (j < m) { afterTokens.push({ text: b[j], added: true }); j += 1; }
+    return { beforeTokens, afterTokens };
+}
+
 function shortPageLabel(pageKey) {
     return String(pageKey).replace('_left', 'L').replace('_right', 'R');
 }
@@ -258,6 +299,12 @@ export default function LayoutAwareDetectionPage({
     // can be stamped into the saved transcript's My Files metadata.
     const [lastLlmRun, setLastLlmRun] = useState(null);
 
+    // Post-processing before/after: per page, the pre-polish text for the boxes
+    // the model actually changed — { [pageNum]: { [boxIndex]: beforeText } }.
+    // Powers the inline "changed lines" highlight + before/after view.
+    const [llmDiffByPage, setLlmDiffByPage] = useState({});
+    const [showLlmDiff, setShowLlmDiff] = useState(true);
+
     // ── Hover state for bidirectional highlight ─────────────
     // Single source of truth: `hoveredBoxIndex` identifies the polygon index.
     // Line rows derive their highlight from this + their assigned boxIndex,
@@ -320,6 +367,10 @@ export default function LayoutAwareDetectionPage({
         });
         return map;
     }, [currentRecognition]);
+
+    // Post-processing before/after for the current page: { boxIndex: beforeText }.
+    const currentDiff = llmDiffByPage[currentPageNum] || {};
+    const changedLineCount = Object.keys(currentDiff).length;
 
     // Sort detected boxes top → bottom using the midpoint-Y of the top edge.
     // For rotated boxes the top edge midpoint is more stable than the single min-Y corner.
@@ -433,6 +484,7 @@ export default function LayoutAwareDetectionPage({
             }
 
             setRecognizedByPage((prev) => ({ ...prev, [currentPageNum]: result.results || [] }));
+            setLlmDiffByPage((prev) => ({ ...prev, [currentPageNum]: {} }));  // fresh OCR → drop stale diff
             setOcrDevice(result.device || null);
             setOcrTimeMs(result.processing_time_ms ?? null);
         } catch (err) {
@@ -465,6 +517,7 @@ export default function LayoutAwareDetectionPage({
                 }
 
                 setRecognizedByPage((prev) => ({ ...prev, [pageNum]: result.results || [] }));
+                setLlmDiffByPage((prev) => ({ ...prev, [pageNum]: {} }));  // fresh OCR → drop stale diff
                 setOcrDevice(result.device || null);
                 await new Promise((resolve) => setTimeout(resolve, 100));
             }
@@ -659,6 +712,17 @@ export default function LayoutAwareDetectionPage({
         }
         const cleaned = (res.processed_text || '').split('\n');
 
+        // Capture which boxes the model actually changed (before → after), so
+        // the UI can highlight them and show the previous text.
+        const diff = {};
+        orderedIdx.forEach((boxIdx, i) => {
+            const before = lines[i] || '';
+            const after = cleaned[i] !== undefined ? cleaned[i] : '';
+            if (before.trim() !== after.trim()) {
+                diff[boxIdx] = before;
+            }
+        });
+
         setRecognizedByPage((prev) => {
             const rows = orderedIdx.map((boxIdx, i) => ({
                 box_index: boxIdx,
@@ -672,6 +736,8 @@ export default function LayoutAwareDetectionPage({
             }
             return { ...prev, [pageNum]: rows };
         });
+        setLlmDiffByPage((prev) => ({ ...prev, [pageNum]: diff }));
+        setShowLlmDiff(true);
         setLastLlmRun({ used: true, provider, model: llmModel, template: llmTemplate });
         return true;
     }, [buildSortedRecognition, llmModel, llmTemplate]);
@@ -1858,38 +1924,79 @@ export default function LayoutAwareDetectionPage({
                     >
                         {sortedBoxIndices.map((boxIndex, lineIndex) => {
                             const isHighlighted = hoveredBoxIndex === boxIndex;
+                            const changed = showLlmDiff
+                                && Object.prototype.hasOwnProperty.call(currentDiff, boxIndex);
+                            const beforeText = changed ? currentDiff[boxIndex] : '';
+                            const afterText = currentRecognitionByIndex[boxIndex] || '';
+                            const { beforeTokens, afterTokens } = changed
+                                ? diffWords(beforeText, afterText)
+                                : { beforeTokens: [], afterTokens: [] };
                             return (
                                 <div
                                     key={`${currentPageNum}-${boxIndex}`}
                                     ref={(el) => setLineRef(boxIndex, el)}
                                     onMouseEnter={() => setHoveredBoxIndex(boxIndex)}
                                     className={`group flex items-start gap-2 -mx-2 px-2 rounded-md transition-colors ${
-                                        isHighlighted ? 'bg-orange-100/70' : 'hover:bg-gray-50'
-                                    }`}
+                                        isHighlighted
+                                            ? 'bg-orange-100/70'
+                                            : changed
+                                                ? 'bg-amber-50/50 hover:bg-amber-100/50'
+                                                : 'hover:bg-gray-50'
+                                    } ${changed ? 'border-l-2 border-amber-400' : ''}`}
                                 >
                                     <span
                                         className={`select-none w-6 shrink-0 text-right text-[10px] leading-6 tabular-nums transition-colors ${
                                             isHighlighted
                                                 ? 'text-orange-500 font-bold'
-                                                : 'text-gray-300 group-hover:text-gray-400'
+                                                : changed
+                                                    ? 'text-amber-500 font-bold'
+                                                    : 'text-gray-300 group-hover:text-gray-400'
                                         }`}
-                                        title={`Line ${lineIndex + 1}`}
+                                        title={changed ? `Line ${lineIndex + 1} — edited by post-processing` : `Line ${lineIndex + 1}`}
                                     >
                                         {lineIndex + 1}
                                     </span>
-                                    <textarea
-                                        value={currentRecognitionByIndex[boxIndex] || ''}
-                                        onChange={(e) => {
-                                            updateRecognizedText(lineIndex, e.target.value);
-                                            autoGrowLine(e.target);
-                                        }}
-                                        ref={autoGrowLine}
-                                        rows={1}
-                                        spellCheck={false}
-                                        className={`flex-1 bg-transparent border-0 outline-none resize-none overflow-hidden py-0.5 text-sm leading-6 text-gray-800 rounded focus:bg-blue-50/50 ${
-                                            isHighlighted ? 'text-orange-900' : ''
-                                        }`}
-                                    />
+                                    <div className="flex-1 min-w-0">
+                                        <textarea
+                                            value={afterText}
+                                            onChange={(e) => {
+                                                updateRecognizedText(lineIndex, e.target.value);
+                                                autoGrowLine(e.target);
+                                            }}
+                                            ref={autoGrowLine}
+                                            rows={1}
+                                            spellCheck={false}
+                                            className={`w-full bg-transparent border-0 outline-none resize-none overflow-hidden py-0.5 text-sm leading-6 text-gray-800 rounded focus:bg-blue-50/50 ${
+                                                isHighlighted ? 'text-orange-900' : ''
+                                            }`}
+                                        />
+                                        {changed && (
+                                            <div className="mb-1 space-y-0.5 text-[11px] leading-snug border-t border-amber-100 pt-1">
+                                                <div className="flex gap-1.5">
+                                                    <span className="select-none text-rose-400 font-mono shrink-0" title="Before">−</span>
+                                                    <span className="text-gray-400">
+                                                        {beforeTokens.map((t, k) => (
+                                                            <span
+                                                                key={k}
+                                                                className={t.removed ? 'bg-rose-100 text-rose-600 line-through rounded px-0.5' : ''}
+                                                            >{t.text}{' '}</span>
+                                                        ))}
+                                                    </span>
+                                                </div>
+                                                <div className="flex gap-1.5">
+                                                    <span className="select-none text-emerald-500 font-mono shrink-0" title="After">+</span>
+                                                    <span className="text-gray-600">
+                                                        {afterTokens.map((t, k) => (
+                                                            <span
+                                                                key={k}
+                                                                className={t.added ? 'bg-emerald-100 text-emerald-700 rounded px-0.5' : ''}
+                                                            >{t.text}{' '}</span>
+                                                        ))}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             );
                         })}
@@ -1963,29 +2070,35 @@ export default function LayoutAwareDetectionPage({
                                     </div>
                                 ) : (
                                     <>
-                                        <select
-                                            value={llmTemplate}
-                                            onChange={(e) => setLlmTemplate(e.target.value)}
-                                            disabled={llmProcessing}
-                                            className="w-full px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
-                                        >
-                                            {llmTemplates.length > 0 ? (
-                                                llmTemplates.map((t) => (
-                                                    <option key={t.id} value={t.id}>{t.name}</option>
-                                                ))
-                                            ) : (
-                                                <>
-                                                    <option value="full_cleanup">Full Cleanup</option>
-                                                    <option value="spelling_correction">Spelling Correction</option>
-                                                    <option value="formatting">Format & Structure</option>
-                                                    <option value="historical_normalization">Historical Normalization</option>
-                                                </>
-                                            )}
-                                        </select>
-                                        {llmTemplates.length > 0 && (
-                                            <p className="text-[10px] text-gray-400 leading-tight">
-                                                {llmTemplates.find((t) => t.id === llmTemplate)?.description || ''}
-                                            </p>
+                                        {/* The finetuned Spanish model does full cleanup only —
+                                            no template choice to make, so hide the dropdown. */}
+                                        {llmProvider !== 'local_es' && (
+                                            <>
+                                                <select
+                                                    value={llmTemplate}
+                                                    onChange={(e) => setLlmTemplate(e.target.value)}
+                                                    disabled={llmProcessing}
+                                                    className="w-full px-2 py-1.5 bg-white rounded-lg text-xs text-gray-700 border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-200 outline-none"
+                                                >
+                                                    {llmTemplates.length > 0 ? (
+                                                        llmTemplates.map((t) => (
+                                                            <option key={t.id} value={t.id}>{t.name}</option>
+                                                        ))
+                                                    ) : (
+                                                        <>
+                                                            <option value="full_cleanup">Full Cleanup</option>
+                                                            <option value="spelling_correction">Spelling Correction</option>
+                                                            <option value="formatting">Format & Structure</option>
+                                                            <option value="historical_normalization">Historical Normalization</option>
+                                                        </>
+                                                    )}
+                                                </select>
+                                                {llmTemplates.length > 0 && (
+                                                    <p className="text-[10px] text-gray-400 leading-tight">
+                                                        {llmTemplates.find((t) => t.id === llmTemplate)?.description || ''}
+                                                    </p>
+                                                )}
+                                            </>
                                         )}
 
                                         {llmProviderMeta?.requires_key === false ? (
@@ -2023,6 +2136,22 @@ export default function LayoutAwareDetectionPage({
                                             </button>
                                         </div>
                                     </>
+                                )}
+
+                                {changedLineCount > 0 && (
+                                    <div className="flex items-center justify-between gap-2 text-[11px] bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                                        <span className="flex items-center gap-1.5 text-amber-700 font-semibold">
+                                            <Wand2 size={11} />
+                                            {changedLineCount} line{changedLineCount === 1 ? '' : 's'} edited on this page
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowLlmDiff((v) => !v)}
+                                            className="shrink-0 px-2 py-0.5 rounded border border-amber-300 text-amber-700 hover:bg-amber-100 font-semibold"
+                                        >
+                                            {showLlmDiff ? 'Hide changes' : 'Show changes'}
+                                        </button>
+                                    </div>
                                 )}
 
                                 {llmProgress && (
