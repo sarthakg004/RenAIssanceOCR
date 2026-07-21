@@ -42,19 +42,13 @@ export default function PipelineStack({
     if (isProcessing) return;
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = 'move';
-    // Add a delay to allow the drag image to be created
-    setTimeout(() => {
-      e.target.classList.add('opacity-50');
-    }, 0);
   };
 
-  const handleDragEnd = (e) => {
-    e.target.classList.remove('opacity-50');
-    
+  const handleDragEnd = () => {
     if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
       onReorder(draggedIndex, dragOverIndex);
     }
-    
+
     setDraggedIndex(null);
     setDragOverIndex(null);
     dragCounter.current = 0;
@@ -127,28 +121,34 @@ export default function PipelineStack({
           return (
             <div
               key={step.id}
-              draggable={!isProcessing}
-              onDragStart={(e) => handleDragStart(e, index)}
-              onDragEnd={handleDragEnd}
               onDragEnter={(e) => handleDragEnter(e, index)}
               onDragLeave={handleDragLeave}
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, index)}
               className={`
                 group relative rounded-lg border transition-all duration-200
-                ${step.enabled 
-                  ? 'bg-white border-blue-200 shadow-sm' 
+                ${step.enabled
+                  ? 'bg-white border-blue-200 shadow-sm'
                   : 'bg-gray-50 border-gray-200 opacity-60'
                 }
                 ${isDraggedOver ? 'border-blue-400 border-2 bg-blue-50' : ''}
                 ${isActive ? 'ring-2 ring-blue-400 ring-offset-1' : ''}
-                ${!isProcessing ? 'cursor-grab active:cursor-grabbing' : ''}
+                ${draggedIndex === index ? 'opacity-50' : ''}
               `}
             >
               {/* Main row */}
               <div className="flex items-center gap-2 p-2">
-                {/* Drag handle */}
-                <div className="flex-shrink-0 text-gray-300 group-hover:text-gray-400 transition-colors">
+                {/* Drag handle — ONLY this is draggable, so interacting with the
+                    sliders/selects inside the card never starts a card drag. */}
+                <div
+                  draggable={!isProcessing}
+                  onDragStart={(e) => handleDragStart(e, index)}
+                  onDragEnd={handleDragEnd}
+                  title="Drag to reorder"
+                  className={`flex-shrink-0 text-gray-300 group-hover:text-gray-400 transition-colors ${
+                    !isProcessing ? 'cursor-grab active:cursor-grabbing' : ''
+                  }`}
+                >
                   <GripVertical size={16} />
                 </div>
 
