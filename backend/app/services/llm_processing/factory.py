@@ -13,9 +13,7 @@ It runs per-line and requires a GPU (see local_client.post_process_text_finetune
 from .gemini_client import post_process_text as _gemini_post_process
 from .openai_compat_client import post_process_text_openai_compat
 from .local_client import (
-    post_process_text_local,
     post_process_text_finetuned,
-    DEFAULT_LOCAL_MODEL,
     FINETUNED_BASE_MODEL,
 )
 
@@ -79,19 +77,6 @@ LLM_PROVIDERS = [
         ],
     },
     {
-        # Open-weights model run locally in the backend (no API key, offline).
-        "id": "local",
-        "name": "Local LLM (offline)",
-        "enabled": True,
-        "requires_key": False,
-        "default_model": DEFAULT_LOCAL_MODEL,
-        "models": [
-            {"id": "Qwen/Qwen2.5-3B-Instruct", "name": "Qwen2.5 3B Instruct"},
-            {"id": "Qwen/Qwen2.5-7B-Instruct", "name": "Qwen2.5 7B Instruct"},
-        ],
-        "note": "Runs on the server GPU; model is downloaded on first use.",
-    },
-    {
         # Spanish-finetuned corrector: Qwen3-4B + LoRA adapter shipped in the
         # image, loaded 4-bit and run per-line. GPU-only.
         "id": "local_es",
@@ -142,9 +127,6 @@ def post_process(
         raise ValueError(
             f"Unknown LLM provider: '{provider}'. Valid providers: {valid}"
         )
-
-    if provider == "local":
-        return post_process_text_local(text, model, template_name)
 
     if provider == "local_es":
         return post_process_text_finetuned(text, model, template_name)

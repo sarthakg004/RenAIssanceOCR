@@ -8,10 +8,9 @@ with PaddleOCR, and transcribe with your choice of provider.
 **OCR providers:** Gemini, ChatGPT, local CRNN, local TrOCR (fine-tuned from
 `microsoft/trocr-base-printed`; runs fp16 on GPU).
 
-**Optional LLM post-correction:** Gemini / OpenAI / DeepSeek / Qwen, a general
-offline model, or a **Spanish fine-tuned corrector** (Qwen3-4B + LoRA adapter,
-run 4-bit per-line on the GPU — the adapter ships in the image, the base
-downloads on first use).
+**Optional LLM post-correction:** Gemini / OpenAI / DeepSeek / Qwen, or a
+**Spanish fine-tuned corrector** (Qwen3-4B + LoRA adapter, run 4-bit per-line on
+the GPU — the adapter ships in the image, the base downloads on first use).
 
 ---
 

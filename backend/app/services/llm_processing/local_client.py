@@ -1,29 +1,18 @@
 """
-Local (offline) LLM clients for OCR text post-processing.
+Local (offline) fine-tuned LLM corrector for OCR text post-processing.
 
-Two flavours, both run in-process via HuggingFace ``transformers`` — no API
-key, no network at inference time:
-
-* ``local``    — a general open-weights instruction model (default
-                 ``Qwen/Qwen2.5-3B-Instruct``), whole-page cleanup driven by
-                 the prompt templates. Base weights downloaded + cached on
-                 first use (mirrors the PaddleOCR weight pattern).
-* ``local_es`` — our Spanish-finetuned corrector: base
-                 ``Qwen/Qwen3-4B-Instruct-2507`` + a LoRA adapter shipped in
-                 the image (models/weights/postprocess/...). Loaded in 4-bit
-                 (QLoRA, the same config it was trained with) and run
-                 **per line**, exactly as in
-                 RenAIssanceExperimental notebook 05. Requires CUDA — 4-bit
-                 needs a GPU, and it keeps the footprint to ~3 GB VRAM.
+The ``local_es`` provider: base ``Qwen/Qwen3-4B-Instruct-2507`` + a LoRA adapter
+shipped in the image (models/weights/postprocess/...). The base weights download
++ cache on first use (mirrors the PaddleOCR weight pattern); the adapter rides
+on top. Loaded in 4-bit (QLoRA, the same config it was trained with) and run
+**per line**, exactly as in RenAIssanceExperimental notebook 05. Requires CUDA —
+4-bit needs a GPU, and it keeps the footprint to ~3 GB VRAM. No API key, no
+network at inference time.
 """
 
 import os
 from pathlib import Path
 from threading import Lock
-
-from .prompt_templates import get_template
-
-DEFAULT_LOCAL_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 
 # The Spanish-finetuned corrector: base model + shipped LoRA adapter.
 FINETUNED_BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
@@ -40,14 +29,6 @@ _FINETUNED_SYSTEM_PROMPT = (
     "(á é í ó ú ñ ç), and merge or split wrongly tokenised words. "
     "Preserve the original early-modern spelling: never modernise, translate, "
     "or add content. If the line is already correct, return it unchanged."
-)
-
-# Concise system instruction for the general `local` model (whole-page input,
-# the per-template user prompt drives the exact behaviour).
-_SYSTEM_PROMPT = (
-    "You are an expert OCR post-processing assistant for historical Spanish "
-    "documents. You correct OCR errors faithfully without translating, "
-    "modernising, summarising or adding content."
 )
 
 # (tokenizer, model, device) cache keyed by a load key; guarded so concurrent
@@ -153,51 +134,6 @@ def _evict_all_except(keep_key: str) -> None:
         gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
-
-
-def post_process_text_local(
-    text: str,
-    model: str = DEFAULT_LOCAL_MODEL,
-    template_name: str = "full_cleanup",
-) -> str:
-    """
-    Post-process OCR text with a locally-run general instruction model.
-
-    Same return contract as the API clients: takes plain text, returns the
-    cleaned plain text (raises on failure / empty output).
-    """
-    if not text or not text.strip():
-        return text
-
-    import torch
-
-    model_name = model or DEFAULT_LOCAL_MODEL
-    tokenizer, llm, device = _load(model_name)
-
-    prompt = get_template(template_name) + text
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ]
-    prompt_text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    inputs = tokenizer(prompt_text, return_tensors="pt").to(device)
-
-    with torch.no_grad():
-        generated = llm.generate(
-            **inputs,
-            max_new_tokens=4096,
-            do_sample=False,
-            pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
-        )
-
-    new_tokens = generated[0][inputs["input_ids"].shape[1]:]
-    result = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-
-    if not result:
-        raise ValueError("Local LLM returned an empty response")
-    return result
 
 
 def post_process_text_finetuned(
