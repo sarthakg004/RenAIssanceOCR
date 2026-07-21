@@ -111,20 +111,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
             paddlepaddle-gpu==3.3.0 ; \
     fi
 
-# Pre-download paddlex fonts into site-packages. At first paddleocr
-# import, paddlex.utils.fonts tries to download PingFang-SC-Regular.ttf
-# and simfang.ttf INTO its own install directory — which fails at
-# runtime because the app runs as non-root `appuser` and /opt/venv is
-# owned by root. Baking the fonts in at build time (as root) makes the
-# import succeed without needing any writable mount or chown of the
-# entire venv.
-RUN apt-get update && apt-get install -y --no-install-recommends wget \
-    && PX_FONTS_DIR=/opt/venv/lib/python3.11/site-packages/paddlex/utils/fonts \
-    && PX_FONT_BASE=https://paddle-model-ecology.bj.bcebos.com/paddlex/PaddleX3.0/fonts \
-    && wget -q -O "$PX_FONTS_DIR/PingFang-SC-Regular.ttf" "$PX_FONT_BASE/PingFang-SC-Regular.ttf" \
-    && wget -q -O "$PX_FONTS_DIR/simfang.ttf"            "$PX_FONT_BASE/simfang.ttf" \
-    && apt-get purge -y --auto-remove wget \
-    && rm -rf /var/lib/apt/lists/*
+# NOTE: no font pre-download step. paddlex 3.0 downloaded fonts into its own
+# root-owned install dir (failing at runtime for non-root appuser), which is
+# why older builds baked them in. paddlex 3.4 changed this: fonts are lazy and
+# cached under PADDLE_PDX_CACHE_HOME (=/paddle_models, a writable named volume),
+# so they download on first use to a writable location — same pattern as models.
 
 # Slim the venv before copying it into the runtime stage.
 #
