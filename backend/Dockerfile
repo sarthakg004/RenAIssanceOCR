@@ -185,8 +185,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # the ephemeral ~/.paddlex on EVERY container recreation instead of
     # persisting in the volume.
     PADDLE_PDX_CACHE_HOME=/paddle_models \
-    # HuggingFace cache for the local post-processing LLMs (Qwen3-4B base for
-    # the fine-tuned corrector, ~8 GB, and the general Qwen2.5 model). Point it
+    # HuggingFace cache for the fine-tuned corrector's base model
+    # (google/gemma-3-4b-it, ~8 GB, GATED — needs HF_TOKEN at runtime). Point it
     # at the SAME persisted named volume as the paddle models so first-use
     # downloads survive container recreation instead of re-downloading — same
     # fix the paddle weights got. The LoRA adapter itself is baked into the
@@ -263,8 +263,16 @@ COPY --chown=appuser:appgroup . .
 # guaranteed loadable by the pinned versions regardless of how the checkpoint
 # was serialized. No-op if the trocr dir is absent. Ownership is reset so
 # appuser can read the regenerated files at runtime.
-RUN python /app/scripts/normalize_trocr_config.py && \
-    chown -R appuser:appgroup /app/models/weights/trocr /home/appuser && \
+#
+# HF_HOME is overridden for this ONE step: it normally points into
+# /paddle_models (the named volume), and this RUN executes as root — a root
+# -owned /paddle_models/hf baked into the image seeds every fresh volume
+# root-owned, so appuser could never download the corrector's base model at
+# runtime (PermissionError in huggingface_hub). Keep build-time HF writes out
+# of the volume path.
+RUN HF_HOME=/tmp/hf-build python /app/scripts/normalize_trocr_config.py && \
+    rm -rf /tmp/hf-build && \
+    chown -R appuser:appgroup /app/models/weights/trocr /home/appuser /paddle_models && \
     chmod +x /app/scripts/entrypoint.sh
 
 USER appuser
