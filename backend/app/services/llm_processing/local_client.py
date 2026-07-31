@@ -107,6 +107,17 @@ def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = F
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        # NEVER fp16 here. gemma-3 is bf16-trained and its activations overflow
+        # fp16: the logits go NaN, generate() emits nothing but <pad>, and the
+        # caller below keeps every original line — a silent no-op that looks
+        # like "the model had no corrections to make" rather than a failure.
+        # bf16 needs Ampere or newer, so older cards take the fp32 path (slower,
+        # but correct).
+        if device == "cuda":
+            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+        else:
+            dtype = torch.float32
+
         load_kwargs: dict = {}
         if quantize and device == "cuda":
             from transformers import BitsAndBytesConfig
@@ -115,16 +126,12 @@ def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = F
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_compute_dtype=dtype,
             )
             load_kwargs["device_map"] = "auto"
-            # torch_dtype, not dtype — the image pins transformers 4.53. Still a
-            # valid alias in 5.x, so this works both places.
-            load_kwargs["torch_dtype"] = torch.float16
-        else:
-            load_kwargs["torch_dtype"] = (
-                torch.float16 if device == "cuda" else torch.float32
-            )
+        # torch_dtype, not dtype — the image pins transformers 4.53. Still a
+        # valid alias in 5.x, so this works both places.
+        load_kwargs["torch_dtype"] = dtype
 
         # One local LLM resident at a time, evicted BEFORE the new load —
         # otherwise switching providers holds both on an 8 GB GPU and OOMs.
@@ -209,6 +216,7 @@ def post_process_text_finetuned(
     lines = text.split("\n")
     idx = [i for i, ln in enumerate(lines) if ln.strip()]
     out = list(lines)
+    answered = 0
 
     for start in range(0, len(idx), batch_size):
         chunk_idx = idx[start:start + batch_size]
@@ -239,6 +247,17 @@ def post_process_text_finetuned(
             corrected = " ".join(corrected.split()).strip()
             if corrected:
                 out[i] = corrected
+                answered += 1
+
+    # Keeping the original line when the model returns nothing is right per
+    # line, but if it answered NOTHING at all it is broken (NaN logits from a
+    # bad dtype do exactly this) — and silently echoing the input back looks
+    # like a clean run to the user. Fail loudly instead.
+    if idx and answered == 0:
+        raise ValueError(
+            "Fine-tuned model returned no output for any line — it may have "
+            "failed to load correctly."
+        )
 
     result = "\n".join(out).strip()
     if not result:
