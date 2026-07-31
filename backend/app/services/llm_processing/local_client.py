@@ -39,6 +39,44 @@ def _adapter_dir() -> str:
     return str(backend_root / "models" / "weights" / FINETUNED_ADAPTER_SUBDIR)
 
 
+def base_model_cached() -> bool:
+    """True when the gated base weights are already on disk.
+
+    Mirrors layout_detection.models_cached: the UI probes this so it can warn
+    about the one-time ~8 GB download instead of looking hung. Filesystem only
+    — never imports torch/transformers, so it stays cheap to call.
+
+    huggingface_hub only creates a snapshot symlink once a blob has finished
+    downloading, so a half-done shard leaves a dangling/absent entry and
+    .exists() correctly reports False.
+    """
+    hf_home = os.environ.get("HF_HOME") or str(Path.home() / ".cache" / "huggingface")
+    repo = (
+        Path(hf_home) / "hub"
+        / ("models--" + FINETUNED_BASE_MODEL.replace("/", "--"))
+    )
+    snapshots = repo / "snapshots"
+    if not snapshots.is_dir():
+        return False
+
+    for snap in snapshots.iterdir():
+        # Sharded checkpoints (gemma-3-4b is 2 shards): every file named in the
+        # index must be present, or we would flash "ready" mid-download.
+        index = snap / "model.safetensors.index.json"
+        if index.is_file():
+            try:
+                import json
+
+                shards = set(json.loads(index.read_text())["weight_map"].values())
+            except (OSError, ValueError, KeyError):
+                continue
+            if shards and all((snap / s).exists() for s in shards):
+                return True
+        elif (snap / "model.safetensors").exists():
+            return True
+    return False
+
+
 def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = False):
     """Load and cache a tokenizer + causal LM.
 

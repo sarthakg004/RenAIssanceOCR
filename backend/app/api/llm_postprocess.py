@@ -11,6 +11,7 @@ from ..services.llm_processing.factory import (
     provider_requires_key,
     LLM_PROVIDERS,
 )
+from ..services.llm_processing.local_client import base_model_cached
 from ..services.llm_processing.prompt_templates import list_templates
 
 
@@ -46,6 +47,16 @@ async def get_providers():
 async def get_templates():
     """List available post-processing prompt templates."""
     return {"templates": list_templates()}
+
+
+@router.get("/local-status")
+async def local_model_status():
+    """Are the local corrector's base weights on disk yet?
+
+    Same contract as /api/detect/models-status: the UI checks this first so it
+    can warn about the one-time ~8 GB gated download instead of looking hung.
+    """
+    return {"models_ready": base_model_cached()}
 
 
 @router.post("/post-process", response_model=PostProcessResponse)

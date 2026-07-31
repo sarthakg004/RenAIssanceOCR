@@ -288,6 +288,10 @@ export default function LayoutAwareDetectionPage({
     const [llmProcessing, setLlmProcessing] = useState(false);
     const [llmProgress, setLlmProgress] = useState(null);
     const [llmError, setLlmError] = useState(null);
+    // Local corrector only: null = unknown/not applicable, false = base weights
+    // still to download (~8 GB, one time), true = cached.
+    const [llmModelReady, setLlmModelReady] = useState(null);
+    const [downloadingLlmModel, setDownloadingLlmModel] = useState(false);
     // Stamped into the saved transcript's My Files metadata.
     const [lastLlmRun, setLastLlmRun] = useState(null);
 
@@ -714,6 +718,22 @@ export default function LayoutAwareDetectionPage({
         return true;
     }, [buildSortedRecognition, llmModel, llmTemplate]);
 
+    // The local corrector runs on our own GPU, so it's the only provider whose
+    // weights we host — and its gated base model is a one-time ~8 GB pull.
+    const isLocalLlm = llmProviderMeta ? llmProviderMeta.requires_key === false : false;
+
+    // Probe the HF cache so we can warn once instead of looking hung. Same
+    // contract as the detection-model probe above.
+    useEffect(() => {
+        if (!isLocalLlm) { setLlmModelReady(null); return undefined; }
+        let active = true;
+        fetch(`${API_BASE}/api/llm/local-status`)
+            .then((r) => r.json())
+            .then((d) => { if (active) setLlmModelReady(!!d.models_ready); })
+            .catch(() => { if (active) setLlmModelReady(null); });
+        return () => { active = false; };
+    }, [isLocalLlm]);
+
     // Returns the key, '' for keyless local providers, or null if invalid.
     // Check `=== null` — '' is a valid result.
     const validateLlmReady = useCallback(() => {
@@ -742,15 +762,20 @@ export default function LayoutAwareDetectionPage({
         }
         setLlmProcessing(true);
         setLlmError(null);
+        if (isLocalLlm && llmModelReady === false) setDownloadingLlmModel(true);
         try {
             const did = await polishPage(currentPageNum, llmProvider, key);
             if (!did) setLlmError('No recognized text on this page to polish.');
+            // It answered, so the weights are on disk now — don't warn again.
+            else if (isLocalLlm) setLlmModelReady(true);
         } catch (err) {
             setLlmError(err.message || 'Post-processing failed');
         } finally {
             setLlmProcessing(false);
+            setDownloadingLlmModel(false);
         }
-    }, [llmProcessing, validateLlmReady, currentPageNum, recognizedByPage, polishPage, llmProvider]);
+    }, [llmProcessing, validateLlmReady, currentPageNum, recognizedByPage, polishPage,
+        llmProvider, isLocalLlm, llmModelReady]);
 
     const handlePolishAllPages = useCallback(async () => {
         if (llmProcessing) return;
@@ -763,20 +788,26 @@ export default function LayoutAwareDetectionPage({
         }
         setLlmProcessing(true);
         setLlmError(null);
+        if (isLocalLlm && llmModelReady === false) setDownloadingLlmModel(true);
         try {
             for (let i = 0; i < pages.length; i += 1) {
                 setLlmProgress({ current: i + 1, total: pages.length });
                 // Sequential on purpose — provider rate limits.
                 // eslint-disable-next-line no-await-in-loop
                 await polishPage(pages[i], llmProvider, key);
+                // First page answering means the download is done; drop the
+                // banner so it doesn't sit there for the whole batch.
+                if (isLocalLlm) { setLlmModelReady(true); setDownloadingLlmModel(false); }
             }
         } catch (err) {
             setLlmError(err.message || 'Post-processing failed');
         } finally {
             setLlmProcessing(false);
             setLlmProgress(null);
+            setDownloadingLlmModel(false);
         }
-    }, [llmProcessing, validateLlmReady, availablePages, recognizedByPage, polishPage, llmProvider]);
+    }, [llmProcessing, validateLlmReady, availablePages, recognizedByPage, polishPage,
+        llmProvider, isLocalLlm, llmModelReady]);
 
     useEffect(() => {
         if (!isCurrentDetected) return;
@@ -2087,6 +2118,28 @@ export default function LayoutAwareDetectionPage({
                                         >
                                             {showLlmDiff ? 'Hide changes' : 'Show changes'}
                                         </button>
+                                    </div>
+                                )}
+
+                                {/* First-time base-model download notice */}
+                                {downloadingLlmModel && (
+                                    <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 animate-fade-in">
+                                        <div className="flex items-start gap-2">
+                                            <Loader2 size={16} className="animate-spin text-amber-600 mt-0.5 flex-shrink-0" />
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs font-bold text-amber-800">
+                                                    Setting up the local corrector (one-time)
+                                                </p>
+                                                <p className="text-[11px] text-amber-700 mt-0.5 leading-snug">
+                                                    Downloading its base model on first use — about <b>8 GB</b>, so
+                                                    expect <b>20–30 min</b> depending on your connection. Please keep
+                                                    this tab open; this only happens once.
+                                                </p>
+                                                <div className="mt-2 h-1.5 w-full bg-amber-200 rounded-full overflow-hidden">
+                                                    <div className="h-full w-1/3 bg-amber-500 rounded-full animate-indeterminate" />
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
 
