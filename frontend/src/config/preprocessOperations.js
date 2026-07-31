@@ -1,10 +1,7 @@
-/**
- * Preprocessing Operations Configuration
- * 
- * Simplified set of essential preprocessing operations for OCR.
- */
+// Operation definitions for the preprocessing sidebar: params, ranges and
+// defaults. Must stay in sync with backend/preprocessing/operations.py.
 
-// ========== OPERATION CATEGORIES ==========
+// ── Categories ──
 
 export const OPERATION_CATEGORIES = [
   {
@@ -33,10 +30,10 @@ export const OPERATION_CATEGORIES = [
   },
 ];
 
-// ========== OPERATION DEFINITIONS ==========
+// ── Operations ──
 
 export const OPERATIONS = [
-  // ===== BASIC PROCESSING =====
+  // Basic
   {
     id: 'normalize',
     name: 'Normalize',
@@ -84,7 +81,7 @@ export const OPERATIONS = [
     defaultParams: { maxAngle: 15 },
   },
 
-  // ===== ENHANCEMENT =====
+  // Enhancement
   {
     id: 'denoise',
     name: 'Denoise',
@@ -171,7 +168,7 @@ export const OPERATIONS = [
     defaultParams: { amount: 50, radius: 1 },
   },
 
-  // ===== BINARIZATION =====
+  // Binarization
   {
     id: 'threshold',
     name: 'Threshold',
@@ -213,7 +210,7 @@ export const OPERATIONS = [
     defaultParams: { method: 'otsu', blockSize: 15, k: 0.5 },
   },
 
-  // ===== CLEANUP & MORPHOLOGY =====
+  // Cleanup & morphology
   {
     id: 'morph',
     name: 'Morphological',
@@ -334,11 +331,9 @@ export const OPERATIONS = [
   },
 ];
 
-// ========== HELPER FUNCTIONS ==========
+// ── Helpers ──
 
-/**
- * Get operations grouped by category
- */
+
 export function getOperationsByCategory() {
   const grouped = {};
   OPERATION_CATEGORIES.forEach(cat => {
@@ -347,16 +342,12 @@ export function getOperationsByCategory() {
   return grouped;
 }
 
-/**
- * Get operation by ID
- */
+
 export function getOperationById(id) {
   return OPERATIONS.find(op => op.id === id);
 }
 
-/**
- * Create a default pipeline step from an operation
- */
+
 export function createPipelineStep(operationId, order = 0) {
   const operation = getOperationById(operationId);
   if (!operation) return null;
@@ -370,9 +361,7 @@ export function createPipelineStep(operationId, order = 0) {
   };
 }
 
-/**
- * Get default recommended pipeline
- */
+
 export function getRecommendedPipeline() {
   return [
     createPipelineStep('grayscale', 0),
@@ -383,9 +372,7 @@ export function getRecommendedPipeline() {
   ].filter(Boolean);
 }
 
-/**
- * Validate and check if a control should be shown
- */
+// Controls can declare a `showIf` predicate against the current params.
 export function shouldShowControl(control, currentParams) {
   if (!control.showWhen) return true;
 

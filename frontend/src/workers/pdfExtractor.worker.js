@@ -1,18 +1,8 @@
-/**
- * PDF extraction worker.
- *
- * Renders PDF pages on an OffscreenCanvas off the main thread so extraction
- * keeps running at full speed even when the browser tab is hidden (background
- * tabs aggressively throttle main-thread timers / canvas work, but workers
- * are not throttled the same way).
- *
- * Protocol:
- *   in:  { type: 'extract', id, fileBuffer, options: { scale, pageRange, splitDoublePages } }
- *   out: { type: 'page',     id, page }     // streamed per page
- *        { type: 'progress', id, progress } // 0–100
- *        { type: 'done',     id }
- *        { type: 'error',    id, error }
- */
+// Renders PDF pages on an OffscreenCanvas, off the main thread, so a hidden
+// tab doesn't throttle extraction to a crawl.
+//
+// In:  { type: 'extract', id, fileBuffer, options }
+// Out: 'page' (streamed) | 'progress' (0-100) | 'done' | 'error'
 
 import * as pdfjsLib from 'pdfjs-dist';
 // Vite resolves this URL at build time and bundles the worker.
@@ -20,11 +10,8 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-/**
- * PDF.js's default DOMCanvasFactory calls `document.createElement('canvas')`
- * for internal scratch canvases (masks, patterns, etc.). `document` doesn't
- * exist inside a Web Worker, so we provide an OffscreenCanvas-backed factory.
- */
+// PDF.js's default canvas factory reaches for `document`, which doesn't exist
+// in a worker. Back it with OffscreenCanvas instead.
 class OffscreenCanvasFactory {
   create(width, height) {
     if (width <= 0 || height <= 0) {
@@ -49,9 +36,8 @@ class OffscreenCanvasFactory {
   }
 }
 
-// Pages are shipped to the main thread as Blobs (structured-clone is cheap
-// and the pixels stay out of the JS string heap); the receiving hook wraps
-// them in object URLs.
+// Blobs, not data URLs: structured-clone is cheap and the pixels stay off the
+// JS heap. The hook wraps them in object URLs.
 
 async function renderPage(pdf, pageNum, scale, splitDoublePages) {
   const page = await pdf.getPage(pageNum);

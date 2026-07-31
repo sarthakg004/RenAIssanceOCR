@@ -9,8 +9,11 @@ with PaddleOCR, and transcribe with your choice of provider.
 `microsoft/trocr-base-printed`; runs fp16 on GPU).
 
 **Optional LLM post-correction:** Gemini / OpenAI / DeepSeek / Qwen, or a
-**Spanish fine-tuned corrector** (Qwen3-4B + LoRA adapter, run 4-bit per-line on
-the GPU — the adapter ships in the image, the base downloads on first use).
+**Spanish fine-tuned corrector** (gemma-3-4b-it + LoRA adapter, run 4-bit
+per-line on the GPU — the adapter ships in the image, the base downloads on
+first use). The base is a **gated** model, so this provider needs an `HF_TOKEN`
+in your `.env` (with the licence accepted at
+huggingface.co/google/gemma-3-4b-it); the other providers don't.
 
 ---
 

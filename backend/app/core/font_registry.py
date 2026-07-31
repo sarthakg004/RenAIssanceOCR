@@ -1,15 +1,10 @@
-"""
-Unicode Font Registration for PDF Export
-"""
+"""Register DejaVu Sans so PDF export can render non-ASCII characters."""
 
 import os
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# Register DejaVu Sans font for Unicode support in PDFs
-# This font supports a wide range of Unicode characters including special symbols
 try:
-    # Try common font paths on different systems
     font_paths = [
         '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux (Debian/Ubuntu)
         '/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf',  # Linux (Fedora/RHEL)

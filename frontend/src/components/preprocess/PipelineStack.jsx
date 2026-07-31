@@ -11,17 +11,8 @@ import TooltipInfo from './TooltipInfo';
 import OperationSlider from './OperationSlider';
 import { getOperationById, shouldShowControl } from '../../config/preprocessOperations';
 
-/**
- * PipelineStack - Drag-and-drop reorderable pipeline visualization
- * 
- * Features:
- * - Visual representation of operation pipeline
- * - Drag-and-drop reordering
- * - Enable/disable toggle per step
- * - Settings expansion per step
- * - Delete step functionality
- * - Order numbers
- */
+// The ordered operation list, reorderable by drag. Each step can be toggled,
+// expanded for its params, or deleted.
 export default function PipelineStack({
   pipeline = [],
   onReorder,
@@ -259,9 +250,7 @@ export default function PipelineStack({
   );
 }
 
-/**
- * ControlRenderer - Renders the appropriate control type
- */
+// Dispatches on control.type.
 function ControlRenderer({ control, value, onChange }) {
   switch (control.type) {
     case 'slider':

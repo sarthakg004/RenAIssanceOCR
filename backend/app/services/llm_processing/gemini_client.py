@@ -1,15 +1,10 @@
-"""
-Gemini LLM client for OCR text post-processing.
-
-Uses the same google-genai SDK pattern as the OCR Gemini provider.
-"""
+"""Gemini text post-processing — same google-genai pattern as the OCR provider."""
 
 from google import genai
 
 from .prompt_templates import get_template
 
 
-# Models suitable for text post-processing (fast + cheap)
 DEFAULT_MODEL = "gemini-2.5-flash"
 
 
@@ -19,21 +14,7 @@ def post_process_text(
     model: str = DEFAULT_MODEL,
     template_name: str = "full_cleanup",
 ) -> str:
-    """
-    Send OCR text to Gemini for post-processing / cleanup.
-
-    Args:
-        api_key: Gemini API key
-        text: Raw OCR text to improve
-        model: Gemini model ID
-        template_name: Key from prompt_templates.TEMPLATES
-
-    Returns:
-        Improved text string
-
-    Raises:
-        Exception on API errors (auth, rate limit, empty response)
-    """
+    """Clean up OCR text with Gemini. template_name keys into prompt_templates."""
     if not text or not text.strip():
         return text
 

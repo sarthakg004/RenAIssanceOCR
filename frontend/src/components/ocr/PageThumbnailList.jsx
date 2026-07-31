@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { CheckCircle2, Image as ImageIcon, Loader2 } from 'lucide-react';
 
-/**
- * Create a thumbnail from a large image
- */
+
 function createThumbnail(imageSrc, maxSize = 200) {
   return new Promise((resolve, reject) => {
-    // If already small or a blob URL, use directly
     if (imageSrc.startsWith('blob:') || imageSrc.length < 50000) {
       resolve(imageSrc);
       return;
@@ -15,7 +12,6 @@ function createThumbnail(imageSrc, maxSize = 200) {
     const img = new Image();
     img.onload = () => {
       try {
-        // Calculate thumbnail size
         let width = img.width;
         let height = img.height;
         
@@ -40,7 +36,7 @@ function createThumbnail(imageSrc, maxSize = 200) {
         ctx.imageSmoothingQuality = 'medium';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-        // Use blob URL for better memory efficiency
+        // Blob URL, not data URL — easier on memory.
         canvas.toBlob((blob) => {
           if (blob) {
             resolve(URL.createObjectURL(blob));
@@ -57,10 +53,7 @@ function createThumbnail(imageSrc, maxSize = 200) {
   });
 }
 
-/**
- * PageThumbnailList Component
- * Scrollable list of page thumbnails with lazy loading - Compact version
- */
+// Scrollable page thumbnails, lazily rendered.
 function PageThumbnailList({
   images,
   currentIndex,
@@ -104,13 +97,11 @@ function PageThumbnailList({
   );
 }
 
-// Memoize — the list re-renders on every parent tick (zoom, hover, progress)
-// even when none of its own props changed. Shallow-equal props skip the work.
+// The parent re-renders on every zoom/hover/progress tick; memo skips the work
+// when nothing here actually changed.
 export default memo(PageThumbnailList);
 
-/**
- * ThumbnailItem - Single thumbnail with lazy loading and downscaling
- */
+
 function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onClick, pageLabel }) {
   const [thumbnailSrc, setThumbnailSrc] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -120,7 +111,6 @@ function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onCl
 
   const imageSrc = image.processed || image.original;
 
-  // Lazy load and create thumbnail using IntersectionObserver
   useEffect(() => {
     if (!imageSrc || hasStartedLoading.current) return;
 
@@ -154,7 +144,6 @@ function ThumbnailItem({ image, index, isActive, isProcessed, isProcessing, onCl
     return () => observer.disconnect();
   }, [imageSrc]);
 
-  // Cleanup blob URLs
   useEffect(() => {
     return () => {
       if (thumbnailSrc && thumbnailSrc.startsWith('blob:')) {

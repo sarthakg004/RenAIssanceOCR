@@ -1,14 +1,6 @@
 import React from 'react';
 
-/**
- * ProgressBarLabeled - Progress bar with label and percentage display
- * 
- * Features:
- * - Animated progress fill
- * - Optional subtitle/detail text
- * - Pulse animation for active state
- * - Configurable colors
- */
+// Progress bar with a label, percentage and optional detail line.
 export default function ProgressBarLabeled({
   label,
   progress = 0, // 0-100

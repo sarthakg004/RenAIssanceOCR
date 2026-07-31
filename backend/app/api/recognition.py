@@ -28,12 +28,8 @@ from ..services.recognition.trocr_inference import (
 
 router = APIRouter()
 
-# ── Where to scan for trained models ─────────────────────────────────
-# Two supported layouts:
-#   • Dev (uvicorn from repo root): <repo>/backend/models/weights/
-#   • Docker image (WORKDIR=/app, backend context copied to /app):
-#                                   /app/models/weights/
-# We pick whichever exists so the same code works in both.
+# Weights live in a different place in dev vs the container, so take whichever
+# of the two candidate dirs actually exists.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BACKEND_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", ".."))
 _REPO_ROOT = os.path.abspath(os.path.join(_BACKEND_ROOT, ".."))
@@ -47,7 +43,7 @@ _MODEL_SEARCH_DIR = next(
     _CANDIDATE_DIRS[0],
 )
 
-# Cache discovered models so we don't rescan on every request
+# Rescanning the weights dir per request is pointless; refresh clears this.
 _model_cache: list[dict] | None = None
 
 
@@ -61,11 +57,6 @@ def _get_models() -> list[dict]:
     return _model_cache
 
 
-# ═════════════════════════════════════════════════════════════════════
-# Model Listing
-# ═════════════════════════════════════════════════════════════════════
-
-
 @router.get("/api/local-recognition-models", response_model=LocalModelsResponse)
 async def list_local_models():
     """Return all available local OCR model checkpoints."""
@@ -75,13 +66,6 @@ async def list_local_models():
     )
 
 
-@router.get("/api/crnn-models", response_model=LocalModelsResponse)
-async def list_crnn_models():
-    """Backward-compatible CRNN listing endpoint."""
-    models = [m for m in _get_models() if m["model_type"] == "crnn"]
-    return LocalModelsResponse(models=[LocalModelInfo(**m) for m in models])
-
-
 @router.post("/api/local-recognition-models/refresh")
 async def refresh_local_models():
     """Force rescan of model directory."""
@@ -89,21 +73,6 @@ async def refresh_local_models():
     _model_cache = None
     models = _get_models()
     return {"count": len(models), "models": [m["name"] for m in models]}
-
-
-@router.post("/api/crnn-models/refresh")
-async def refresh_crnn_models():
-    """Backward-compatible CRNN refresh endpoint."""
-    data = await refresh_local_models()
-    return {
-        "count": len([name for name in data["models"] if name.lower().startswith("crnn")]),
-        "models": [name for name in data["models"] if name.lower().startswith("crnn")],
-    }
-
-
-# ═════════════════════════════════════════════════════════════════════
-# Recognition
-# ═════════════════════════════════════════════════════════════════════
 
 
 def _decode_image(image_data: str) -> np.ndarray:
@@ -120,17 +89,12 @@ def _decode_image(image_data: str) -> np.ndarray:
 
 @router.post("/api/local-recognize", response_model=LocalRecognizeResponse)
 async def local_recognize(request: LocalRecognizeRequest):
-    """
-    Run local OCR recognition (CRNN or TrOCR) on line-level bounding boxes.
+    """Recognise the text in each line box with a local CRNN or TrOCR model.
 
-    Expects:
-    - image_data: base64 page image
-    - boxes: list of polygons (each polygon = list of [x,y] points)
-    - model_id: namespaced model id (e.g. "crnn:best_crnn", "trocr:default")
+    model_id is namespaced: "crnn:best_crnn", "trocr:default".
     """
     start = time.time()
 
-    # ── Find model ────────────────────────────────────────────
     models = _get_models()
     model_info = next((m for m in models if m["id"] == request.model_id), None)
     if model_info is None:
@@ -139,7 +103,6 @@ async def local_recognize(request: LocalRecognizeRequest):
             detail=f"Model '{request.model_id}' not found. Available: {[m['id'] for m in models]}",
         )
 
-    # ── Decode image ──────────────────────────────────────────
     try:
         image_bgr = _decode_image(request.image_data)
     except Exception as e:
@@ -147,7 +110,6 @@ async def local_recognize(request: LocalRecognizeRequest):
 
     model_type = model_info["model_type"]
 
-    # ── Get recognizer (lazy-loaded + cached) ─────────────────
     try:
         if model_type == "crnn":
             recognizer = get_crnn_recognizer(model_info["path"])
@@ -161,11 +123,9 @@ async def local_recognize(request: LocalRecognizeRequest):
             detail=f"Failed to load model '{request.model_id}': {e}",
         )
 
-    # ── Crop and recognise each box ───────────────────────────
     results: list[LocalRecognizeResult] = []
 
     if len(request.boxes) > 0:
-        # Crop all line images
         crops = []
         for i, box in enumerate(request.boxes):
             try:
@@ -174,19 +134,18 @@ async def local_recognize(request: LocalRecognizeRequest):
                 else:
                     crop = crop_polygon_gray(image_bgr, box)
                 crops.append((i, crop))
-            except Exception as e:
-                # If a single crop fails, record empty text
+            except Exception:
                 results.append(LocalRecognizeResult(box_index=i, text=""))
 
-        # Batch inference
         if crops:
             try:
                 images = [c[1] for c in crops]
                 texts = recognizer.predict_batch(images)
                 for (idx, _), text in zip(crops, texts):
                     results.append(LocalRecognizeResult(box_index=idx, text=text))
-            except Exception as e:
-                # Fallback to single inference
+            except Exception:
+                # Batch failed — retry one at a time so one bad crop doesn't
+                # cost us the whole page.
                 for idx, img in crops:
                     try:
                         if hasattr(recognizer, "predict"):
@@ -197,7 +156,6 @@ async def local_recognize(request: LocalRecognizeRequest):
                         text = ""
                     results.append(LocalRecognizeResult(box_index=idx, text=text))
 
-    # Sort results by box_index
     results.sort(key=lambda r: r.box_index)
 
     elapsed_ms = int((time.time() - start) * 1000)
@@ -209,16 +167,3 @@ async def local_recognize(request: LocalRecognizeRequest):
         model_type=model_type,
         device=recognizer.device,
     )
-
-
-@router.post("/api/crnn-recognize", response_model=LocalRecognizeResponse)
-async def crnn_recognize(request: LocalRecognizeRequest):
-    """Backward-compatible CRNN recognition endpoint."""
-    req_model_id = request.model_id
-    if not req_model_id.startswith("crnn:"):
-        request = LocalRecognizeRequest(
-            image_data=request.image_data,
-            boxes=request.boxes,
-            model_id=f"crnn:{req_model_id}",
-        )
-    return await local_recognize(request)

@@ -1,26 +1,22 @@
-"""
-Local (offline) fine-tuned LLM corrector for OCR text post-processing.
+"""The `local_es` corrector: gemma-3-4b-it + our shipped Spanish LoRA adapter.
 
-The ``local_es`` provider: base ``Qwen/Qwen3-4B-Instruct-2507`` + a LoRA adapter
-shipped in the image (models/weights/postprocess/...). The base weights download
-+ cache on first use (mirrors the PaddleOCR weight pattern); the adapter rides
-on top. Loaded in 4-bit (QLoRA, the same config it was trained with) and run
-**per line**, exactly as in RenAIssanceExperimental notebook 05. Requires CUDA —
-4-bit needs a GPU, and it keeps the footprint to ~3 GB VRAM. No API key, no
-network at inference time.
+Runs in 4-bit QLoRA (same config it was trained with, ~3.5 GB VRAM) and corrects
+one line at a time, matching training. GPU only — 4-bit needs CUDA.
+
+gemma-3 is gated on HuggingFace, so the first base-weights download needs
+HF_TOKEN set and the licence accepted at huggingface.co/google/gemma-3-4b-it.
 """
 
 import os
 from pathlib import Path
 from threading import Lock
 
-# The Spanish-finetuned corrector: base model + shipped LoRA adapter.
-FINETUNED_BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
-FINETUNED_ADAPTER_SUBDIR = "postprocess/Qwen3-4B-Instruct-2507-lora"
+# AutoModelForCausalLM resolves this to the multimodal Gemma3 class; text-only
+# generation works fine and matches how the adapter was trained.
+FINETUNED_BASE_MODEL = "google/gemma-3-4b-it"
+FINETUNED_ADAPTER_SUBDIR = "postprocess/gemma-3-4b-it-lora"
 
-# Per-line palaeography system prompt — MUST match the one the adapter was
-# fine-tuned with (RenAIssanceExperimental notebook 05). The model expects one
-# raw OCR line per turn and returns the corrected line.
+# Must stay byte-identical to the prompt the adapter was fine-tuned with.
 _FINETUNED_SYSTEM_PROMPT = (
     "You are an expert in early-modern Spanish (15th-19th century) palaeography "
     "and OCR correction. The user gives you one raw OCR line from a historical "
@@ -31,27 +27,23 @@ _FINETUNED_SYSTEM_PROMPT = (
     "or add content. If the line is already correct, return it unchanged."
 )
 
-# (tokenizer, model, device) cache keyed by a load key; guarded so concurrent
-# requests don't trigger two simultaneous multi-GB loads.
+# (tokenizer, model, device) cache. The lock stops two requests from kicking off
+# simultaneous multi-GB loads.
 _CACHE: dict = {}
 _LOAD_LOCK = Lock()
 
 
 def _adapter_dir() -> str:
-    """Resolve the shipped LoRA adapter directory (dev + container layouts)."""
-    # this file: backend/app/services/llm_processing/local_client.py
+    """Shipped LoRA adapter dir; same path in dev and in the container."""
     backend_root = Path(__file__).resolve().parents[3]
     return str(backend_root / "models" / "weights" / FINETUNED_ADAPTER_SUBDIR)
 
 
 def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = False):
-    """
-    Load (and cache) a tokenizer + causal-LM.
+    """Load and cache a tokenizer + causal LM.
 
-    adapter_dir: if given, load `model_name` as base then apply the PEFT LoRA
-                 adapter from this local directory.
-    quantize:    if True and CUDA is available, load the base in 4-bit nf4
-                 (QLoRA) — keeps the finetuned 4B model at ~3 GB VRAM.
+    adapter_dir applies a local PEFT LoRA on top of the base; quantize loads
+    4-bit nf4 when CUDA is present, which keeps the 4B model near 3 GB VRAM.
     """
     key = f"{model_name}::{adapter_dir or ''}::{'q4' if quantize else 'full'}"
     cached = _CACHE.get(key)
@@ -70,11 +62,9 @@ def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = F
 
         device = select_torch_device()
 
-        # Always load the tokenizer from the BASE model, never the adapter dir:
-        # a LoRA adapter doesn't change the vocabulary, and the base model's
-        # tokenizer.json is always format-compatible with the installed
-        # tokenizers version (the shipped adapter file was serialized by a
-        # newer tokenizers and might not deserialize under the pinned one).
+        # Tokenizer comes from the BASE model, never the adapter dir. LoRA
+        # doesn't touch the vocabulary, and the adapter's tokenizer.json was
+        # serialized by a newer `tokenizers` than the one pinned in the image.
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -90,19 +80,17 @@ def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = F
                 bnb_4bit_compute_dtype=torch.float16,
             )
             load_kwargs["device_map"] = "auto"
-            # `torch_dtype` (not `dtype`): the image pins transformers 4.53,
-            # where `torch_dtype` is the accepted arg; it stays a valid alias
-            # in transformers 5.x too, so this works in dev and in the image.
+            # torch_dtype, not dtype — the image pins transformers 4.53. Still a
+            # valid alias in 5.x, so this works both places.
             load_kwargs["torch_dtype"] = torch.float16
         else:
             load_kwargs["torch_dtype"] = (
                 torch.float16 if device == "cuda" else torch.float32
             )
 
-        # OOM guard: keep only ONE local LLM resident, and free it BEFORE
-        # loading the new one so a provider switch (e.g. the 6 GB fp16 `local`
-        # → the 3 GB 4-bit `local_es`) never holds both on an 8 GB GPU at once.
-        # Post-processing runs one request at a time, so this is safe.
+        # One local LLM resident at a time, evicted BEFORE the new load —
+        # otherwise switching providers holds both on an 8 GB GPU and OOMs.
+        # Safe because post-processing runs one request at a time.
         _evict_all_except(key)
 
         model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
@@ -112,8 +100,7 @@ def _load(model_name: str, *, adapter_dir: str | None = None, quantize: bool = F
 
             model = PeftModel.from_pretrained(model, adapter_dir)
 
-        # device_map="auto" already placed the (quantized) model; only move
-        # non-quantized models explicitly.
+        # device_map="auto" already placed the quantized model.
         if "device_map" not in load_kwargs:
             model.to(device)
         model.eval()
@@ -142,15 +129,11 @@ def post_process_text_finetuned(
     template_name: str | None = None,  # ignored; per-line system prompt is fixed
     batch_size: int = 16,
 ) -> str:
-    """
-    Correct OCR text with the Spanish-finetuned Qwen3-4B LoRA adapter.
+    """Correct OCR text with the Spanish-finetuned gemma LoRA.
 
-    The model was trained on single OCR lines, so we correct **line by line**
-    (blank lines preserved to keep the page structure) and rejoin — feeding it
-    a whole page would be out of distribution. 4-bit QLoRA on the GPU.
-
-    Requires CUDA: the 4-bit adapter needs a GPU. Raises a clear error on CPU
-    (the API providers remain available there).
+    Line by line, because that's how the adapter was trained — a whole page is
+    out of distribution. Blank lines are kept so paragraphs survive. Raises on
+    CPU-only hosts; the API providers still work there.
     """
     if not text or not text.strip():
         return text
@@ -162,20 +145,29 @@ def post_process_text_finetuned(
     if select_torch_device() != "cuda":
         raise ValueError(
             "The local fine-tuned Spanish model requires a GPU (4-bit QLoRA). "
-            "Use a cloud provider or the general 'Local LLM' on CPU-only hosts."
+            "Use a cloud provider (Gemini/OpenAI) on CPU-only hosts."
         )
 
     adapter_dir = _adapter_dir()
     if not os.path.isdir(adapter_dir):
         raise ValueError(f"Fine-tuned adapter not found at {adapter_dir}")
 
-    tokenizer, llm, device = _load(
-        FINETUNED_BASE_MODEL, adapter_dir=adapter_dir, quantize=True
-    )
+    try:
+        tokenizer, llm, device = _load(
+            FINETUNED_BASE_MODEL, adapter_dir=adapter_dir, quantize=True
+        )
+    except Exception as exc:
+        # Turn huggingface_hub's GatedRepoError/401 into something actionable.
+        msg = str(exc).lower()
+        if "gated" in msg or "401" in msg or "authoriz" in msg or "token" in msg:
+            raise ValueError(
+                f"Could not download the gated base model '{FINETUNED_BASE_MODEL}'. "
+                "Set HF_TOKEN in the environment and accept the licence at "
+                "huggingface.co/google/gemma-3-4b-it."
+            ) from exc
+        raise
     tokenizer.padding_side = "left"  # decoder-only batched generation
 
-    # Split into lines; correct only non-blank lines, preserve the rest so the
-    # page structure (paragraph breaks) survives.
     lines = text.split("\n")
     idx = [i for i, ln in enumerate(lines) if ln.strip()]
     out = list(lines)
@@ -204,9 +196,8 @@ def post_process_text_finetuned(
         new = gen[:, enc["input_ids"].shape[1]:]
         decoded = tokenizer.batch_decode(new, skip_special_tokens=True)
         for i, corrected in zip(chunk_idx, decoded):
-            # Collapse any stray newlines: the frontend maps the result back
-            # onto boxes by line index, so one input line must stay one output
-            # line. Never blank out a line the model empties by mistake.
+            # One input line must stay one output line — the frontend maps
+            # results back onto boxes by index. Never blank a line out either.
             corrected = " ".join(corrected.split()).strip()
             if corrected:
                 out[i] = corrected

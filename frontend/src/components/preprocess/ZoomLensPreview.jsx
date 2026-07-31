@@ -1,16 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { X, ZoomIn, ZoomOut, Move } from 'lucide-react';
 
-/**
- * ZoomLensPreview - Floating zoom window for text detail inspection
- * 
- * Features:
- * - Magnified view of image region
- * - Click and drag to pan
- * - Adjustable zoom level
- * - Side-by-side original vs processed comparison
- * - Draggable window position
- */
+// Floating magnifier for inspecting text detail, original beside processed.
+// Both the lens and the window itself are draggable.
 export default function ZoomLensPreview({
   originalImage,
   processedImage,
@@ -33,7 +25,6 @@ export default function ZoomLensPreview({
   const windowRef = useRef(null);
   const imageContainerRef = useRef(null);
 
-  // Handle window dragging
   const handleWindowMouseDown = useCallback((e) => {
     if (e.target.closest('.lens-content')) return;
     setIsDragging(true);
@@ -56,7 +47,6 @@ export default function ZoomLensPreview({
     setIsDragging(false);
   }, []);
 
-  // Handle lens panning within image
   const handleLensMouseDown = useCallback((e) => {
     setIsPanning(true);
     setPanStart({ x: e.clientX, y: e.clientY });

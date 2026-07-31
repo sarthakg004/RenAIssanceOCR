@@ -18,22 +18,10 @@ import { toDataUrl } from '../utils/imageUrl';
 
 const API_BASE = API_ORIGIN;
 
-/**
- * Dataset Generation page — shows alignment preview and export controls.
- *
- * Supports two modes:
- *   - "recognition": line crops + transcript labels (existing behavior)
- *   - "detection": full images + COCO bbox annotations (no transcript needed)
- *
- * Props:
- *   pages            - array of page objects with .pageNumber, .thumbnail
- *   selectedPages    - array of selected page numbers
- *   processedImages  - {pageNumber: dataUrl}
- *   transcript       - {pageKey: [lines]}
- *   allPagesBoxes    - {pageNumber: [polygon, ...]}
- *   onBack           - go back callback
- *   bookName         - user-supplied book name
- */
+// Alignment preview plus the export controls.
+//
+// "recognition" exports line crops with transcript labels; "detection" exports
+// whole images with bbox annotations and needs no transcript.
 export default function DatasetGenerationPage({
   pages,
   selectedPages,
@@ -51,15 +39,13 @@ export default function DatasetGenerationPage({
   const [isSavingLocal, setIsSavingLocal] = useState(false);
   const [exportError, setExportError] = useState(null);
   const [previewIdx, setPreviewIdx] = useState(0);
-  // When the upstream flow already chose a mode (e.g. user picked Detection
-  // at upload time and never collected a transcript), respect it and hide
-  // the toggle. Otherwise default to recognition with the toggle visible.
+  // If upload already committed to a mode, honour it and hide the toggle.
   const [datasetType, setDatasetType] = useState(forceMode || 'recognition');
   const [bboxFormat, setBboxFormat] = useState('txt'); // 'txt' | 'json' | 'yolo' | 'coco'
   const lastSavedSignatureRef = useRef('');
   const isModeLocked = forceMode != null;
 
-  // ── Detection-mode data ──────────────────────────────────────────
+  // ── Detection data ──
   const detectionData = useMemo(() => {
     if (!allPagesBoxes) return [];
     return selectedPages
@@ -74,7 +60,7 @@ export default function DatasetGenerationPage({
 
   const totalDetectionBoxes = detectionData.reduce((s, d) => s + d.numBoxes, 0);
 
-  // ── Recognition-mode data (existing) ─────────────────────────────
+  // ── Recognition data ──
   const alignmentData = useMemo(() => {
     if (!transcript || !allPagesBoxes) return [];
 
@@ -127,11 +113,11 @@ export default function DatasetGenerationPage({
   const totalPairs = alignmentData.reduce((s, d) => s + d.numPairs, 0);
   const totalMismatches = alignmentData.filter((d) => d.mismatch).length;
 
-  // ── Preview data (depends on mode) ───────────────────────────────
+  // ── Preview ──
   const previewList = datasetType === 'detection' ? detectionData : alignmentData;
   const currentPreview = previewList[previewIdx] || null;
 
-  // ── Export handlers ──────────────────────────────────────────────
+  // ── Export ──
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -218,7 +204,7 @@ export default function DatasetGenerationPage({
   };
 
   const handleSaveLocal = async () => {
-    // Ask for a name before showing the saving state so a cancel is clean.
+    // Name first, so cancelling doesn't leave a spinner up.
     const defaultName = bookName && bookName !== 'dataset' ? bookName : 'My Dataset';
     const chosenName = window.prompt('Name this dataset:', defaultName);
     if (chosenName === null) return;                       // user cancelled
@@ -232,11 +218,9 @@ export default function DatasetGenerationPage({
         if (!proceed) return;
       }
     } catch {
-      // If the check fails, proceed with saving anyway
     }
 
-    // Preprocessing + detection/layout models carried from step 4, stamped
-    // into the saved dataset's My Files metadata/tags.
+    // Carried from step 4 into the My Files metadata/tags.
     const combinedModelInfo = {
       ...modelInfo,
       preprocessing:
@@ -452,7 +436,7 @@ export default function DatasetGenerationPage({
           <div className="flex-1 overflow-y-auto p-4">
             {currentPreview ? (
               isDetection ? (
-                /* Detection preview: show bbox count per page */
+                /* Detection: bbox count per page */
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-semibold text-gray-700">
@@ -488,7 +472,7 @@ export default function DatasetGenerationPage({
                   </div>
                 </div>
               ) : (
-                /* Recognition preview: existing alignment view */
+                /* Recognition: alignment view */
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-semibold text-gray-700">

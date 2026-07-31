@@ -1,16 +1,10 @@
-"""The shared torch device helper must pick a valid device and never crash on
-its cache-clearing path (covers the new cuda/mps/cpu selection)."""
+"""Device selection must always land on a real device, cuda > mps > cpu."""
 
-from app.utils.torch_device import empty_device_cache, select_torch_device
+from app.utils.torch_device import select_torch_device
 
 
 def test_select_returns_known_device():
     assert select_torch_device() in ("cuda", "mps", "cpu")
-
-
-def test_empty_cache_is_noop_on_cpu():
-    # Must not raise regardless of the active backend.
-    empty_device_cache("cpu")
 
 
 def test_cuda_preferred_when_available(monkeypatch):

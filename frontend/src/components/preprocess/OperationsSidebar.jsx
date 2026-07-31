@@ -15,18 +15,9 @@ import {
   getOperationsByCategory
 } from '../../config/preprocessOperations';
 
-/**
- * OperationsSidebar - Collapsible accordion-based operations panel
- * 
- * Features:
- * - Operations grouped by category with accordion
- * - Enable/disable operations with checkbox
- * - Parameter controls per operation
- * - Quick actions: Reset, Recommended preset
- * - Compact design for sidebar use
- */
+// Accordion of operations grouped by category, plus reset / recommended-preset
+// shortcuts.
 
-// Icon mapping for categories
 const CATEGORY_ICONS = {
   basic: Sliders,
   enhancement: Sparkles,

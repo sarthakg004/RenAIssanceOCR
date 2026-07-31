@@ -1,17 +1,7 @@
-"""
-Transcript Parser Service
+"""Split a transcript file (TXT/DOCX/PDF/MD) into {page_key: [lines]}.
 
-Parses transcript files (TXT, DOCX, PDF, Markdown) and splits them
-into per-page line lists using page markers.
-
-Supported markers (all case-insensitive, delimiters flexible):
-  "PDF p1"
-  "PDF p2 - left"   /  "PDF p2 left"
-  "PDF p3 - right"  /  "PDF p3 right"
-  "--- Page 4 ---"  /  "--- page 4 - left ---"
-  "[Page 5]"        /  "[Page 5 - right]"
-  "Page 6"          (bare)
-  "p1", "p1 left", "p1-right"  (shorthand)
+Page markers are matched loosely — "PDF p1", "--- Page 4 - left ---",
+"[Page 5]", "Page 6", "p1-right" all work, case-insensitively.
 """
 
 import io
@@ -19,8 +9,7 @@ import re
 from typing import Dict, List, Optional
 
 
-# ── Page-marker patterns ────────────────────────────────────────────
-# Side group: optional separator (space/dash/–/—) followed by left|right
+# Optional " left"/" right" suffix, with any of space/-/–/— as the separator.
 _SIDE_SUFFIX = r"(?:[\s\-–—]+(?P<side>left|right))?"
 
 _PAGE_PATTERNS = [
@@ -53,7 +42,7 @@ _PAGE_PATTERNS = [
 
 
 def _match_page_marker(line: str) -> Optional[str]:
-    """Return a page key (e.g. '3', '3_left') if *line* is a page marker."""
+    """-> '3' / '3_left' if the line is a page marker, else None."""
     for pat in _PAGE_PATTERNS:
         m = pat.match(line)
         if m:
@@ -68,16 +57,14 @@ def _match_page_marker(line: str) -> Optional[str]:
     return None
 
 
-# ── Raw text extraction per format ──────────────────────────────────
+# ── Text extraction per format ──────────────────────────────────────
 
 def _extract_text_from_txt(data: bytes) -> str:
-    """Decode plain-text bytes (UTF-8 with BOM tolerance)."""
     text = data.decode("utf-8-sig", errors="replace")
     return text
 
 
 def _extract_text_from_docx(data: bytes) -> str:
-    """Extract all paragraph text from a .docx file."""
     from docx import Document
 
     doc = Document(io.BytesIO(data))
@@ -85,7 +72,6 @@ def _extract_text_from_docx(data: bytes) -> str:
 
 
 def _extract_text_from_pdf(data: bytes) -> str:
-    """Extract text from each page of a PDF (using PyMuPDF / fitz)."""
     try:
         import fitz  # PyMuPDF
     except ImportError:
@@ -102,7 +88,6 @@ def _extract_text_from_pdf(data: bytes) -> str:
 
 
 def _extract_text_from_markdown(data: bytes) -> str:
-    """Markdown is plain text — just decode."""
     return data.decode("utf-8-sig", errors="replace")
 
 
@@ -113,7 +98,7 @@ _EXTRACTORS = {
     "application/pdf": _extract_text_from_pdf,
 }
 
-# Extension-based fallback
+# Used when the browser sends a useless content-type.
 _EXT_MAP = {
     ".txt": "text/plain",
     ".md": "text/markdown",
@@ -124,14 +109,10 @@ _EXT_MAP = {
 
 
 def extract_text(data: bytes, filename: str = "", content_type: str = "") -> str:
-    """
-    Extract raw text from transcript file bytes.
-    Falls back based on filename extension if content_type is ambiguous.
-    """
+    """Get raw text out of the uploaded bytes, by content-type or extension."""
     mime = content_type.lower().split(";")[0].strip() if content_type else ""
 
     if mime not in _EXTRACTORS:
-        # Try extension
         import os
         ext = os.path.splitext(filename)[1].lower()
         mime = _EXT_MAP.get(ext, "text/plain")
@@ -146,19 +127,15 @@ def parse_transcript(
     raw_text: str,
     default_page: str = "1",
 ) -> Dict[str, List[str]]:
-    """
-    Split *raw_text* into ``{page_key: [lines]}`` using embedded page markers.
+    """Split raw text on page markers into {page_key: [lines]}.
 
-    If no page markers are found the whole text goes under *default_page*.
-    Empty lines are removed; whitespace is normalised (strip).
+    No markers at all -> everything lands under default_page. Blank lines go.
     """
     pages: Dict[str, List[str]] = {}
     lines = raw_text.splitlines()
     has_any_marker = any(_match_page_marker(line) is not None for line in lines)
 
-    # If there are page markers, ignore preface lines before first marker.
-    # If there are no markers at all, keep backward-compatible fallback
-    # and put everything under default_page.
+    # With markers present, anything before the first one is preface — drop it.
     current_key: Optional[str] = None if has_any_marker else default_page
 
     for raw_line in lines:
@@ -167,14 +144,12 @@ def parse_transcript(
             current_key = marker
             continue
 
-        # Skip lines that appear before any page marker
-        if current_key is None:
+        if current_key is None:  # still in the preface
             continue
 
         cleaned = raw_line.strip()
         if not cleaned:
             continue
-        # Strip "END OF EXTRACT" marker lines (and stop collecting for this page)
         if re.match(r"^end\s+of\s+extract\s*$", cleaned, re.IGNORECASE):
             continue
         pages.setdefault(current_key, []).append(cleaned)
@@ -187,6 +162,6 @@ def parse_transcript_bytes(
     filename: str = "",
     content_type: str = "",
 ) -> Dict[str, List[str]]:
-    """Convenience: extract text then parse into page→lines dict."""
+    """extract_text + parse_transcript in one call."""
     raw = extract_text(data, filename, content_type)
     return parse_transcript(raw)

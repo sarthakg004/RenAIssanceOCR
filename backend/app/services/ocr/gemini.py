@@ -1,6 +1,4 @@
-"""
-Gemini OCR Provider — uses Google GenAI SDK.
-"""
+"""Gemini OCR via the google-genai SDK."""
 
 import time
 
@@ -12,9 +10,8 @@ from typing import Optional
 from .base import BaseOCRProvider
 from ...utils.prompt import OCR_PROMPT
 
-# Gemini often returns transient 503 "high demand" / 500 errors. They usually
-# clear in a second or two, so retry with backoff before giving up. 4xx errors
-# (bad key, invalid model, daily quota) are NOT retried — they won't clear.
+# 5xx from Gemini ("high demand") usually clears in a second. 4xx won't, so
+# only ServerError is retried below.
 _MAX_RETRIES = 2
 _RETRY_BACKOFF_S = (2,)
 
@@ -50,13 +47,12 @@ AVAILABLE_MODELS = [
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 MODEL_IDS = [m["id"] for m in AVAILABLE_MODELS]
 
-# Match the other providers' request timeout so a slow/thinking call can't
-# hang forever (and silently burn free-tier quota) with no response.
+# Without this a thinking model can hang indefinitely, burning free-tier quota.
 REQUEST_TIMEOUT_MS = 120_000
 
 
 def get_gemini_client(api_key: str):
-    """Create Gemini client with provided API key"""
+
     return genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
@@ -71,12 +67,10 @@ class GeminiProvider(BaseOCRProvider):
     MODEL_IDS = MODEL_IDS
 
     def _generate(self, client, model_name: str, image_bytes: bytes, mime_type: str, prompt: str):
-        """One generation with retry-on-5xx (503 'high demand' is transient)."""
-        # Gemini 3 models "think" by default and can spend the token budget
-        # reasoning — returning no text on a dense page image. OCR wants
-        # transcription, not reasoning, so cap the thinking. `thinking_level`
-        # only exists in newer google-genai SDKs; the pinned one lacks it, so
-        # guard on the field and skip the config where unsupported.
+        """One generation, retrying transient 5xx."""
+        # Gemini 3 thinks by default and can burn the whole token budget
+        # reasoning about a dense page, returning no text at all. Cap it.
+        # thinking_level only exists in newer SDKs, hence the field check.
         config = None
         if model_name.startswith("gemini-3") and "thinking_level" in types.ThinkingConfig.model_fields:
             config = types.GenerateContentConfig(
@@ -106,9 +100,8 @@ class GeminiProvider(BaseOCRProvider):
 
         text = response.text
         if not text:
-            # Thinking models can finish with no text part (all budget spent
-            # thinking, or output blocked). Surface why instead of returning
-            # an empty string the UI would show as a blank transcription.
+            # Empty means the budget went to thinking or the output was
+            # blocked. Say so — a blank transcript looks like a silent failure.
             reason = getattr(response, "prompt_feedback", None) or getattr(
                 response, "candidates", None
             )

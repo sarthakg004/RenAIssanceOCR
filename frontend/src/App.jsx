@@ -7,11 +7,11 @@ import MyFilesPage from './pages/MyFilesPage';
 import CombinedUploadPage from './pages/CombinedUploadPage';
 import PageMatchReviewPage from './pages/PageMatchReviewPage';
 import DatasetGenerationPage from './pages/DatasetGenerationPage';
-import { UploadPage } from './features/upload';
-import { SelectPage } from './features/upload';
-import { PreprocessPage } from './features/preprocess';
-import { TextDetectionPage } from './features/ocr';
-import { TextRecognitionPage } from './features/ocr';
+import UploadPage from './features/upload/pages/UploadPage';
+import SelectPage from './features/upload/pages/SelectPage';
+import PreprocessPage from './features/preprocess/pages/PreprocessPage';
+import TextDetectionPage from './features/ocr/pages/TextDetectionPage';
+import TextRecognitionPage from './features/ocr/pages/TextRecognitionPage';
 import LayoutAwareDetectionPage from './components/LayoutAwareDetectionPanel';
 import { usePdfPreview } from './hooks/usePdfPreview';
 import { revokeObjectUrls } from './utils/imageUrl';
@@ -21,15 +21,15 @@ import { fetchMe, logout as apiLogout } from './features/auth/authApi';
 
 
 function App() {
-  // ── Auth gate ─────────────────────────────────────────────────────
+  // ── Auth gate ──
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
-  // ── Mode: null (home), 'ocr', 'dataset', 'files' ─────────────────
+  // null (home) | 'ocr' | 'dataset' | 'files'
   const [mode, setMode] = useState(null);
 
-  // ── Shared state ──────────────────────────────────────────────────
+  // ── Shared state ──
   const [currentStep, setCurrentStep] = useState(1);
   const [files, setFiles] = useState(null);
   const [selectedPages, setSelectedPages] = useState([]);
@@ -37,25 +37,23 @@ function App() {
   const [detectionMethod, setDetectionMethod] = useState(null);
   const [detectionProvider, setDetectionProvider] = useState(null);
 
-  // ── Dataset-specific state ────────────────────────────────────────
-  // 'recognition' (default — needs transcript, runs match review)
-  // 'detection'   (bbox-only — no transcript, no match review)
+  // ── Dataset state ──
+  // 'recognition' needs a transcript and runs match review; 'detection' is
+  // boxes only, so it skips both.
   const [datasetMode, setDatasetMode] = useState('recognition');
   const [parsedTranscript, setParsedTranscript] = useState(null);
   const [allPagesBoxes, setAllPagesBoxes] = useState({});
   const [alignedTranscriptByPage, setAlignedTranscriptByPage] = useState({});
   const [isProcessingBook, setIsProcessingBook] = useState(false);
-  // Cache detection + alignment state so it survives step 4 ↔ 5 navigation
+  // Survives step 4 <-> 5 navigation.
   const [detectionCache, setDetectionCache] = useState({ pages: {}, alignment: {} });
 
   const [ocrDetectionCache, setOcrDetectionCache] = useState({ pages: {}, alignment: {} });
 
-  // Applied preprocessing op list (from PreprocessPage) + detection/layout
-  // models chosen in step 4 — saved into My Files metadata/tags downstream.
+  // Both end up as My Files metadata/tags.
   const [preprocessing, setPreprocessing] = useState([]);
   const [detectionModelInfo, setDetectionModelInfo] = useState({});
 
-  // PDF preview hook
   const {
     pages,
     isLoading,
@@ -66,13 +64,12 @@ function App() {
     reset: resetPdfPreview,
   } = usePdfPreview();
 
-  // Handle file selection
   const handleFilesSelected = useCallback((selectedFiles) => {
     setFiles(selectedFiles);
     setSelectedPages([]);
   }, []);
 
-  // ── Dataset: combined upload (book + optional transcript) ─────────
+  // ── Dataset: combined upload ──
   const handleCombinedUploadNext = useCallback(async (bookFiles, transcript, mode = 'recognition') => {
     if (!bookFiles || bookFiles.length === 0) return;
     setIsProcessingBook(true);
@@ -86,9 +83,8 @@ function App() {
       } else {
         loadedPages = await loadImages(bookFiles);
       }
-      // Recognition mode lets Match Review pick the pages. Detection mode
-      // uses step 2 as a Select-Pages step; preselect everything so the
-      // user can deselect what they don't want.
+      // Detection mode uses step 2 as a Select-Pages step, so preselect
+      // everything and let the user deselect. Recognition mode picks in review.
       if (mode === 'detection' || !isPdf) {
         setSelectedPages((loadedPages || []).map((p) => p.pageNumber));
       }
@@ -101,7 +97,7 @@ function App() {
     }
   }, [extractPages, loadImages]);
 
-  // ── Dataset: after review page matching ───────────────────────────
+  // ── Dataset: after match review ──
   const handleMatchReviewNext = useCallback((matchedPageNumbers, updatedTranscript) => {
     setSelectedPages(matchedPageNumbers);
     if (updatedTranscript) setParsedTranscript(updatedTranscript);
@@ -109,7 +105,6 @@ function App() {
   }, []);
 
 
-  // Handle proceeding from upload step
   const handleUploadNext = useCallback(async () => {
     if (!files || files.length === 0) return;
 
@@ -133,12 +128,10 @@ function App() {
     }
   }, [files, extractPages, loadImages, mode]);
 
-  // Handle selection step
   const handleSelectionChange = useCallback((newSelection) => {
     setSelectedPages(newSelection);
   }, []);
 
-  // Navigation
   const handleStepClick = useCallback((stepId) => {
     if (stepId <= currentStep) {
       setCurrentStep(stepId);
@@ -149,13 +142,12 @@ function App() {
     setCurrentStep(step);
   }, []);
 
-  // Reset to home
   const handleReset = useCallback(() => {
     setMode(null);
     setCurrentStep(1);
     setFiles(null);
     setSelectedPages([]);
-    // Processed pages are Blob-backed object URLs — free them for the next book.
+    // Object URLs leak unless we revoke them before the next book.
     revokeObjectUrls(Object.values(processedImages));
     setProcessedImages({});
     setDetectionMethod(null);
@@ -172,13 +164,13 @@ function App() {
     resetPdfPreview();
   }, [resetPdfPreview, processedImages]);
 
-  // ── Mode selection from HomePage ──────────────────────────────────
+  // ── Mode selection ──
   const handleSelectMode = useCallback((selectedMode) => {
     setMode(selectedMode);
     setCurrentStep(1);
   }, []);
 
-  // ── Auth: check existing session on first load ────────────────────
+  // ── Check for an existing session on load ──
   useEffect(() => {
     let active = true;
     fetchMe().then((u) => {
@@ -201,9 +193,7 @@ function App() {
     }
   }, [handleReset]);
 
-  // ════════════════════════════════════════════════════════════════════
-  // Auth gate — must be logged in before the app loads
-  // ════════════════════════════════════════════════════════════════════
+  // Must be logged in before anything else renders.
   if (!authChecked) {
     return (
       <div className="min-h-screen w-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50">
@@ -216,9 +206,7 @@ function App() {
     return <AuthPage onAuthSuccess={setUser} />;
   }
 
-  // ════════════════════════════════════════════════════════════════════
-  // Show HomePage when no mode is selected
-  // ════════════════════════════════════════════════════════════════════
+  // No mode picked yet -> home.
   if (!mode) {
     return (
       <>
@@ -243,12 +231,10 @@ function App() {
     return <MyFilesPage onBack={handleReset} />;
   }
 
-  // ════════════════════════════════════════════════════════════════════
-  // DATASET MODE  (steps: 1=Upload+Transcript, 2=Match Review, 3=Preprocess, 4=Detect&Align, 5=Export)
-  // ════════════════════════════════════════════════════════════════════
+  // ── Dataset mode: upload -> match review -> preprocess -> detect -> export ──
   if (mode === 'dataset') {
 
-    // ── Full-screen pass-through steps ───────────────────────────────
+    // ── Full-screen steps ──
     if (currentStep === 3) {
       const backStep = 2;
       return (
@@ -312,7 +298,7 @@ function App() {
       );
     }
 
-    // ── Steps 1 & 2: shared full-screen layout ───────────────────────
+    // ── Steps 1 & 2 share a layout ──
     return (
       <div className="h-screen w-screen flex flex-col overflow-hidden bg-gradient-to-br from-slate-50 via-white to-emerald-50/30">
         {/* ── Compact header ─────────────────────────────────────── */}
@@ -403,9 +389,7 @@ function App() {
     );
   }
 
-  // ════════════════════════════════════════════════════════════════════
-  // OCR MODE (original workflow unchanged)
-  // ════════════════════════════════════════════════════════════════════
+  // ── OCR mode ──
   return (
     <div className="min-h-screen flex flex-col">
       {currentStep === 3 ? (

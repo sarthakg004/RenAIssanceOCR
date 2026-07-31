@@ -1,12 +1,7 @@
-"""Manual GPU smoke test — NOT part of the CPU CI suite.
+"""Manual GPU check — run by hand, not part of CI.
 
-Run on a machine with a real NVIDIA GPU (and the GPU image's deps) to confirm
-the accelerator path works end to end:
-
-    python backend/tests/smoke_gpu.py
-
-It verifies torch + Paddle both see CUDA, runs a tiny op on the GPU, and prints
-what tier layout_detection would select. Exits non-zero if no GPU is usable.
+`python backend/tests/smoke_gpu.py` on a real NVIDIA box. Exits non-zero if
+torch or Paddle can't see CUDA.
 """
 
 import sys

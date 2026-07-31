@@ -1,12 +1,8 @@
 import { ChevronLeft, Sparkles, CheckCircle2, AlertCircle, Check, FileText } from 'lucide-react';
 import ResizablePanels from './ResizablePanels';
 
-/**
- * OCRLayout Component
- * Full viewport 3-column responsive layout wrapper with centered progress and resizable panels
- */
+// Full-viewport 3-column shell for the OCR workspace.
 export default function OCRLayout({
-  // Header props
   onBack,
   onComplete,
   onHome,
@@ -14,7 +10,6 @@ export default function OCRLayout({
   totalPages,
   hasAnyTranscript,
   backendOnline,
-  // Panel contents
   leftSidebar,
   centerPanel,
   rightPanel,

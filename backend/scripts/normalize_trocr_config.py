@@ -1,20 +1,9 @@
-"""Normalize a TrOCR checkpoint's processor assets to a canonical layout.
+"""Drop a known-good processor next to the fine-tuned TrOCR weights.
 
-The shipped checkpoint at backend/models/weights/trocr/ contains the
-fine-tuned artifacts (config.json, generation_config.json, model.safetensors)
-plus processor configs. transformers 4.53 (the pinned version) reads those
-natively, so this is now a belt-and-suspenders normalization rather than a
-hard requirement: it guarantees the directory is loadable regardless of which
-transformers/tokenizers release originally serialized the processor.
-
-It works because the user fine-tuned from microsoft/trocr-base-printed (per
-training config) — the processor side (image normalization stats + Roberta
-tokenizer vocabulary) matches the base exactly. We pull the base processor
-from HuggingFace at build time, save its assets next to the fine-tuned
-weights, and the resulting directory loads cleanly.
-
-No-op when the trocr checkpoint directory is absent so local dev builds
-without weights still succeed.
+We fine-tuned from microsoft/trocr-base-printed, so its tokenizer and image
+stats match exactly. Copying them in at build time makes the checkpoint load
+regardless of which transformers version serialized the original processor.
+No-op when the weights aren't present, so dev builds still work.
 """
 
 from __future__ import annotations

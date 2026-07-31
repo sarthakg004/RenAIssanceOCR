@@ -12,44 +12,30 @@ import {
     ChevronRight,
 } from 'lucide-react';
 
-/** Shorten split-page labels so they fit in small buttons: "2_left" → "2L" */
+// "2_left" -> "2L".
 function shortPageLabel(pageNumber) {
     return String(pageNumber).replace('_left', 'L').replace('_right', 'R');
 }
 
-/**
- * ImageEraser - Full-screen modal eraser with multi-page support
- *
- * Features:
- * - Canvas erasing with smooth quadratic bezier strokes
- * - Adjustable brush size + keyboard shortcuts
- * - Per-stroke undo
- * - Pan & zoom (scroll + ctrl-drag)
- * - Page navigation: erase across pages, save all at once
- */
+// Full-screen canvas eraser. Erase across several pages, then save them all in
+// one go. Undo is per stroke.
 export default function ImageEraser({
     pages = [],           // [{ pageNumber, imageSrc }]
     initialPageIndex = 0,
     onSaveAll,            // (results: { [pageNumber]: dataUrl }) => void
     onCancel,
 }) {
-    // ========== MULTI-PAGE STATE ==========
     const [currentIdx, setCurrentIdx] = useState(initialPageIndex);
-    // Store per-page canvas data: { [pageNumber]: ImageData }
+    // { [pageNumber]: ImageData }
     const pageDataRef = useRef({});
     const currentPage = pages[currentIdx];
 
-    // ========== REFS ==========
     const containerRef = useRef(null);
     const canvasRef = useRef(null);
     const lastPointRef = useRef(null);
 
-    // ========== STATE ==========
-    // Brush size scales with the loaded image. The cap is recomputed on every
-    // image load as ~5 % of the larger image dimension (clamped to a sensible
-    // floor for tiny thumbnails). On a 4000-px scan this gives a 200-px cap,
-    // and a 12 000-px scan gets ~600 px — large enough to wipe big stains in
-    // one stroke without ever being absurdly small for hi-res inputs.
+    // Brush cap is ~5% of the image's longer side, so one stroke can still wipe
+    // a stain on a 12000px scan. Recomputed on every image load.
     const [maxBrush, setMaxBrush] = useState(200);
     const [brushSize, setBrushSize] = useState(50);
     const [isDrawing, setIsDrawing] = useState(false);
@@ -63,7 +49,7 @@ export default function ImageEraser({
     const [cursorPos, setCursorPos] = useState({ x: 0, y: 0 });
     const [modifiedPages, setModifiedPages] = useState(new Set());
 
-    // ========== SAVE CURRENT PAGE STATE before switching ==========
+    // ── Save the current page before switching ──
     const saveCurrentPageData = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas || !currentPage) return;
@@ -71,7 +57,7 @@ export default function ImageEraser({
         pageDataRef.current[currentPage.pageNumber] = ctx.getImageData(0, 0, canvas.width, canvas.height);
     }, [currentPage]);
 
-    // ========== LOAD IMAGE ==========
+    // ── Load image ──
     const loadPage = useCallback((page) => {
         setCanvasReady(false);
         setStrokeHistory([]);
@@ -85,7 +71,6 @@ export default function ImageEraser({
             canvas.height = img.naturalHeight;
             setImageSize({ w: img.naturalWidth, h: img.naturalHeight });
 
-            // Resolution-aware brush cap: 5 % of the longer side.
             const dynMax = Math.max(
                 40,
                 Math.round(0.05 * Math.max(img.naturalWidth, img.naturalHeight)),
@@ -95,7 +80,7 @@ export default function ImageEraser({
 
             const ctx = canvas.getContext('2d');
 
-            // If we have saved data for this page, restore it; otherwise draw fresh
+            // Restore saved strokes for this page, if any.
             const saved = pageDataRef.current[page.pageNumber];
             if (saved && saved.width === img.naturalWidth && saved.height === img.naturalHeight) {
                 ctx.putImageData(saved, 0, 0);
@@ -103,7 +88,6 @@ export default function ImageEraser({
                 ctx.drawImage(img, 0, 0);
             }
 
-            // Fit to container
             if (containerRef.current) {
                 const cw = containerRef.current.clientWidth;
                 const ch = containerRef.current.clientHeight;
@@ -120,24 +104,22 @@ export default function ImageEraser({
         img.src = page.imageSrc;
     }, []);
 
-    // Load initial page
     useEffect(() => {
         if (currentPage) loadPage(currentPage);
     }, []);
 
-    // ========== PAGE NAVIGATION ==========
+    // ── Page navigation ──
     const goToPage = useCallback((newIdx) => {
         if (newIdx < 0 || newIdx >= pages.length || newIdx === currentIdx) return;
         saveCurrentPageData();
         setCurrentIdx(newIdx);
     }, [currentIdx, pages.length, saveCurrentPageData]);
 
-    // Load page when index changes
     useEffect(() => {
         if (currentPage) loadPage(currentPage);
     }, [currentIdx]);
 
-    // ========== COORDINATE HELPERS ==========
+    // ── Coordinates ──
     const screenToCanvas = useCallback(
         (clientX, clientY) => {
             if (!containerRef.current) return { x: 0, y: 0 };
@@ -157,10 +139,9 @@ export default function ImageEraser({
         return { clientX: e.clientX, clientY: e.clientY };
     };
 
-    // ========== SNAPSHOT (UNDO) ==========
-    // Each snapshot stores only the pixels inside the stroke's bounding box
-    // (plus the brush radius), not the whole canvas. For a typical 50px brush
-    // on a 2400×3200 page this is ~2 orders of magnitude less memory.
+    // ── Undo snapshots ──
+    // Only the stroke's bounding box is stored, not the whole canvas — roughly
+    // 100x less memory for a typical brush on a full-res page.
     const strokeBoundsRef = useRef(null);
 
     const beginStrokeBounds = useCallback(() => {
@@ -180,9 +161,8 @@ export default function ImageEraser({
         }
     }, [brushSize]);
 
-    // Hidden "pre-stroke" canvas — clone of the drawing canvas at pointer-down.
-    // On pointer-up we read back only the dirty rectangle from here, so undo
-    // stores a region-delta instead of a full-canvas ImageData.
+    // Clone of the canvas at pointer-down. On pointer-up we read back just the
+    // dirty rect from here.
     const preStrokeCanvasRef = useRef(null);
 
     const clonePreStroke = useCallback(() => {
@@ -229,7 +209,7 @@ export default function ImageEraser({
         setStrokeHistory((prev) => prev.slice(0, -1));
     }, [strokeHistory]);
 
-    // ========== DRAWING ==========
+    // ── Drawing ──
     const drawDot = useCallback(
         (cx, cy) => {
             const canvas = canvasRef.current;
@@ -262,7 +242,7 @@ export default function ImageEraser({
         [brushSize]
     );
 
-    // ========== POINTER EVENTS ==========
+    // ── Pointer events ──
     const handlePointerDown = useCallback(
         (e) => {
             if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.metaKey))) {
@@ -287,28 +267,22 @@ export default function ImageEraser({
         [screenToCanvas, clonePreStroke, beginStrokeBounds, extendStrokeBounds, drawDot, pan, currentPage]
     );
 
-    // rAF-throttled pointermove. Native mousemove fires at ~500 Hz on modern
-    // mice; without throttling we re-render the cursor div + repaint the
-    // canvas on every event, which thrashes the GC and causes visible lag at
-    // large brush sizes (each segment draws a thick rounded line). Coalescing
-    // into one frame per refresh tick (~16 ms @ 60 Hz) keeps interaction
-    // smooth without dropping any actual pixels — getCoalescedEvents() flushes
-    // the missed points before drawing the segment.
+    // rAF-throttled: mice fire pointermove at ~500 Hz, and repainting the canvas
+    // that often visibly lags at large brush sizes. getCoalescedEvents() replays
+    // the skipped points, so no pixels are lost.
     const moveStateRef = useRef({ rafId: 0, latest: null });
 
     const handlePointerMove = useCallback(
         (e) => {
             const { clientX, clientY } = getClientPos(e);
-            // Snapshot the data we need; the event object cannot be used
-            // asynchronously (React pools synthetic events).
+            // React pools synthetic events — copy what we need now.
             const native = e.nativeEvent || e;
             const coalesced = native.getCoalescedEvents
                 ? native.getCoalescedEvents()
                 : null;
             moveStateRef.current.latest = { clientX, clientY, coalesced };
 
-            // Drawing path needs preventDefault to suppress scrolling on
-            // touch — must happen synchronously, not in the rAF callback.
+            // preventDefault must be synchronous to stop touch scrolling.
             if (isDrawing) e.preventDefault();
 
             if (moveStateRef.current.rafId) return;
@@ -337,8 +311,7 @@ export default function ImageEraser({
 
                 if (!isDrawing) return;
 
-                // Replay every coalesced sub-event so a fast swipe still
-                // produces a continuous stroke (no gaps between points).
+                // Replay the coalesced points so fast swipes stay continuous.
                 const points = m.coalesced && m.coalesced.length
                     ? m.coalesced.map((c) => ({ cx: c.clientX, cy: c.clientY }))
                     : [{ cx: m.clientX, cy: m.clientY }];
@@ -354,8 +327,7 @@ export default function ImageEraser({
         [isDrawing, isPanning, screenToCanvas, drawSegment, extendStrokeBounds]
     );
 
-    // Cancel any pending rAF when the component unmounts so the callback
-    // doesn't fire against a torn-down canvas.
+    // Don't let a queued frame fire against a torn-down canvas.
     useEffect(() => {
         return () => {
             if (moveStateRef.current.rafId) {
@@ -374,8 +346,7 @@ export default function ImageEraser({
 
     useEffect(() => {
         const up = () => {
-            // We can't read `isDrawing` from here without a ref, so we always
-            // try to commit; commitStrokeDelta is a no-op when bounds is null.
+            // Always try to commit — it's a no-op when bounds is null.
             commitStrokeDelta();
             setIsDrawing(false);
             setIsPanning(false);
@@ -389,11 +360,10 @@ export default function ImageEraser({
         };
     }, [commitStrokeDelta]);
 
-    // ========== KEYBOARD ==========
+    // ── Keyboard ──
     useEffect(() => {
         const handleKey = (e) => {
-            // Step is also resolution-aware so the keys feel responsive on
-            // huge brushes (a 5-px nudge is invisible at brush=400).
+            // Scaled step — a 5px nudge is invisible at brush=400.
             const step = Math.max(5, Math.round(maxBrush * 0.05));
             if (e.key === '[') setBrushSize((s) => Math.max(5, s - step));
             else if (e.key === ']') setBrushSize((s) => Math.min(maxBrush, s + step));
@@ -410,7 +380,7 @@ export default function ImageEraser({
         return () => window.removeEventListener('keydown', handleKey);
     }, [handleUndo, goToPage, currentIdx, maxBrush]);
 
-    // ========== ZOOM ==========
+    // ── Zoom ──
     const handleZoomIn = () => setZoom((z) => Math.min(z * 1.25, 5));
     const handleZoomOut = () => setZoom((z) => Math.max(z / 1.25, 0.1));
 
@@ -425,15 +395,13 @@ export default function ImageEraser({
         return () => container.removeEventListener('wheel', handleWheel);
     }, []);
 
-    // ========== SAVE ALL ==========
+    // ── Save all pages ──
     const handleSaveAll = useCallback(() => {
-        // Save current page state first
         saveCurrentPageData();
 
         const results = {};
 
-        // For each page, produce a dataURL
-        // We need to use a temporary canvas to export pages we aren't currently viewing
+        // Pages we aren't viewing need a temp canvas to export.
         const tmpCanvas = document.createElement('canvas');
 
         pages.forEach((page) => {
@@ -444,10 +412,9 @@ export default function ImageEraser({
                 tmpCanvas.getContext('2d').putImageData(saved, 0, 0);
                 results[page.pageNumber] = tmpCanvas.toDataURL('image/png');
             }
-            // If not saved (never visited / unmodified), skip — parent keeps original
+            // Never visited or unmodified — parent keeps the original.
         });
 
-        // Also get the current canvas if it's modified
         if (currentPage && modifiedPages.has(currentPage.pageNumber)) {
             const canvas = canvasRef.current;
             if (canvas) {
@@ -458,7 +425,7 @@ export default function ImageEraser({
         onSaveAll(results);
     }, [saveCurrentPageData, pages, currentPage, modifiedPages, onSaveAll]);
 
-    // ========== RENDER ==========
+    // ── Render ──
     return (
         <div className="fixed inset-0 z-50 flex flex-col bg-gray-900">
             {/* ====== TOOLBAR ====== */}

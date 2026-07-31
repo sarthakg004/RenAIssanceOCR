@@ -1,11 +1,4 @@
-"""Database engine / session wiring for user tracking.
-
-One code path, two backends, selected purely by the DATABASE_URL env var:
-  • unset           -> SQLite file on the persistent storage volume
-  • postgresql://…  -> Neon / Supabase / any Postgres (durable, dashboard)
-
-Switching backends requires no code change, only the env var.
-"""
+"""Engine + session wiring. SQLite by default, Postgres if DATABASE_URL says so."""
 
 from __future__ import annotations
 
@@ -20,18 +13,16 @@ Base = declarative_base()
 
 
 def _normalize_url(url: str) -> str:
-    # SQLAlchemy 2.x requires the "postgresql" dialect name; Supabase/Heroku
-    # connection strings sometimes use the legacy "postgres://" scheme.
+    # SQLAlchemy 2.x wants "postgresql://"; Supabase/Heroku hand out "postgres://".
     if url.startswith("postgres://"):
         return "postgresql://" + url[len("postgres://"):]
     return url
 
 
 def _make_engine(url: str):
-    # check_same_thread=False is required for SQLite under FastAPI's threadpool;
-    # it is ignored (and rejected) by Postgres, so only pass it for sqlite.
+    # check_same_thread=False is needed for SQLite under FastAPI's threadpool,
+    # and rejected by Postgres — hence the branch.
     if url.startswith("sqlite"):
-        # Ensure the parent directory exists (the storage volume may be empty).
         path = url.split("///", 1)[-1]
         if path and path != ":memory:":
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -48,21 +39,16 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def init_db() -> None:
-    """Create tables if they do not exist. Safe to call on every startup."""
-    # Import models so they are registered on Base before create_all.
-    from . import models  # noqa: F401
+    """Create missing tables. Safe on every startup."""
+    from . import models  # noqa: F401 — registers the models on Base
 
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
 
 
 def _ensure_columns() -> None:
-    """Add columns introduced after the table was first created.
-
-    create_all never ALTERs existing tables, so a users.db from an earlier
-    version is missing `tracked_at`. Add it idempotently (works on SQLite and
-    Postgres). Pre-existing rows get NULL, so the retry loop back-fills them.
-    """
+    """Hand-rolled migration: create_all never ALTERs, so older users.db files
+    are missing `tracked_at`. Existing rows get NULL and the retry loop fills them."""
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
@@ -77,7 +63,7 @@ def _ensure_columns() -> None:
 
 
 def get_db():
-    """FastAPI dependency yielding a scoped session."""
+    """FastAPI dependency: one session per request."""
     db = SessionLocal()
     try:
         yield db

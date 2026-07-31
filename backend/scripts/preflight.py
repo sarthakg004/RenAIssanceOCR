@@ -1,12 +1,6 @@
-"""Container startup preflight — informative only, never blocks boot.
+"""Startup warnings about missing GPU access or low RAM. Always exits 0.
 
-Logs a clear, actionable message when:
-  * the GPU image was started without GPU access (PaddleOCR detection will be
-    unavailable, but the rest of the app still works), or
-  * system RAM is below the recommended minimum.
-
-The host launcher (run.sh / run.ps1) is responsible for the hard pre-pull spec
-gate; this is the in-container safety net. It always exits 0.
+The hard spec gate lives in run.sh / run.ps1; this is just the in-container net.
 """
 
 from __future__ import annotations

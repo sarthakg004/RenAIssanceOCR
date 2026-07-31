@@ -1,14 +1,6 @@
 import React from 'react';
 
-/**
- * OperationSlider - Compact slider control for operation parameters
- * 
- * Features:
- * - Compact design with inline label and value
- * - Optional unit display
- * - Min/max labels support
- * - Blue theme consistent with app design
- */
+// Compact slider for a single operation parameter.
 export default function OperationSlider({
   id,
   label,

@@ -14,25 +14,13 @@ import {
   ChevronRight,
 } from 'lucide-react';
 
-/**
- * PageMatchReviewPage — full-screen review of page ↔ transcript matching.
- *
- * Matching strategy (in priority order):
- *  1. Exact normalized match:  "3_left" ↔ "3_left", "3" ↔ "3"
- *  2. Split image ↔ unsplit transcript:  image "3_left" or "3_right" ↔ transcript "3"
- *  3. Unsplit image ↔ split transcript:  image "3" ↔ transcript ["3_left", "3_right"] (combined)
- *
- * Normalization: lowercase, spaces/dashes/underscores collapsed → canonical "_".
- * e.g. "3 - left" and "3_left" and "3   left" all normalize to "3_left".
- *
- * Props:
- *   pages            - array of { pageNumber, thumbnail, isSplit?, splitSide? }
- *   parsedTranscript - { pageKey: [lines] }
- *   onBack           - go back to upload
- *   onNext           - proceed with (matchedPageNumbers[])
- */
+// Review which scanned page goes with which transcript page.
+//
+// Keys are normalised first ("3 - left", "3_left" and "3   left" all become
+// "3_left"), then matched exact-first, falling back to split-image/whole-
+// transcript and whole-image/split-transcript pairings.
 
-/** Normalize a page key to canonical form: lowercase, delimiters → '_', trim. */
+// Lowercase, delimiters collapsed to '_'.
 function normalizePageKey(raw) {
   return String(raw)
     .toLowerCase()
@@ -43,7 +31,7 @@ function normalizePageKey(raw) {
     .trim();
 }
 
-/** Parse a normalized key into { num: string, side: 'left'|'right'|null } */
+// -> { num, side: 'left' | 'right' | null }
 function parseNormKey(normKey) {
   const m = normKey.match(/^(\d+)(?:_(left|right))?$/);
   if (!m) return null;
@@ -55,17 +43,16 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
   const [selectedPageNum, setSelectedPageNum] = useState(null);
   const [detailTab, setDetailTab] = useState('both'); // 'image' | 'transcript' | 'both'
 
-  // editedLines: pageNumber → string[]  (undefined = not yet seeded)
+  // pageNumber -> string[]; undefined means not seeded yet.
   const [editedLines, setEditedLines] = useState({});
   const initializedRef = useRef(false);
 
-  // ── Build robust match data ───────────────────────────────────────
+  // ── Build the match table ──
   const matchData = useMemo(() => {
     if (!pages || !parsedTranscript) return [];
 
-    // Index transcript by normalized key AND by numeric bucket
-    // exactByNorm:  normalized_key → original_transcript_key
-    // byNumber:     num_string → { plain, left, right }
+    // Two indexes: exact normalized key, and a per-number bucket holding the
+    // plain/left/right variants.
     const exactByNorm = {};
     const byNumber = {};
 
@@ -82,14 +69,11 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
       else                  byNumber[num].plain = k;
     });
 
-    /** Resolve the best transcript match for a page entry.
-     *  Returns { transcriptKeys: string[], lines: string[], matchType: string }
-     *  or null if no match. */
+    // -> { transcriptKeys, lines, matchType } or null.
     const resolve = (page) => {
       const norm = normalizePageKey(page.pageNumber);
       const parsed = parseNormKey(norm);
 
-      // ── Strategy 1: exact normalized match ──────────────────────
       if (exactByNorm[norm]) {
         const tk = exactByNorm[norm];
         return { transcriptKeys: [tk], lines: parsedTranscript[tk], matchType: 'exact' };
@@ -101,8 +85,7 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
       if (!bucket) return null;
 
       if (side) {
-        // ── Strategy 2: split image, unsplit transcript ──────────
-        // e.g. image "3_left" or "3_right" → transcript "3"
+        // Split image against a whole transcript page: "3_left" -> "3".
         if (bucket.plain) {
           return {
             transcriptKeys: [bucket.plain],
@@ -110,11 +93,9 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
             matchType: 'split-image→unsplit-transcript',
           };
         }
-        // ── Strategy 2b: split image has opposite side in transcript only
-        // e.g. image "3_left" but only transcript "3_right" exists (mismatch, skip)
+        // Only the opposite side exists — that's a mismatch, so skip it.
       } else {
-        // ── Strategy 3: unsplit image, split transcript ───────────
-        // e.g. image "3" → combine transcript "3_left" + "3_right"
+        // Whole image against a split transcript: combine left + right.
         if (bucket.left && bucket.right) {
           return {
             transcriptKeys: [bucket.left, bucket.right],
@@ -150,7 +131,7 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
     });
   }, [pages, parsedTranscript]);
 
-  // Seed editedLines once matchData is ready (run only once per load)
+  // Seed once, when matchData first lands.
   useEffect(() => {
     if (matchData.length > 0 && !initializedRef.current) {
       initializedRef.current = true;
@@ -172,7 +153,6 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
   const matchedCount = matchData.filter((d) => d.matched).length;
   const unmatchedCount = matchData.filter((d) => !d.matched).length;
 
-  // Transcript keys that were actually consumed by any match
   const usedTranscriptKeys = useMemo(() => {
     const used = new Set();
     matchData.forEach((d) => (d.transcriptKeys || []).forEach((k) => used.add(k)));
@@ -186,16 +166,13 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
     (d) => d.matched || (editedLines[d.pageNumber] || []).some((l) => l.trim())
   );
 
-  // ── Filtered list ─────────────────────────────────────────────────
-
-  // ── Filtered list ─────────────────────────────────────────────────
+  // ── Filtered list ──
   const filteredData = useMemo(() => {
     if (filter === 'matched') return matchData.filter((d) => d.matched);
     if (filter === 'unmatched') return matchData.filter((d) => !d.matched);
     return matchData;
   }, [matchData, filter]);
 
-  // Auto-select initial page
   React.useEffect(() => {
     if (selectedPageNum === null && filteredData.length > 0) {
       setSelectedPageNum(filteredData[0].pageNumber);
@@ -213,12 +190,12 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
   }, [filteredIdx, filteredData]);
 
   const handleContinue = () => {
-    // Include matched pages AND unmatched pages that received a custom transcript
+    // Unmatched pages count too if the user typed a transcript for them.
     const selectedPages = matchData
       .filter((d) => d.matched || (editedLines[d.pageNumber] || []).some((l) => l.trim()))
       .map((d) => d.pageNumber);
 
-    // Build merged transcript: prefer editedLines when non-empty, fall back to original
+    // User edits win over the parsed lines.
     const mergedTranscript = {};
     matchData.forEach((d) => {
       const edited = editedLines[d.pageNumber];
@@ -491,7 +468,7 @@ export default function PageMatchReviewPage({ pages, parsedTranscript, onBack, o
   );
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────
+// ── Sub-components ──
 
 function ImagePanel({ entry, fullHeight }) {
   return (
@@ -583,9 +560,9 @@ function TranscriptPanel({ entry, fullHeight, editedLines = {}, onLinesChange })
   );
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
+// ── Helpers ──
 
-/** Human-readable label for a page number, e.g. "3_left" → "Page 3 · Left" */
+// "3_left" -> "Page 3 · Left"
 function formatPageLabel(pageNumber) {
   const s = String(pageNumber);
   const m = s.match(/^(\d+)(?:_(left|right))?$/i);
@@ -596,7 +573,7 @@ function formatPageLabel(pageNumber) {
   return `Page ${num}`;
 }
 
-/** Return a note explaining a non-exact match. */
+
 function matchTypeHint(matchType, transcriptKeys) {
   if (matchType === 'split-image→unsplit-transcript') {
     return `Split image half matched to unsplit transcript entry "${transcriptKeys?.[0]}"`;

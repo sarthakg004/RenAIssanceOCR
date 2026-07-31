@@ -1,8 +1,5 @@
-"""
-Dataset Generation API Router — transcript parsing + dataset export endpoints.
-"""
+"""Parse transcripts and export OCR training datasets as ZIPs."""
 
-import base64
 import logging
 import re
 import traceback
@@ -13,10 +10,9 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..services.transcript_parser import parse_transcript_bytes, extract_text, parse_transcript
+from ..services.transcript_parser import parse_transcript_bytes, parse_transcript
 from ..services.dataset_builder import (
     align_boxes_with_transcript,
-    sort_boxes_reading_order,
     build_dataset_zip,
     build_detection_dataset_zip,
 )
@@ -69,11 +65,7 @@ class DatasetExportRequest(BaseModel):
 async def parse_transcript_endpoint(
     file: UploadFile = File(...),
 ):
-    """
-    Upload a transcript file and parse it into page→lines mapping.
-
-    Accepts TXT, DOCX, PDF, Markdown files.
-    """
+    """Parse an uploaded TXT/DOCX/PDF/Markdown transcript into page -> lines."""
     try:
         data = await file.read()
         filename = file.filename or ""
@@ -104,9 +96,7 @@ async def parse_transcript_endpoint(
 async def parse_transcript_text_endpoint(
     text: str = Form(...),
 ):
-    """
-    Parse raw transcript text (pasted) into page→lines mapping.
-    """
+    """Same as above, for text pasted straight into the UI."""
     try:
         pages = parse_transcript(text)
         total_lines = sum(len(v) for v in pages.values())
@@ -130,10 +120,7 @@ async def parse_transcript_text_endpoint(
 
 @router.post("/align", response_model=AlignmentResponse)
 async def align_endpoint(request: AlignmentRequest):
-    """
-    Align bounding boxes with transcript lines for a single page.
-    Returns the aligned pairs and mismatch info.
-    """
+    """Pair one page's boxes with its transcript lines, flagging any mismatch."""
     try:
         pairs, num_boxes, num_lines = align_boxes_with_transcript(
             request.boxes, request.lines
@@ -168,11 +155,7 @@ async def align_endpoint(request: AlignmentRequest):
 
 @router.post("/export")
 async def export_dataset(request: DatasetExportRequest):
-    """
-    Generate and download an OCR training dataset as a ZIP archive.
-
-    Exports line crops and labels in a structured ZIP.
-    """
+    """Build and stream a recognition dataset ZIP (line crops + labels)."""
     if not request.pages:
         raise HTTPException(status_code=400, detail="No pages provided.")
 
@@ -194,9 +177,9 @@ async def export_dataset(request: DatasetExportRequest):
             logger.warning("Recognition dataset persistence failed: %s", save_err)
 
         filename = f"{request.book_name}_dataset.zip"
-        # Sanitize filename for Content-Disposition header (latin-1 safe)
+        # Content-Disposition must be latin-1; the RFC 5987 form carries the
+        # real name for clients that understand it.
         ascii_filename = re.sub(r'[^\x20-\x7E]', '_', filename)
-        # RFC 5987 UTF-8 encoded filename for clients that support it
         utf8_filename = urllib.parse.quote(filename)
         content_disp = (
             f'attachment; filename="{ascii_filename}"; '
@@ -230,11 +213,7 @@ class DetectionExportRequest(BaseModel):
 
 @router.post("/export-detection")
 async def export_detection_dataset(request: DetectionExportRequest):
-    """
-    Generate and download a text detection dataset (images + COCO annotations).
-
-    No transcript required — only bounding box coordinates.
-    """
+    """Build and stream a detection dataset ZIP. Boxes only, no transcript."""
     if not request.pages:
         raise HTTPException(status_code=400, detail="No pages provided.")
 

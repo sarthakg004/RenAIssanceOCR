@@ -1,10 +1,5 @@
-/**
- * Auth API client.
- *
- * All requests use `credentials: 'include'` so the httpOnly session cookie
- * the backend sets is sent back. The cookie itself is opaque and unreadable
- * from JS — no secrets ever reach the bundle.
- */
+// Every call sends credentials so the httpOnly session cookie goes back. The
+// cookie is opaque to JS, so no secret ever lands in the bundle.
 
 import { API_ORIGIN } from '../../config';
 
@@ -36,7 +31,7 @@ async function request(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-/** Returns the current user, or null if not authenticated. */
+// Current user, or null when not logged in.
 export async function fetchMe() {
   try {
     return await request('/me');

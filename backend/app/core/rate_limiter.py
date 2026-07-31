@@ -1,15 +1,10 @@
-"""
-Rate Limiting — Sliding Window for Batch Support
-"""
+"""Sliding-window rate limiter, sized for the Gemini free tier."""
 
 import time
 
 
 class RateLimiter:
-    """
-    Sliding window rate limiter: 5 requests per minute
-    Supports batch processing of up to 4 concurrent requests
-    """
+    """5 requests/minute by default; batches book several slots at once."""
 
     def __init__(self, max_requests: int = 5, window_seconds: int = 60):
         self.max_requests = max_requests
@@ -73,5 +68,4 @@ class RateLimiter:
         }
 
 
-# Global rate limiter instance - 5 requests per 60 seconds
 rate_limiter = RateLimiter(max_requests=5, window_seconds=60)

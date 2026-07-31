@@ -1,24 +1,8 @@
-"""
-Layout-Aware Line Detection API Route.
+"""POST /api/detect/layout-aware-lines — image in, text-line polygons out.
 
-POST /api/detect/layout-aware-lines
-  - Accepts multipart/form-data with image file + use_gpu flag
-  - Returns detected text-line polygons as JSON
-
-GPU / Memory requirements
--------------------------
-  GPU mode : minimum 8 GB VRAM recommended (server-class models are large).
-  CPU mode : minimum 8 GB RAM recommended; processing is significantly slower.
-
-Concurrency
------------
-  A process-wide asyncio lock serializes detection calls. Paddle loads the
-  server-class detection + recognition models (~1.5 GB each) fresh per call
-  and frees them immediately afterwards, so running two pages simultaneously
-  doubles the peak memory footprint and can trigger an OOM kill. The lock
-  guarantees at most one page is in flight per worker, matching the
-  "one-page-at-a-time, clean up between pages" behavior the pipeline was
-  designed for.
+One page at a time per worker: the models are ~1.5 GB each and loaded fresh per
+call, so two concurrent pages double peak memory and get the worker OOM-killed.
+Budget 8 GB VRAM (GPU) or 8 GB RAM (CPU, much slower).
 """
 
 import asyncio
@@ -30,7 +14,6 @@ import numpy as np
 from fastapi import APIRouter, File, Form, UploadFile
 
 from ..services.layout_detection import (
-    check_system_resources,
     models_cached,
     run_layout_aware_detection,
     select_tier,
@@ -41,18 +24,15 @@ router = APIRouter()
 
 @router.get("/api/detect/models-status")
 async def detection_models_status(use_gpu: bool = True):
-    """Report whether the detection models are already downloaded.
+    """Are the detection models on disk yet?
 
-    The frontend calls this before the first detection so it can show a
-    one-time "downloading models (~15-20 min)" notice while PaddleX lazily
-    fetches the weights on the first run. Pure filesystem check — fast, never
-    imports paddle.
+    The UI checks this first so it can warn about the one-time ~15-20 min
+    download. Filesystem check only — never imports paddle.
     """
     return {"models_ready": models_cached(use_gpu)}
 
-# Serializes detection work within a single worker process. FastAPI runs async
-# handlers on the event loop concurrently; without this, two pages posted in
-# parallel both load paddle models at once and race for GPU VRAM / RAM.
+# FastAPI runs async handlers concurrently; without this two parallel pages
+# both load paddle models and fight over VRAM.
 _detection_lock = asyncio.Lock()
 
 
@@ -68,21 +48,13 @@ async def detect_layout_aware_lines(
     gap_multiplier: float = Form(2.0),
     debug_dir: str = Form(""),
 ):
-    """
-    Run the full layout-aware line-detection pipeline on an uploaded image.
+    """Detect text lines in an uploaded page.
 
-    Returns
-    -------
-    {
-      "lines": [ [[x,y],[x,y],[x,y],[x,y]], ... ],
-      "count": int,
-      "processing_time_ms": int
-    }
+    -> {lines: [4-point polygons], count, processing_time_ms, tier}.
     """
     start = time.time()
 
     try:
-        # Read uploaded image
         contents = await image.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -96,19 +68,14 @@ async def detect_layout_aware_lines(
                 "processing_time_ms": 0,
             }
 
-        # Serialize detection across concurrent requests so only one page
-        # loads paddle models at a time — two concurrent runs double peak
-        # memory and OOM-kill the worker under server-class models. The
-        # sync inner call is offloaded to a thread to keep the event loop
-        # responsive for /api/health etc. while detection is in flight.
+        # The sync work goes to a thread so /api/health stays responsive
+        # while a page is in flight.
         async with _detection_lock:
             gpu_fallback = False
             resource_warnings = []
 
-            # Probe free VRAM / RAM inside the lock (so readings reflect the
-            # state at the moment we're about to load models) and pick the
-            # model tier automatically. This protects users on 4-6 GB laptop
-            # GPUs who would otherwise OOM on the server-class models.
+            # Probe inside the lock so the readings match what we're about to
+            # allocate. Keeps 4-6 GB laptop GPUs off the server-class models.
             tier = await asyncio.to_thread(select_tier, use_gpu)
             print(f"[LayoutAPI] tier selected: {tier['tier']} on {tier['device']}"
                   f" — {tier['reason']}")
@@ -132,7 +99,6 @@ async def detect_layout_aware_lines(
                 )
             except (ValueError, RuntimeError) as gpu_err:
                 err_msg = str(gpu_err)
-                # OOM errors contain a descriptive message from our wrappers
                 if "Out-of-memory" in err_msg or "out of memory" in err_msg.lower():
                     elapsed = int((time.time() - start) * 1000)
                     return {
@@ -148,8 +114,7 @@ async def detect_layout_aware_lines(
                         ),
                     }
                 if effective_use_gpu:
-                    # GPU run crashed for a non-OOM reason — retry on CPU at
-                    # whichever model tier makes sense for the current free RAM.
+                    # Crashed for some non-OOM reason — retry on CPU.
                     print(f"[LayoutAPI] GPU failed, falling back to CPU: {gpu_err}")
                     gpu_fallback = True
                     cpu_tier = await asyncio.to_thread(select_tier, False)
@@ -186,18 +151,15 @@ async def detect_layout_aware_lines(
         if gpu_fallback:
             resp["warning"] = "GPU failed mid-run. Fell back to CPU."
         elif use_gpu and tier["device"] == "cpu":
-            # User asked for GPU but not enough free VRAM for any GPU tier.
             resp["warning"] = (
                 "Not enough free GPU VRAM for detection. "
                 f"Ran on CPU instead. {tier['reason']}"
             )
         elif use_gpu and tier["tier"] == "mobile":
-            # GPU mode but dropped to mobile models.
             resp["warning"] = (
                 f"Low GPU VRAM — using lighter mobile models. {tier['reason']}"
             )
         if use_gpu and not gpu_fallback:
-            # Surface the requirement even on success so the UI can show it
             resp["resource_requirements"] = (
                 "Minimum 8 GB GPU VRAM recommended for GPU mode. "
                 "Minimum 8 GB free RAM recommended for CPU mode."
@@ -213,8 +175,7 @@ async def detect_layout_aware_lines(
             "count": 0,
             "processing_time_ms": elapsed,
         }
-        # Include any resource warnings collected before the failure so the
-        # caller knows whether insufficient GPU/RAM may have caused the error.
+        # Warnings gathered before the failure often explain it.
         try:
             if resource_warnings:
                 resp["resource_warnings"] = resource_warnings

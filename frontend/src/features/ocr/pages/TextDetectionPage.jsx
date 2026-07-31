@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { METHOD_OPTIONS, PROVIDER_MAP } from '../config/providers';
 
-// Layout-Aware OCR card definition (local, not from providers.js)
+// Not a cloud provider, so it isn't in providers.js.
 const LAYOUT_AWARE_CARD = {
     id: 'layout-aware',
     name: 'Layout-Aware',
@@ -35,12 +35,10 @@ export default function TextDetectionPage({
 
     const processedCount = Object.keys(processedImages || {}).length;
 
-    // Merge cloud providers + layout-aware into one list
     const allMethods = [...METHOD_OPTIONS, LAYOUT_AWARE_CARD];
 
     const handleContinue = () => {
         if (selectedMethod === 'layout-aware') {
-            // Route to layout-aware detection page
             onNext(selectedMethod, 'layout-aware');
         } else {
             onNext(selectedMethod, PROVIDER_MAP[selectedMethod] || 'gemini');

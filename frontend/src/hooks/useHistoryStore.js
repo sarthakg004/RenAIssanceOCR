@@ -27,17 +27,12 @@ function estimateOpBytes(op) {
   return bytes;
 }
 
-/**
- * Unified, command-pattern history store for preprocessing edits.
- *
- * Ops form a single timeline. Each op names the page(s) it affects, so the
- * same array supports per-page undo (filter by page) and global undo (walk
- * the timeline). Redo is supported by keeping ops after the cursor until the
- * next push truncates the branch.
- *
- * Memory is bounded by a byte budget, not an op count — so a long session of
- * cheap crops doesn't get clipped while a few giant erase snapshots stay.
- */
+// One undo timeline for every page. Each op records which pages it touched, so
+// the same array serves per-page undo (filter) and global undo (walk). Ops past
+// the cursor stay around for redo until the next push truncates the branch.
+//
+// Trimmed by byte budget, not op count — otherwise a run of cheap crops evicts
+// while a few huge erase snapshots survive.
 export function useHistoryStore({ memoryBudget = DEFAULT_MEMORY_BUDGET_BYTES } = {}) {
   const opsRef = useRef([]);
   const cursorRef = useRef(-1);

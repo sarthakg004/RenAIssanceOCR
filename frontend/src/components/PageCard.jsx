@@ -92,6 +92,6 @@ const PageCard = React.forwardRef(function PageCard({
   );
 });
 
-// Wrapping in memo cuts re-renders of unchanged thumbnails when one card's
-// selection toggles — the page grid can be 100+ items in a large PDF.
+// The grid can be 100+ cards; memo stops one selection toggle from
+// re-rendering every thumbnail.
 export default React.memo(PageCard);

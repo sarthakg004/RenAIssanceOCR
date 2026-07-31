@@ -12,17 +12,8 @@ import {
   Search
 } from 'lucide-react';
 
-/**
- * BeforeAfterViewer - Enhanced split-view image comparison component
- * 
- * Features:
- * - Split slider view with draggable divider
- * - Before/After toggle modes
- * - Zoom controls with pan support
- * - Fullscreen mode
- * - Sync pan between both images
- * - Loading states
- */
+// Split-view comparison: draggable divider, before/after toggle, synced
+// zoom and pan across both images.
 export default function BeforeAfterViewer({
   originalImage,
   processedImage,
@@ -45,7 +36,6 @@ export default function BeforeAfterViewer({
 
   const zoomLevels = ['fit', 50, 75, 100, 150, 200, 300];
 
-  // Handle split slider drag
   const handleMouseMove = useCallback((e) => {
     if (isDraggingSplit && mode === 'split' && containerRef.current) {
       const rect = containerRef.current.getBoundingClientRect();
@@ -88,7 +78,6 @@ export default function BeforeAfterViewer({
     }
   }, [isDraggingSplit, isPanning, handleMouseMove, handleMouseUp]);
 
-  // Reset pan when zoom changes
   useEffect(() => {
     if (zoom === 'fit') {
       setPanOffset({ x: 0, y: 0 });

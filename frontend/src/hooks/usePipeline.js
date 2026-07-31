@@ -5,17 +5,8 @@ import {
   createPipelineStep 
 } from '../config/preprocessOperations';
 
-/**
- * usePipeline - Custom hook for managing preprocessing pipeline state
- * 
- * Features:
- * - Pipeline array state management
- * - Add/remove/reorder operations
- * - Enable/disable operations
- * - Update operation parameters
- * - Sync between enabled operations and pipeline
- * - Debounced preview triggering
- */
+// Preprocessing pipeline state: the ordered step list plus the sidebar's
+// enabled-operations map, kept in sync both ways. Preview calls are debounced.
 export function usePipeline(options = {}) {
   const {
     onPreviewRequest,
@@ -23,31 +14,25 @@ export function usePipeline(options = {}) {
     initialPipeline = [],
   } = options;
 
-  // Pipeline state - array of steps with order
   const [pipeline, setPipeline] = useState(initialPipeline);
   
-  // Enabled operations state - map of operation settings
   const [enabledOperations, setEnabledOperations] = useState({});
   
-  // Debounce timer ref
   const debounceTimer = useRef(null);
 
-  // Sync pipeline from enabled operations
+  // Rebuild the pipeline whenever the sidebar toggles change.
   const syncPipelineFromEnabled = useCallback((enabled) => {
     setPipeline(prev => {
-      // Get currently enabled operation IDs
       const enabledIds = Object.entries(enabled)
         .filter(([_, val]) => val?.enabled)
         .map(([id]) => id);
 
-      // Keep existing pipeline steps that are still enabled
+      // Existing steps keep their position and params.
       const existingSteps = prev.filter(step => enabledIds.includes(step.operationId));
       
-      // Find new operations that need to be added
       const existingOperationIds = existingSteps.map(s => s.operationId);
       const newOperationIds = enabledIds.filter(id => !existingOperationIds.includes(id));
       
-      // Create new steps for newly enabled operations
       const newSteps = newOperationIds.map((opId, index) => ({
         id: `${opId}-${Date.now()}-${index}`,
         operationId: opId,
@@ -56,11 +41,9 @@ export function usePipeline(options = {}) {
         order: existingSteps.length + index,
       }));
 
-      // Combine and update orders
       const combined = [...existingSteps, ...newSteps].map((step, index) => ({
         ...step,
         order: index,
-        // Sync params from enabledOperations
         params: enabled[step.operationId]?.params || step.params,
       }));
 
@@ -68,7 +51,6 @@ export function usePipeline(options = {}) {
     });
   }, []);
 
-  // Toggle operation enabled state
   const toggleOperation = useCallback((operationId, enabled) => {
     setEnabledOperations(prev => {
       const operation = getOperationById(operationId);
@@ -80,17 +62,14 @@ export function usePipeline(options = {}) {
         },
       };
       
-      // Sync pipeline
       syncPipelineFromEnabled(newState);
       
       return newState;
     });
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, [syncPipelineFromEnabled]);
 
-  // Update operation parameters
   const updateOperationParams = useCallback((operationId, params) => {
     setEnabledOperations(prev => ({
       ...prev,
@@ -100,18 +79,15 @@ export function usePipeline(options = {}) {
       },
     }));
 
-    // Also update in pipeline
     setPipeline(prev => prev.map(step => 
       step.operationId === operationId
         ? { ...step, params }
         : step
     ));
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, []);
 
-  // Toggle pipeline step enabled state
   const togglePipelineStep = useCallback((stepId, enabled) => {
     setPipeline(prev => prev.map(step =>
       step.id === stepId
@@ -119,11 +95,9 @@ export function usePipeline(options = {}) {
         : step
     ));
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, []);
 
-  // Update pipeline step parameters
   const updatePipelineStepParams = useCallback((stepId, params) => {
     setPipeline(prev => {
       const updated = prev.map(step =>
@@ -132,7 +106,6 @@ export function usePipeline(options = {}) {
           : step
       );
       
-      // Sync back to enabledOperations
       const step = updated.find(s => s.id === stepId);
       if (step) {
         setEnabledOperations(prevEnabled => ({
@@ -147,16 +120,13 @@ export function usePipeline(options = {}) {
       return updated;
     });
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, []);
 
-  // Remove step from pipeline
   const removePipelineStep = useCallback((stepId) => {
     setPipeline(prev => {
       const step = prev.find(s => s.id === stepId);
       
-      // Also disable in enabledOperations
       if (step) {
         setEnabledOperations(prevEnabled => ({
           ...prevEnabled,
@@ -170,11 +140,9 @@ export function usePipeline(options = {}) {
       return prev.filter(s => s.id !== stepId).map((s, i) => ({ ...s, order: i }));
     });
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, []);
 
-  // Reorder pipeline steps
   const reorderPipeline = useCallback((fromIndex, toIndex) => {
     setPipeline(prev => {
       const result = [...prev];
@@ -183,11 +151,9 @@ export function usePipeline(options = {}) {
       return result.map((step, index) => ({ ...step, order: index }));
     });
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, []);
 
-  // Add operation to pipeline
   const addOperation = useCallback((operationId) => {
     const operation = getOperationById(operationId);
     if (!operation) return;
@@ -204,16 +170,13 @@ export function usePipeline(options = {}) {
       },
     }));
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, [pipeline.length]);
 
-  // Apply recommended pipeline
   const applyRecommendedPipeline = useCallback(() => {
     const recommended = getRecommendedPipeline();
     setPipeline(recommended);
 
-    // Update enabled operations
     const newEnabled = {};
     recommended.forEach(step => {
       newEnabled[step.operationId] = {
@@ -223,22 +186,18 @@ export function usePipeline(options = {}) {
     });
     setEnabledOperations(newEnabled);
 
-    // Trigger debounced preview
     triggerDebouncedPreview();
   }, []);
 
-  // Reset pipeline
   const resetPipeline = useCallback(() => {
     setPipeline([]);
     setEnabledOperations({});
     
-    // Clear any pending preview
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
     }
   }, []);
 
-  // Trigger debounced preview request
   const triggerDebouncedPreview = useCallback(() => {
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
@@ -251,12 +210,10 @@ export function usePipeline(options = {}) {
     }
   }, [onPreviewRequest, debounceMs]);
 
-  // Get active (enabled) pipeline steps
   const getActivePipeline = useCallback(() => {
     return pipeline.filter(step => step.enabled);
   }, [pipeline]);
 
-  // Build pipeline config for API
   const buildPipelineConfig = useCallback(() => {
     return getActivePipeline().map(step => ({
       op: step.operationId,
@@ -264,7 +221,6 @@ export function usePipeline(options = {}) {
     }));
   }, [getActivePipeline]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (debounceTimer.current) {

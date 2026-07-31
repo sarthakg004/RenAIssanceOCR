@@ -18,10 +18,7 @@ import { API_ORIGIN } from '../config';
 
 const API_BASE = API_ORIGIN;
 
-/**
- * CombinedUploadPage — uploads both the book (PDF/images) and
- * the transcript file in one step before matching.
- */
+// Book (PDF or images) and transcript uploaded together, before matching.
 export default function CombinedUploadPage({
   onNext,
   isProcessingBook,
@@ -29,16 +26,15 @@ export default function CombinedUploadPage({
   initialTranscript,
   initialDatasetMode = 'recognition',
 }) {
-  // ── Dataset mode: 'recognition' (default, transcript required) |
-  //                 'detection'  (bbox-only, no transcript)
+  // 'recognition' needs a transcript; 'detection' is boxes only.
   const [datasetMode, setDatasetMode] = useState(initialDatasetMode);
   const isDetection = datasetMode === 'detection';
-  // ── Book upload state ────────────────────────────────────────────
+  // ── Book upload ──
   const [bookFiles, setBookFiles] = useState(initialBookFiles || null);
   const [isDraggingBook, setIsDraggingBook] = useState(false);
   const bookInputRef = useRef(null);
 
-  // ── Transcript upload state ──────────────────────────────────────
+  // ── Transcript upload ──
   const [transcriptFile, setTranscriptFile] = useState(null);
   const [parsedTranscript, setParsedTranscript] = useState(initialTranscript || null);
   const [isDraggingTranscript, setIsDraggingTranscript] = useState(false);
@@ -46,7 +42,7 @@ export default function CombinedUploadPage({
   const [transcriptError, setTranscriptError] = useState(null);
   const transcriptInputRef = useRef(null);
 
-  // ── Book handlers ────────────────────────────────────────────────
+  // ── Book handlers ──
   const processBookFiles = (files) => {
     const valid = files.filter((f) => {
       const ext = f.name.split('.').pop().toLowerCase();
@@ -70,7 +66,7 @@ export default function CombinedUploadPage({
     processBookFiles(Array.from(e.target.files));
   }, []);
 
-  // ── Transcript handlers ──────────────────────────────────────────
+  // ── Transcript handlers ──
   const processTranscriptFile = async (file) => {
     const ext = '.' + file.name.split('.').pop().toLowerCase();
     const validExts = ['.txt', '.md', '.markdown', '.pdf', '.docx'];
@@ -112,7 +108,7 @@ export default function CombinedUploadPage({
     if (files.length > 0) processTranscriptFile(files[0]);
   }, []);
 
-  // ── Helpers ──────────────────────────────────────────────────────
+  // ── Helpers ──
   const formatFileSize = (bytes) => {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -132,7 +128,7 @@ export default function CombinedUploadPage({
     ? Object.values(parsedTranscript).reduce((s, l) => s + l.length, 0)
     : 0;
 
-  // In detection mode the transcript is irrelevant — only the book is needed.
+  // Detection mode needs no transcript.
   const canContinue = isDetection
     ? bookFiles && !isProcessingBook
     : bookFiles && parsedTranscript && !isProcessingBook && !isParsing;

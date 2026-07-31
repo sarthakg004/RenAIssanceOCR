@@ -1,8 +1,6 @@
-"""
-OCR API Router — all OCR-related endpoints.
+"""OCR endpoints. Providers come from OCRFactory, shared work from ocr_helpers.
 
-Uses ``OCRFactory`` + shared helpers for a clean, provider-agnostic design.
-All original endpoint paths and response shapes are preserved.
+Only Gemini is rate-limited server-side (free-tier sliding window).
 """
 
 import asyncio
@@ -36,16 +34,11 @@ from .ocr_helpers import (
 router = APIRouter()
 
 
-# ── Internal shortcut ───────────────────────────────────────────
-
 def _provider(name: str):
-    """Get a provider instance via the factory."""
     return OCRFactory.get_provider(name)
 
 
-# ═══════════════════════════════════════════════════════════════
-# Model Listing
-# ═══════════════════════════════════════════════════════════════
+# ── Model listing ───────────────────────────────────────────────
 
 @router.get("/api/models")
 async def get_gemini_models():
@@ -75,18 +68,13 @@ async def get_qwen_models():
     return {"models": p.MODELS, "default": p.DEFAULT_MODEL}
 
 
-# ═══════════════════════════════════════════════════════════════
-# Key Validation & Rate Limit Status (Gemini free-tier)
-# ═══════════════════════════════════════════════════════════════
+# ── Key check + rate limit (Gemini free-tier) ───────────────────
 
 @router.post("/api/validate-key")
 async def validate_api_key(
     x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
 ):
-    """
-    Validate a Gemini API key *format*.
-    Actual verification happens on the first real OCR request.
-    """
+    """Format check only — the key is really verified on the first OCR call."""
     validate_api_key_format(x_gemini_api_key, MIN_API_KEY_LENGTH)
     return {
         "valid": True,
@@ -100,9 +88,7 @@ async def get_rate_limit_status():
     return rate_limiter.get_status()
 
 
-# ═══════════════════════════════════════════════════════════════
-# Gemini OCR Endpoints
-# ═══════════════════════════════════════════════════════════════
+# ── Gemini ──────────────────────────────────────────────────────
 
 @router.post("/api/gemini-ocr-page", response_model=OCRResponse)
 async def gemini_ocr_page(
@@ -164,10 +150,6 @@ async def gemini_ocr_json(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════
-# Gemini Batch OCR
-# ═══════════════════════════════════════════════════════════════
-
 @router.post("/api/gemini-ocr-batch", response_model=BatchOCRResponse)
 async def gemini_ocr_batch(
     request: BatchOCRRequest,
@@ -224,9 +206,7 @@ async def gemini_ocr_batch(
     )
 
 
-# ═══════════════════════════════════════════════════════════════
-# ChatGPT OCR
-# ═══════════════════════════════════════════════════════════════
+# ── Other providers (no server-side rate limiting) ──────────────
 
 @router.post("/api/chatgpt-ocr-json", response_model=OCRResponse)
 async def chatgpt_ocr_json(
@@ -240,10 +220,6 @@ async def chatgpt_ocr_json(
     return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
 
 
-# ═══════════════════════════════════════════════════════════════
-# DeepSeek OCR
-# ═══════════════════════════════════════════════════════════════
-
 @router.post("/api/deepseek-ocr-json", response_model=OCRResponse)
 async def deepseek_ocr_json(
     request: DeepSeekOCRRequest,
@@ -255,10 +231,6 @@ async def deepseek_ocr_json(
     image_bytes, mime_type = parse_base64_image(request.image_data)
     return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
 
-
-# ═══════════════════════════════════════════════════════════════
-# Qwen OCR
-# ═══════════════════════════════════════════════════════════════
 
 @router.post("/api/qwen-ocr-json", response_model=OCRResponse)
 async def qwen_ocr_json(

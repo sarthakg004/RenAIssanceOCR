@@ -42,12 +42,12 @@ import {
     getLLMProviders,
     getLLMTemplates,
     postProcessWithLLMProvider,
-} from '../services/geminiApi';
+} from '../services/llmApi';
 import { API_ORIGIN } from '../config';
 
 const API_BASE = API_ORIGIN;
 
-// ─── Layout model options (8) ──────────────────────────────
+// ── Layout model options ──
 const LAYOUT_MODELS = [
     { id: 'PP-DocLayout_plus-L', name: 'PP-DocLayout+ Large', desc: 'Best accuracy' },
     { id: 'PP-DocLayout-L', name: 'PP-DocLayout Large', desc: 'High accuracy' },
@@ -59,7 +59,7 @@ const LAYOUT_MODELS = [
     { id: 'PicoDet-S_layout_3cls', name: 'PicoDet-S 3cls', desc: '3-class, fastest' },
 ];
 
-// ─── Detection model options (5) ───────────────────────────
+// ── Detection model options ──
 const DETECTION_MODELS = [
     { id: 'PP-OCRv5_server_det', name: 'PP-OCRv5 Server Det', desc: 'High accuracy, slower' },
     { id: 'PP-OCRv5_mobile_det', name: 'PP-OCRv5 Mobile Det', desc: 'Fast, lighter' },
@@ -69,7 +69,7 @@ const DETECTION_MODELS = [
     { id: 'SAST', name: 'SAST', desc: 'Segmentation-based' },
 ];
 
-// ─── Default tuning parameters ─────────────────────────────
+// ── Default tuning parameters ──
 const DEFAULT_PARAMS = {
     region_padding: 50,
     layout_expand: 2,
@@ -79,7 +79,7 @@ const DEFAULT_PARAMS = {
     gap_multiplier: 2.0,
 };
 
-// ─── Parameter definitions for UI controls ─────────────────
+// ── Slider definitions for the tuning UI ──
 const PARAM_DEFS = [
     { key: 'region_padding', label: 'Region Padding', unit: 'px', min: 0, max: 200, step: 5, type: 'int', tooltip: 'Padding around detected regions before OCR' },
     { key: 'layout_expand', label: 'Layout Expand', unit: 'px', min: 0, max: 50, step: 1, type: 'int', tooltip: 'Expand layout bounding boxes before cropping' },
@@ -89,23 +89,19 @@ const PARAM_DEFS = [
     { key: 'gap_multiplier', label: 'Gap Multiplier', unit: '×', min: 0.5, max: 5.0, step: 0.5, type: 'float', tooltip: 'Gap threshold multiplier for line merging' },
 ];
 
-// Monotonic row-ID counter. Used instead of Date.now() to guarantee uniqueness
-// even when many rows are created in the same millisecond (React keys colliding
-// silently trigger remounts and break reconciliation).
+// Monotonic, not Date.now(): rows created in the same millisecond would collide
+// as React keys and silently remount.
 let _rowIdCounter = 0;
 const nextRowId = () => ++_rowIdCounter;
 
-// Word-level diff (LCS) for the post-processing before/after view. Returns two
-// token lists: `before` tokens flagged `removed`, `after` tokens flagged
-// `added`. Splitting on whitespace is fine here — OCR-correction edits are
-// small (diacritics, glyph fixes), and the view only needs to point at the
-// words that changed.
+// Word-level LCS diff for the before/after view. Whitespace splitting is fine —
+// OCR corrections are small (diacritics, glyph fixes) and we only need to point
+// at the words that changed.
 function diffWords(before, after) {
     const a = before.split(/\s+/).filter(Boolean);
     const b = after.split(/\s+/).filter(Boolean);
     const n = a.length;
     const m = b.length;
-    // LCS length table.
     const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
     for (let i = n - 1; i >= 0; i -= 1) {
         for (let j = m - 1; j >= 0; j -= 1) {
@@ -175,7 +171,7 @@ function resolveTranscriptKey(transcript, pageKey) {
 }
 
 
-// ─── Thumbnail Item ─────────────────────────────────────────
+// ── Thumbnail item ──
 function ThumbnailItem({ image, index, isActive, isDetected, onClick, pageLabel, processedSrc }) {
     const imageSrc = processedSrc || image?.processed || image?.original || image?.thumbnail;
 
@@ -215,7 +211,7 @@ function ThumbnailItem({ image, index, isActive, isDetected, onClick, pageLabel,
 }
 
 
-// ─── Main Component ─────────────────────────────────────────
+// ── Main component ──
 export default function LayoutAwareDetectionPage({
     pages,
     selectedPages,
@@ -227,23 +223,23 @@ export default function LayoutAwareDetectionPage({
     onHome,
     datasetMode = false,
     onDatasetNext,
-    // Persistence props — restored when navigating back from export
+    // Restored when navigating back from export.
     initialDetectedPages = {},
     initialAlignmentByPage = {},
     onStateChange,
 }) {
-    // ── Model selection ────────────────────────────────────
+    // ── Model selection ──
     const [selectedDetModel, setSelectedDetModel] = useState('PP-OCRv5_server_det');
     const [selectedLayoutModel, setSelectedLayoutModel] = useState('PP-DocLayout_plus-L');
 
-    // ── Tuning parameters ──────────────────────────────────
+    // ── Tuning parameters ──
     const [tuningParams, setTuningParams] = useState({ ...DEFAULT_PARAMS });
     const [showAdvanced, setShowAdvanced] = useState(false);
 
-    // ── UI state ───────────────────────────────────────────
+    // ── UI state ──
     const [viewingPageIndex, setViewingPageIndex] = useState(0);
     const [loading, setLoading] = useState(false);
-    // First-time PaddleOCR model download UX: null=unknown, true=cached, false=needs download
+    // null = not checked yet, true = cached, false = needs the big download.
     const [modelsReady, setModelsReady] = useState(null);
     const [downloadingModels, setDownloadingModels] = useState(false);
     const [detectedPages, setDetectedPages] = useState(() => initialDetectedPages);
@@ -252,20 +248,20 @@ export default function LayoutAwareDetectionPage({
     const [processingTime, setProcessingTime] = useState(null);
     const [imageLoaded, setImageLoaded] = useState(false);
 
-    // ── BBox editor state ──────────────────────────────────
+    // ── BBox editor state ──
     const [showBBoxEditor, setShowBBoxEditor] = useState(false);
-    // Track which pages have been manually edited (for thumbnail indicator)
+    // Drives the "edited" dot on thumbnails.
     const [editedPages, setEditedPages] = useState(new Set());
 
-    // ── Process All Pages state ────────────────────────────
+    // ── Process-all state ──
     const [processingAll, setProcessingAll] = useState(false);
     const [processAllProgress, setProcessAllProgress] = useState(null);
     const cancelProcessingRef = useRef(false);
 
-    // ── Alignment state (dataset mode) ─────────────────────
+    // ── Alignment state (dataset mode) ──
     const [alignmentByPage, setAlignmentByPage] = useState(() => initialAlignmentByPage);
 
-    // ── Local OCR state (OCR mode) ─────────────────────────
+    // ── Local OCR state (OCR mode) ──
     const [localModels, setLocalModels] = useState([]);
     const [localModelsLoading, setLocalModelsLoading] = useState(false);
     const [localModelsError, setLocalModelsError] = useState(null);
@@ -280,42 +276,32 @@ export default function LayoutAwareDetectionPage({
     const [ocrTimeMs, setOcrTimeMs] = useState(null);
     const [ocrError, setOcrError] = useState(null);
 
-    // ── LLM post-processing state (OCR mode) ───────────────
-    // Optional pass that sends the recognized page transcript to an LLM
-    // (Gemini / OpenAI / DeepSeek / Qwen) for cleanup. Local Spanish-finetuned
-    // model is registered server-side but disabled for now.
+    // ── LLM post-processing (optional cleanup pass) ──
     const [llmEnabled, setLlmEnabled] = useState(false);
     const [llmProviders, setLlmProviders] = useState([]);
     const [llmProvider, setLlmProvider] = useState('gemini');
     const [llmModel, setLlmModel] = useState('gemini-2.5-flash');
     const [llmTemplates, setLlmTemplates] = useState([]);
     const [llmTemplate, setLlmTemplate] = useState('full_cleanup');
-    // Keyed by provider id so switching providers keeps each key entered.
+    // Keyed by provider so switching doesn't lose an entered key.
     const [llmApiKeys, setLlmApiKeys] = useState({});
     const [llmProcessing, setLlmProcessing] = useState(false);
     const [llmProgress, setLlmProgress] = useState(null);
     const [llmError, setLlmError] = useState(null);
-    // Records the last successful LLM polish (provider/model/template) so it
-    // can be stamped into the saved transcript's My Files metadata.
+    // Stamped into the saved transcript's My Files metadata.
     const [lastLlmRun, setLastLlmRun] = useState(null);
 
-    // Post-processing before/after: per page, the pre-polish text for the boxes
-    // the model actually changed — { [pageNum]: { [boxIndex]: beforeText } }.
-    // Powers the inline "changed lines" highlight + before/after view.
+    // { [pageNum]: { [boxIndex]: textBeforePolish } } for the changed-lines view.
     const [llmDiffByPage, setLlmDiffByPage] = useState({});
     const [showLlmDiff, setShowLlmDiff] = useState(true);
 
-    // ── Hover state for bidirectional highlight ─────────────
-    // Single source of truth: `hoveredBoxIndex` identifies the polygon index.
-    // Line rows derive their highlight from this + their assigned boxIndex,
-    // so we don't need a separate `hoveredLineIndex` state (one update cycle
-    // per hover event instead of two).
+    // One source of truth for image<->transcript hover. Rows derive their
+    // highlight from this, so hovering costs one state update, not two.
     const [hoveredBoxIndex, setHoveredBoxIndex] = useState(null);
 
     const imgRef = useRef(null);
     const imageWrapRef = useRef(null);
-    // Refs to transcript/recognition rows, keyed by box index, used to scroll
-    // the matching row into view when the user hovers a bbox on the image.
+    // Row refs by box index — used to scroll a row into view on image hover.
     const lineRefsRef = useRef(new Map());
     const setLineRef = useCallback((boxIndex, el) => {
         if (boxIndex == null) return;
@@ -323,18 +309,14 @@ export default function LayoutAwareDetectionPage({
         if (el) map.set(boxIndex, el);
         else map.delete(boxIndex);
     }, []);
-    // Natural image dimensions — needed to map SVG polygon coords (image
-    // pixels) into the displayed image's coordinate space via viewBox.
+    // Needed for the SVG viewBox, so polygon coords land in the right place.
     const [imageNaturalSize, setImageNaturalSize] = useState({ w: 0, h: 0 });
-    // Tracks which pages have already been seeded so the seed effect never
-    // overwrites alignment that already exists (avoids stale-closure re-fire).
+    // Stops the seed effect from clobbering alignment that already exists.
     const seededPages = useRef(new Set());
 
-    // ── Persist detection + alignment state to parent whenever it changes ──
-    // Skip the initial mount pass — otherwise we'd immediately overwrite the
-    // parent's cache with our initial (possibly empty) state before the user
-    // has done anything. Also pin the callback to a ref so re-renders caused
-    // by a new `onStateChange` identity don't trigger extra syncs.
+    // Push state up to the parent cache. Skipping the first pass matters —
+    // otherwise we overwrite the cache with empty state on mount. The ref keeps
+    // a new onStateChange identity from causing extra syncs.
     const onStateChangeRef = useRef(onStateChange);
     useEffect(() => { onStateChangeRef.current = onStateChange; }, [onStateChange]);
     const didMountStateSyncRef = useRef(false);
@@ -346,7 +328,7 @@ export default function LayoutAwareDetectionPage({
         onStateChangeRef.current?.({ pages: detectedPages, alignment: alignmentByPage });
     }, [detectedPages, alignmentByPage]);
 
-    // ── Derived data ───────────────────────────────────────
+    // ── Derived data ──
     const availablePages = useMemo(() => selectedPages || [], [selectedPages]);
     const currentPageNum = availablePages[viewingPageIndex] || 1;
     const totalPages = availablePages.length;
@@ -368,14 +350,12 @@ export default function LayoutAwareDetectionPage({
         return map;
     }, [currentRecognition]);
 
-    // Post-processing before/after for the current page: { boxIndex: beforeText }.
+    // { boxIndex: beforeText } for the current page.
     const currentDiff = llmDiffByPage[currentPageNum] || {};
     const changedLineCount = Object.keys(currentDiff).length;
 
-    // Sort detected boxes top → bottom using the midpoint-Y of the top edge.
-    // For rotated boxes the top edge midpoint is more stable than the single min-Y corner.
-    // Algorithm: sort the 4 polygon vertices by Y, take the two with smallest Y,
-    // their average Y is the sort key.
+    // Sort top-to-bottom by the midpoint-Y of the top edge (average of the two
+    // highest vertices). More stable than min-Y once boxes are rotated.
     const sortedBoxIndices = useMemo(() => {
         return currentLines
             .map((poly, idx) => {
@@ -389,7 +369,7 @@ export default function LayoutAwareDetectionPage({
 
     const getImageUrl = useCallback((pageNum) => {
         if (processedImages?.[pageNum]) return processedImages[pageNum];
-        // Use find-by-pageNumber so split pages ("1_left", "1_right") resolve correctly
+        // find-by-pageNumber, so split pages ("1_left") resolve correctly.
         const page = pages?.find(p => p.pageNumber === pageNum);
         return page?.thumbnail || null;
     }, [pages, processedImages]);
@@ -440,7 +420,7 @@ export default function LayoutAwareDetectionPage({
         };
     }, [datasetMode]);
 
-    // ── Arrow key navigation (only when BBox editor is closed) ──
+    // ── Arrow key navigation (BBox editor closed only) ──
     useEffect(() => {
         const handleKeyDown = (e) => {
             if (showBBoxEditor) return;
@@ -563,7 +543,6 @@ export default function LayoutAwareDetectionPage({
                         transcriptImages[pageKey] = dataUrl;
                     }
                 } catch {
-                    // Skip this page image if conversion fails.
                 }
             }
         }
@@ -592,7 +571,6 @@ export default function LayoutAwareDetectionPage({
                 if (!proceed) return;
             }
         } catch {
-            // If the check fails, proceed with saving anyway
         }
 
         try {
@@ -635,17 +613,14 @@ export default function LayoutAwareDetectionPage({
         });
     }, [currentPageNum, sortedBoxIndices]);
 
-    // Grow a borderless line <textarea> to fit its content so the recognized
-    // transcript reads like one continuous page instead of fixed-size boxes.
+    // Autogrow each line textarea so the transcript reads as one page.
     const autoGrowLine = useCallback((el) => {
         if (!el) return;
         el.style.height = 'auto';
         el.style.height = `${el.scrollHeight}px`;
     }, []);
 
-    // ── LLM post-processing ────────────────────────────────
-    // Lazily fetch provider + template lists the first time the feature is
-    // toggled on (keeps the initial page render light, mirrors TranscriptPanel).
+    // Fetch providers/templates only when the feature is first switched on.
     useEffect(() => {
         if (!llmEnabled || llmProviders.length > 0) return;
         getLLMProviders()
@@ -669,7 +644,7 @@ export default function LayoutAwareDetectionPage({
         [llmProviders, llmProvider],
     );
 
-    // Switch provider → reset model to that provider's default.
+    // Switching provider resets the model to that provider's default.
     const handleLlmProviderChange = useCallback((nextId) => {
         setLlmProvider(nextId);
         setLlmError(null);
@@ -678,9 +653,8 @@ export default function LayoutAwareDetectionPage({
         else if (meta && meta.models && meta.models.length > 0) setLlmModel(meta.models[0].id);
     }, [llmProviders]);
 
-    // Recognized lines for a page, ordered top-to-bottom by box position —
-    // identical ordering to the export / save logic so the polished text maps
-    // straight back onto the same boxes.
+    // Same top-to-bottom order as export/save, so polished text maps back onto
+    // the same boxes.
     const buildSortedRecognition = useCallback((pageNum) => {
         const byIndex = {};
         (recognizedByPage[pageNum] || []).forEach((r) => {
@@ -696,9 +670,8 @@ export default function LayoutAwareDetectionPage({
         return { orderedIdx, lines: orderedIdx.map((i) => byIndex[i] || '') };
     }, [recognizedByPage, detectedPages]);
 
-    // Polish one page: whole-page transcript → LLM → split back onto the same
-    // boxes in order. Extra returned lines are appended to the last box so no
-    // cleaned text is ever dropped from the exportable transcript.
+    // Whole page to the LLM, then split back onto the boxes in order. Extra
+    // returned lines get appended to the last box rather than dropped.
     const polishPage = useCallback(async (pageNum, provider, apiKey) => {
         const { orderedIdx, lines } = buildSortedRecognition(pageNum);
         const text = lines.join('\n').trim();
@@ -712,8 +685,7 @@ export default function LayoutAwareDetectionPage({
         }
         const cleaned = (res.processed_text || '').split('\n');
 
-        // Capture which boxes the model actually changed (before → after), so
-        // the UI can highlight them and show the previous text.
+        // Remember what changed so the UI can highlight it.
         const diff = {};
         orderedIdx.forEach((boxIdx, i) => {
             const before = lines[i] || '';
@@ -742,9 +714,8 @@ export default function LayoutAwareDetectionPage({
         return true;
     }, [buildSortedRecognition, llmModel, llmTemplate]);
 
-    // Returns the API key string on success (empty string for keyless local
-    // providers), or null if the selection is invalid. Callers must check
-    // `=== null` since '' is a valid (keyless) result.
+    // Returns the key, '' for keyless local providers, or null if invalid.
+    // Check `=== null` — '' is a valid result.
     const validateLlmReady = useCallback(() => {
         if (!llmProviderMeta || !llmProviderMeta.enabled) {
             setLlmError('Selected provider is not available yet.');
@@ -795,7 +766,7 @@ export default function LayoutAwareDetectionPage({
         try {
             for (let i = 0; i < pages.length; i += 1) {
                 setLlmProgress({ current: i + 1, total: pages.length });
-                // Sequential on purpose — keeps provider rate limits happy.
+                // Sequential on purpose — provider rate limits.
                 // eslint-disable-next-line no-await-in-loop
                 await polishPage(pages[i], llmProvider, key);
             }
@@ -809,12 +780,10 @@ export default function LayoutAwareDetectionPage({
 
     useEffect(() => {
         if (!isCurrentDetected) return;
-        // Only seed once per page — skip if already seeded or already has rows
-        // (handleBBoxSave manages alignment after that point).
+        // Seed once per page; handleBBoxSave owns alignment after that.
         if (seededPages.current.has(String(currentPageNum))) return;
-        // Rows restored from the parent cache (navigating back from export
-        // remounts this component and resets the seeded ref) must never be
-        // overwritten with the raw transcript — the user may have edited them.
+        // Rows restored from the parent cache may contain user edits — never
+        // stomp them with the raw transcript.
         if ((alignmentByPage[currentPageNum] || []).length > 0) {
             seededPages.current.add(String(currentPageNum));
             return;
@@ -823,8 +792,7 @@ export default function LayoutAwareDetectionPage({
         const transcriptKey = resolveTranscriptKey(transcript, currentPageNum);
         const transcriptLines = transcriptKey ? (transcript[transcriptKey] || []) : [];
 
-        // One row per transcript line; boxIndex = original polygon index of the
-        // corresponding sorted box (null if there are fewer boxes than lines).
+        // One row per transcript line. boxIndex is null when lines outnumber boxes.
         const initialRows = transcriptLines.map((line, index) => ({
             id: `${currentPageNum}-${index}-${nextRowId()}`,
             text: line,
@@ -838,7 +806,7 @@ export default function LayoutAwareDetectionPage({
         }));
     }, [isCurrentDetected, currentPageNum, sortedBoxIndices, transcript, alignmentByPage]);
 
-    // Reset hover state when navigating pages
+    // Clear hover on page change.
     useEffect(() => {
         setHoveredBoxIndex(null);
     }, [viewingPageIndex]);
@@ -857,9 +825,7 @@ export default function LayoutAwareDetectionPage({
         )));
     }, [currentPageNum, updateAlignmentRows]);
 
-    // Re-pair existing text lines with the current sorted box order.
-    // This is useful after manually editing / moving boxes in the BBox editor
-    // or after any structural change to the detected boxes.
+    // Re-pair text with the current box order — needed after box edits.
     const realignCurrentPage = useCallback(() => {
         setAlignmentByPage(prev => {
             const existingRows = prev[currentPageNum] || [];
@@ -928,10 +894,8 @@ export default function LayoutAwareDetectionPage({
         });
     }, [currentPageNum, updateAlignmentRows]);
 
-    // Insert a new, empty, unassigned line at any position. `atIndex` is
-    // clamped to [0, rows.length] so it works for "add at top", "insert
-    // below row N", and "append at end" alike. Combined with the existing
-    // move-up/down controls this lets a line be added anywhere.
+    // Insert a blank unassigned line. atIndex is clamped, so "at top",
+    // "below row N" and "append" all go through here.
     const insertLineAt = useCallback((atIndex) => {
         updateAlignmentRows(currentPageNum, (rows) => {
             const at = Math.max(0, Math.min(atIndex, rows.length));
@@ -944,15 +908,13 @@ export default function LayoutAwareDetectionPage({
         });
     }, [currentPageNum, updateAlignmentRows]);
 
-    // ── Helper: update one tuning param ────────────────────
+    // ── Update one tuning param ──
     const updateParam = useCallback((key, value) => {
         setTuningParams(prev => ({ ...prev, [key]: value }));
     }, []);
 
-    // ── Capture natural image size for SVG viewBox ──────────
-    // We need the untransformed pixel dimensions of the source image so the
-    // SVG overlay can declare a viewBox in the same coordinate space as the
-    // polygon points returned by the detector.
+    // The overlay's viewBox must be in source-image pixels, same space as the
+    // polygons the detector returns.
     useEffect(() => {
         if (!currentImageUrl) {
             setImageNaturalSize({ w: 0, h: 0 });
@@ -969,28 +931,27 @@ export default function LayoutAwareDetectionPage({
         return () => { cancelled = true; };
     }, [currentImageUrl]);
 
-    // Reset image display state on page change only
+    // Reset zoom/pan on page change.
     useEffect(() => {
         setImageLoaded(false);
         setHoveredBoxIndex(null);
     }, [viewingPageIndex]);
 
-    // Bboxes now render as an SVG overlay so hover state updates don't force
-    // an offscreen canvas rebuild + base64 encode on every mouse move.
+    // SVG overlay, not canvas — canvas meant a rebuild + base64 encode on
+    // every mouse move.
     const displayUrl = currentImageUrl;
 
-    // When the bbox hover source is the image (not the side panel), scroll
-    // the matching transcript/recognition row into view. We debounce via a
-    // microtask so rapid hover changes don't fight each other.
+    // Hovering a box on the image scrolls its row into view. The microtask
+    // keeps rapid hover changes from fighting.
     useEffect(() => {
         if (hoveredBoxIndex == null) return;
         const el = lineRefsRef.current.get(hoveredBoxIndex);
         if (!el) return;
-        // `nearest` avoids jarring centering when the row is already visible.
+        // 'nearest' avoids yanking a row that's already visible.
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, [hoveredBoxIndex]);
 
-    // ── Navigation ─────────────────────────────────────────
+    // ── Navigation ──
     const goToPage = useCallback((index) => {
         if (index >= 0 && index < totalPages) {
             setViewingPageIndex(index);
@@ -1000,7 +961,7 @@ export default function LayoutAwareDetectionPage({
         }
     }, [totalPages]);
 
-    // ── Helper: convert image URL to blob ──────────────────
+    // ── Image URL -> blob ──
     const urlToBlob = useCallback(async (url) => {
         if (url.startsWith('data:')) {
             const [header, b64] = url.split(',');
@@ -1014,7 +975,7 @@ export default function LayoutAwareDetectionPage({
         return r.blob();
     }, []);
 
-    // ── Build FormData with all params ─────────────────────
+    // ── Build the detection FormData ──
     const buildFormData = useCallback((blob) => {
         const fd = new FormData();
         fd.append('image', blob, 'page.png');
@@ -1030,9 +991,8 @@ export default function LayoutAwareDetectionPage({
         return fd;
     }, [selectedLayoutModel, selectedDetModel, tuningParams]);
 
-    // ── First-time model download status ──────────────────
-    // PaddleOCR downloads several GB of models lazily on the first detection.
-    // Probe the cache so we can show a one-time "downloading models" notice.
+    // PaddleOCR lazily downloads several GB on first detection — probe the
+    // cache so we can warn once instead of looking hung.
     useEffect(() => {
         let active = true;
         fetch(`${API_BASE}/api/detect/models-status?use_gpu=true`)
@@ -1042,14 +1002,14 @@ export default function LayoutAwareDetectionPage({
         return () => { active = false; };
     }, []);
 
-    // ── Single page detection ──────────────────────────────
+    // ── Single page detection ──
     const handleDetect = async () => {
         if (!currentImageUrl) return;
         setLoading(true);
         setError(null);
         setWarning(null);
         setProcessingTime(null);
-        // Show the one-time download notice if models aren't cached yet.
+        // Warn about the download if the models aren't cached.
         if (modelsReady === false) setDownloadingModels(true);
 
         try {
@@ -1080,7 +1040,7 @@ export default function LayoutAwareDetectionPage({
         }
     };
 
-    // ── Process All Pages (memory-efficient sequential loop)
+    // ── Process all pages, one at a time (memory) ──
     const handleDetectAll = async () => {
         if (processingAll || availablePages.length === 0) return;
         setProcessingAll(true);
@@ -1090,9 +1050,8 @@ export default function LayoutAwareDetectionPage({
 
         const total = availablePages.length;
         let lastWarning = null;
-        // Snapshot already-detected pages to avoid stale closure. String keys:
-        // split pages ("3_left") would become NaN under Number() and get
-        // re-detected, silently overwriting any manual box edits.
+        // Snapshot to dodge a stale closure. Keys stay strings — Number()
+        // turns "3_left" into NaN, which would silently re-detect and wipe edits.
         const alreadyDetected = new Set(Object.keys(detectedPages));
 
         try {
@@ -1101,9 +1060,8 @@ export default function LayoutAwareDetectionPage({
                 if (cancelProcessingRef.current) break;
                 const pageNum = availablePages[i];
                 setProcessAllProgress({ current: i + 1, total });
-                // Do NOT force viewingPageIndex — user can navigate freely while processing
+                // Don't force viewingPageIndex — let the user browse meanwhile.
 
-                // Skip already detected pages
                 if (alreadyDetected.has(String(pageNum))) continue;
 
                 const imageUrl = getImageUrl(pageNum);
@@ -1126,11 +1084,11 @@ export default function LayoutAwareDetectionPage({
                 setDetectedPages(prev => ({ ...prev, [pageNum]: data.lines || [] }));
                 alreadyDetected.add(String(pageNum));
                 if (data.warning) lastWarning = data.warning;
-                // First page succeeded -> models are cached; drop the notice.
+                // First page worked, so the models are cached now.
                 setModelsReady(true);
                 setDownloadingModels(false);
 
-                // Small delay between pages to allow GC + UI updates
+                // Breathing room for GC and a UI repaint.
                 await new Promise(r => setTimeout(r, 100));
             }
 
@@ -1147,9 +1105,7 @@ export default function LayoutAwareDetectionPage({
 
     const isAnyLoading = loading || processingAll;
 
-    // ════════════════════════════════════════════════════════
-    // LEFT SIDEBAR
-    // ════════════════════════════════════════════════════════
+    // ── Left sidebar ──
     const leftSidebar = (
         <div className="h-full overflow-y-auto space-y-2 pr-0.5 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent">
             {/* Parameters Card */}
@@ -1394,7 +1350,7 @@ export default function LayoutAwareDetectionPage({
         </div>
     );
 
-    // ── BBox editor: build pages array from all detected pages ─────────
+    // ── BBox editor ──
     const bboxEditorPages = useMemo(() =>
         availablePages
             .filter(pageNum => pageNum in detectedPages)
@@ -1406,29 +1362,21 @@ export default function LayoutAwareDetectionPage({
         [availablePages, detectedPages, getImageUrl]
     );
 
-    // ── BBox editor save handler — receives all modified pages ──────────
+
     const handleBBoxSave = useCallback((results) => {
-        // results: { [pageNumber]: Array<polygon> }
+        // results: { [pageNumber]: polygon[] }
         setDetectedPages(prev => ({ ...prev, ...results }));
 
-        // Fully recompute alignment for every page whose polygon list changed.
-        // Algorithm:
-        //   1. Sort new polygons top→bottom by midpoint-Y of the two topmost vertices.
-        //   2. Collect the current text lines in their existing display order.
-        //      - If alignment already exists for the page, use those row texts.
-        //      - Otherwise fall back to the raw transcript lines.
-        //   3. Re-pair: text[i] ↔ sortedIdx[i].  Extra texts get boxIndex=null.
-        //      Extra boxes (more boxes than texts) get a blank row at the end.
-        // This preserves any manual text edits while fixing the sort order.
+        // Re-sort the new polygons top-to-bottom, then re-pair them with the
+        // existing text lines by position. Keeps manual text edits intact while
+        // fixing the ordering.
         setAlignmentByPage(prevAlignment => {
             const next = { ...prevAlignment };
 
             Object.entries(results).forEach(([pageNum, newPolygons]) => {
-                // NOTE: keep the raw string key — page numbers can be
-                // "3_left"/"3_right" for split spreads; Number() would turn
-                // those into NaN and save the alignment under the wrong key.
+                // Keep the string key: Number("3_left") is NaN.
 
-                // Step 1 — re-sort polygon indices top→bottom
+
                 const sortedIdxs = newPolygons
                     .map((poly, idx) => {
                         const byY = [...poly].sort((a, b) => a[1] - b[1]);
@@ -1438,7 +1386,7 @@ export default function LayoutAwareDetectionPage({
                     .sort((a, b) => a.topMidY - b.topMidY)
                     .map(item => item.idx);
 
-                // Step 2 — gather text lines (existing edits, else raw transcript)
+                // Prefer the user's edited rows over the raw transcript.
                 const existingRows = prevAlignment[pageNum];
                 let texts;
                 if (existingRows && existingRows.length > 0) {
@@ -1448,12 +1396,8 @@ export default function LayoutAwareDetectionPage({
                     texts = tk ? (transcript[tk] || []) : [];
                 }
 
-                // Step 3 — rebuild rows: one row per text line, re-paired with
-                // the new sort order.  Never create extra blank rows for extra
-                // boxes — the alignment panel is text-driven, not box-driven.
-                // If there are MORE boxes than texts, extra boxes are simply
-                // unassigned (no row).  If there are MORE texts than boxes,
-                // those extra texts keep boxIndex=null (shown as "unassigned").
+                // One row per text line — the panel is text-driven, so surplus
+                // boxes get no row and surplus texts get boxIndex=null.
                 const newRows = texts.map((text, i) => ({
                     id: `${pageNum}-${i}-${nextRowId()}`,
                     text,
@@ -1461,7 +1405,7 @@ export default function LayoutAwareDetectionPage({
                 }));
 
                 next[pageNum] = newRows;
-                // Mark as seeded so the seed effect won't overwrite this on re-render.
+                // Mark seeded so the seed effect leaves this alone.
                 seededPages.current.add(String(pageNum));
             });
 
@@ -1476,9 +1420,7 @@ export default function LayoutAwareDetectionPage({
         setShowBBoxEditor(false);
     }, [transcript]);
 
-    // ════════════════════════════════════════════════════════
-    // CENTER PANEL — Image Preview
-    // ════════════════════════════════════════════════════════
+    // ── Center panel: image preview ──
     const centerPanel = (
         <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full relative">
             {/* Navigation header */}
@@ -1614,9 +1556,7 @@ export default function LayoutAwareDetectionPage({
         return result;
     }, [alignmentByPage]);
 
-    // ════════════════════════════════════════════════════════
-    // RIGHT PANEL — Step 4 Alignment
-    // ════════════════════════════════════════════════════════
+    // ── Right panel: alignment (step 4) ──
     const rightPanel = (
         <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
             <div className="px-3 py-2 bg-gradient-to-r from-teal-50/80 via-white to-emerald-50/50 border-b border-gray-100/80 flex items-center justify-between shrink-0">
@@ -1806,9 +1746,7 @@ export default function LayoutAwareDetectionPage({
     );
 
 
-    // ════════════════════════════════════════════════════════
-    // OCR RIGHT PANEL — local model selection + transcript generation
-    // ════════════════════════════════════════════════════════
+    // ── Right panel: local OCR ──
     const ocrRightPanel = (
         <div className="bg-white/95 backdrop-blur-sm rounded-xl border border-gray-200/80 shadow-sm overflow-hidden flex flex-col h-full">
             <div className="px-3 py-2.5 bg-gradient-to-r from-blue-50/80 via-white to-indigo-50/50 border-b border-gray-100/80 shrink-0 flex items-center gap-2">
@@ -1914,10 +1852,8 @@ export default function LayoutAwareDetectionPage({
                 )}
 
                 {isCurrentDetected && sortedBoxIndices.length > 0 && (
-                    // Continuous "page" — lines flow together like a document
-                    // instead of separate cards. Per-line hover still drives the
-                    // shared `hoveredBoxIndex`, so the bbox overlay highlights
-                    // in sync (and vice-versa via the SVG polygons + scroll).
+                    // Lines flow together like a document rather than sitting in
+                    // cards. Hover still drives the shared bbox highlight.
                     <div
                         className="bg-white rounded-lg border border-gray-200 shadow-inner px-3 py-3"
                         onMouseLeave={() => setHoveredBoxIndex(null)}
@@ -2316,9 +2252,7 @@ export default function LayoutAwareDetectionPage({
         </div>
     );
 
-    // ════════════════════════════════════════════════════════
-    // RENDER
-    // ════════════════════════════════════════════════════════
+    // ── Render ──
     return (
         <div className="h-full w-full flex flex-col bg-gradient-to-br from-slate-50 via-teal-50/20 to-emerald-50/30 overflow-hidden">
 

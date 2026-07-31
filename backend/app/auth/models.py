@@ -26,18 +26,16 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    verification_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now, nullable=False)
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # When this signup was successfully pushed to central Supabase tracking.
-    # NULL = not yet pushed; the retry loop keeps trying until it's set. This
-    # makes the local DB itself the durable queue (survives restarts/downtime).
+    # NULL until the signup lands in central Supabase tracking, so the local
+    # DB doubles as the durable retry queue.
     tracked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     def public_dict(self) -> dict:
-        """Serializable view WITHOUT the password hash or token."""
+        """Serializable view, minus the password hash."""
         return {
             "id": self.id,
             "username": self.username,

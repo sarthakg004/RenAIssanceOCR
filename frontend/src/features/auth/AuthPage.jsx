@@ -1,14 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { BookOpen, Loader2, Mail, CheckCircle2, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import React, { useState } from 'react';
+import { BookOpen, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { login as apiLogin, signup as apiSignup } from './authApi';
 
-/**
- * Combined login / signup screen shown before the app loads.
- * Matches the app's blue/indigo gradient theme.
- *
- * Props:
- *   onAuthSuccess(user) — called once a session cookie is established.
- */
+// Login / signup gate shown before the app loads.
+// onAuthSuccess(user) fires once the session cookie is set.
 export default function AuthPage({ onAuthSuccess }) {
   const [mode, setMode] = useState('login'); // 'login' | 'signup'
   const [form, setForm] = useState({
@@ -21,20 +16,6 @@ export default function AuthPage({ onAuthSuccess }) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-
-  // Surface the email-verification redirect result (?verified=success|already).
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const v = params.get('verified');
-    if (v === 'success') setNotice('Your email is verified — you can now log in.');
-    else if (v === 'already') setNotice('This link was already used. Please log in.');
-    if (v) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('verified');
-      window.history.replaceState({}, '', url);
-    }
-  }, []);
 
   const update = (field) => (e) =>
     setForm((f) => ({ ...f, [field]: e.target.value }));
@@ -42,22 +23,15 @@ export default function AuthPage({ onAuthSuccess }) {
   const switchMode = (next) => {
     setMode(next);
     setError('');
-    setNotice('');
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    setNotice('');
     setLoading(true);
     try {
       if (mode === 'signup') {
         const res = await apiSignup(form);
-        if (res?.email_sent) {
-          setNotice(
-            'Account created! Please check your email and click the verification link.'
-          );
-        }
         onAuthSuccess(res.user);
       } else {
         const res = await apiLogin({
@@ -112,17 +86,6 @@ export default function AuthPage({ onAuthSuccess }) {
               </button>
             ))}
           </div>
-
-          {notice && (
-            <div className="mb-4 flex items-start gap-2 p-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm animate-fade-in">
-              {notice.toLowerCase().includes('verif') ? (
-                <Mail className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              ) : (
-                <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0" />
-              )}
-              <span>{notice}</span>
-            </div>
-          )}
 
           {error && (
             <div className="mb-4 flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-red-600 text-sm animate-fade-in">

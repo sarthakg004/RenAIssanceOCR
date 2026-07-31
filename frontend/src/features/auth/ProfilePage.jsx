@@ -2,15 +2,8 @@ import React, { useState } from 'react';
 import { X, Loader2, CheckCircle2, AlertCircle, User as UserIcon } from 'lucide-react';
 import { updateProfile } from './authApi';
 
-/**
- * Profile modal — edit name / email / institute (username is fixed).
- * On save, persists locally and syncs to central Supabase tracking.
- *
- * Props:
- *   user          — current user object
- *   onClose()     — close the modal
- *   onUpdated(u)  — called with the updated user on success
- */
+// Edit name / email / institute; the username is fixed. Saving persists
+// locally and syncs to central tracking.
 export default function ProfilePage({ user, onClose, onUpdated }) {
   const [form, setForm] = useState({
     name: user.name || '',

@@ -1,10 +1,4 @@
-"""
-LLM Post-processing API Router — optional OCR text cleanup.
-
-Supports multiple providers (Gemini, OpenAI, DeepSeek, Qwen); the local
-Spanish-finetuned model is registered but disabled (see
-services/llm_processing/factory.py).
-"""
+"""Optional LLM cleanup pass over OCR text. Providers live in the factory."""
 
 import traceback
 from typing import Optional
@@ -57,8 +51,7 @@ async def get_templates():
 @router.post("/post-process", response_model=PostProcessResponse)
 async def post_process_endpoint(
     request: PostProcessRequest,
-    # Generic key header for any provider. X-Gemini-API-Key is still accepted
-    # as a fallback so the existing Gemini OCR flow keeps working unchanged.
+    # X-Gemini-API-Key stays accepted so the older Gemini flow keeps working.
     x_llm_api_key: Optional[str] = Header(None, alias="X-LLM-API-Key"),
     x_gemini_api_key: Optional[str] = Header(None, alias="X-Gemini-API-Key"),
 ):
@@ -93,7 +86,7 @@ async def post_process_endpoint(
             provider_used=request.provider,
         )
     except ValueError as e:
-        # Unknown / disabled provider — a client error, not a server fault.
+        # Unknown/disabled provider — the caller's fault, not ours.
         return PostProcessResponse(success=False, error=str(e))
     except Exception as e:
         traceback.print_exc()

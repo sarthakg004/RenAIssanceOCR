@@ -1,14 +1,11 @@
-"""
-CRNN Recognizer — self-contained module for line-level OCR inference.
+"""CRNN line-level OCR.
 
-Adapts trained CRNN models from RenAIssanceExperimental to run inside
-the FastAPI backend.  All model definitions and helpers are inlined so
-the backend has zero runtime dependency on the experimental repo.
+The architecture and helpers are copy-pasted from RenAIssanceExperimental on
+purpose, so the backend doesn't depend on that repo at runtime.
 """
 
 from __future__ import annotations
 
-import gc
 import os
 import logging
 from typing import Optional
@@ -19,14 +16,12 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
-from app.utils.torch_device import empty_device_cache, select_torch_device
+from app.utils.torch_device import select_torch_device
 
 logger = logging.getLogger(__name__)
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Model Architecture (copied from RenAIssanceExperimental/src/models)
-# ══════════════════════════════════════════════════════════════════════
+# ── Model architecture ────────────────────────────────────────────────
 
 
 class ResBlock(nn.Module):
@@ -112,9 +107,7 @@ class CRNN(nn.Module):
         return x.log_softmax(-1)
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Helpers (inlined from RenAIssanceExperimental)
-# ══════════════════════════════════════════════════════════════════════
+# ── Helpers ───────────────────────────────────────────────────────────
 
 
 def resize_keep_ratio(img: Image.Image, height: int = 64) -> Image.Image:
@@ -152,23 +145,18 @@ def crop_polygon_gray(image_bgr: np.ndarray, poly_pts) -> Image.Image:
     x2 = min(image_bgr.shape[1], x2)
     y2 = min(image_bgr.shape[0], y2)
     if x2 <= x1 or y2 <= y1:
-        # Degenerate box — return a tiny blank image
-        return Image.new("L", (8, 8), 255)
+        return Image.new("L", (8, 8), 255)  # degenerate box
     crop = image_bgr[y1:y2, x1:x2]
     return Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY))
 
 
-# ══════════════════════════════════════════════════════════════════════
-# Model Discovery
-# ══════════════════════════════════════════════════════════════════════
+# ── Model discovery ───────────────────────────────────────────────────
 
 
 def discover_models(search_dir: str) -> list[dict]:
-    """
-    Recursively scan *search_dir* for .pth / .pt files.
+    """Find CRNN .pth/.pt checkpoints under search_dir.
 
-        Returns a list of:
-            {"id": "crnn:<stem>", "name": "CRNN - <stem>", "model_type": "crnn", "path": <abs_path>}
+    Returns [{"id": "crnn:<stem>", "name", "model_type", "path"}, ...].
     """
     models = []
     if not os.path.isdir(search_dir):
@@ -193,21 +181,11 @@ def discover_models(search_dir: str) -> list[dict]:
     return sorted(models, key=lambda item: item["name"].lower())
 
 
-# ══════════════════════════════════════════════════════════════════════
-# CRNNRecognizer
-# ══════════════════════════════════════════════════════════════════════
+# ── Recognizer ────────────────────────────────────────────────────────
 
 
 class CRNNRecognizer:
-    """
-    Lazy-loading, cached CRNN recognizer.
-
-    Usage
-    -----
-        recognizer = CRNNRecognizer("/path/to/best_crnn.pth")
-        text = recognizer.predict(pil_gray_image)
-        texts = recognizer.predict_batch([img1, img2, ...])
-    """
+    """Loads the checkpoint on first predict, then keeps it in memory."""
 
     def __init__(self, model_path: str, device: Optional[str] = None):
         self.model_path = model_path
@@ -215,7 +193,6 @@ class CRNNRecognizer:
         self._idx2char: Optional[dict] = None
         self._img_height: int = 64
 
-        # Auto-select device
         if device is None:
             self.device = select_torch_device()
         else:
@@ -226,8 +203,6 @@ class CRNNRecognizer:
             os.path.basename(model_path),
             self.device,
         )
-
-    # ── lazy load ──────────────────────────────────────────────
 
     def _ensure_loaded(self):
         if self._model is not None:
@@ -254,8 +229,6 @@ class CRNNRecognizer:
             self.device,
         )
 
-    # ── single predict ────────────────────────────────────────
-
     def predict(self, image: Image.Image) -> str:
         """Recognise text from a single grayscale line image."""
         self._ensure_loaded()
@@ -266,8 +239,6 @@ class CRNNRecognizer:
             log_probs = self._model(inp)
         return ctc_greedy_decode(log_probs, self._idx2char)[0]
 
-    # ── batch predict ─────────────────────────────────────────
-
     def predict_batch(self, images: list[Image.Image]) -> list[str]:
         """Recognise text from a batch of grayscale line images."""
         if not images:
@@ -275,16 +246,14 @@ class CRNNRecognizer:
 
         self._ensure_loaded()
 
-        # Resize all images
         resized = [resize_keep_ratio(img.convert("L"), self._img_height) for img in images]
 
-        # Convert to tensors
         tensors = []
         for img in resized:
             arr = np.asarray(img, dtype=np.float32) / 255.0
             tensors.append(torch.from_numpy(arr).unsqueeze(0))
 
-        # Pad to same width
+        # Lines vary in width after the fixed-height resize, so pad to the widest.
         max_w = max(t.shape[-1] for t in tensors)
         padded = [torch.nn.functional.pad(t, (0, max_w - t.shape[-1])) for t in tensors]
         batch = torch.stack(padded).to(self.device)
@@ -293,17 +262,6 @@ class CRNNRecognizer:
             log_probs = self._model(batch)
 
         return ctc_greedy_decode(log_probs, self._idx2char)
-
-    # ── cleanup ───────────────────────────────────────────────
-
-    def unload(self):
-        """Explicitly free the model from memory."""
-        if self._model is not None:
-            del self._model
-            self._model = None
-            gc.collect()
-            empty_device_cache(self.device)
-            logger.info("CRNN model unloaded")
 
 
 # ── Global model cache ────────────────────────────────────────────────

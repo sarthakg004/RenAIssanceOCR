@@ -1,10 +1,6 @@
-"""Health endpoint + full app-import smoke.
+"""Health route, plus importing app.main as a check on the whole import graph.
 
-Importing app.main exercises the entire router/service import graph (a real
-regression guard), and the route must be registered and return the healthy
-payload. Real end-to-end HTTP health is covered by the CI container smoke job
-(curl against the running container) — kept here as a portable unit check that
-doesn't couple to the TestClient/httpx version interplay.
+Real HTTP health is covered by the CI container smoke job.
 """
 
 import asyncio

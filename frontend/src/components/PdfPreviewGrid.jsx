@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { CheckSquare, Square, Grid3X3, LayoutGrid, X, ZoomIn } from 'lucide-react';
 import PageCard from './PageCard';
 
-// Helper: check if two rects intersect (both in { left, top, right, bottom } format)
+// Rect intersection, both in { left, top, right, bottom }.
 function rectsIntersect(a, b) {
   return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
 }
@@ -17,7 +17,6 @@ export default function PdfPreviewGrid({
   const [lastSelectedIndex, setLastSelectedIndex] = useState(null);
   const [previewPage, setPreviewPage] = useState(null);
 
-  // Drag-to-select state
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState(null);
   const [dragEnd, setDragEnd] = useState(null);
@@ -34,18 +33,15 @@ export default function PdfPreviewGrid({
 
   const handleSelectPage = useCallback(
     (pageNumber, isRangeSelect) => {
-      // Find position of this page in the list
       const pageIndex = pages.findIndex(p => p.pageNumber === pageNumber);
 
       if (isRangeSelect && lastSelectedIndex !== null) {
-        // Range select by position order
         const start = Math.min(lastSelectedIndex, pageIndex);
         const end = Math.max(lastSelectedIndex, pageIndex);
         const rangePageNumbers = pages.slice(start, end + 1).map(p => p.pageNumber);
         const newSelection = Array.from(new Set([...selectedPages, ...rangePageNumbers]));
         onSelectionChange(newSelection);
       } else {
-        // Toggle single selection
         const newSelection = selectedPages.includes(pageNumber)
           ? selectedPages.filter((p) => p !== pageNumber)
           : [...selectedPages, pageNumber];
@@ -73,7 +69,6 @@ export default function PdfPreviewGrid({
 
   const isAllSelected = selectedPages.length === pages.length && pages.length > 0;
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && previewPage) {
@@ -89,9 +84,8 @@ export default function PdfPreviewGrid({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewPage, pages.length]);
 
-  // --- Drag-to-select logic ---
+  // ── Rubber-band selection ──
 
-  // Compute which pages intersect the rubber band and update selection
   const computeDragSelection = useCallback((start, end) => {
     if (!start || !end) return;
 
@@ -117,21 +111,17 @@ export default function PdfPreviewGrid({
     let newSelection;
 
     if (ctrl || shift) {
-      // Additive: union with pre-drag selection
       newSelection = Array.from(new Set([...preSelectionRef.current, ...intersectedPages]));
     } else {
-      // Replace: only the intersected pages
       newSelection = intersectedPages;
     }
 
     onSelectionChange(newSelection);
   }, [pages, onSelectionChange]);
 
-  // Start drag on mousedown in the grid background (not on a page card)
   const handleGridMouseDown = useCallback((e) => {
-    // Only left button
     if (e.button !== 0) return;
-    // Don't start drag if clicking on a page card or interactive element
+    // Clicks on a card or control aren't the start of a selection drag.
     if (e.target.closest('[data-page-card]')) return;
     if (e.target.closest('button')) return;
 
@@ -144,7 +134,6 @@ export default function PdfPreviewGrid({
     preSelectionRef.current = [...selectedPages];
   }, [selectedPages]);
 
-  // Track mousemove and mouseup while dragging
   useEffect(() => {
     if (!isDragging) return;
 
@@ -168,7 +157,6 @@ export default function PdfPreviewGrid({
     };
   }, [isDragging, dragStart, computeDragSelection]);
 
-  // Rubber band rect style
   const rubberBandStyle = isDragging && dragStart && dragEnd ? {
     position: 'fixed',
     left: Math.min(dragStart.x, dragEnd.x),

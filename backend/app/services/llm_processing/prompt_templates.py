@@ -1,20 +1,10 @@
-"""
-Prompt templates for LLM-based OCR post-processing.
+"""Prompt templates for LLM cleanup of OCR text.
 
-Each template instructs the LLM to improve OCR text without hallucinating or
-adding new content. The model must preserve the original structure.
-
-IMPORTANT — line count is sacred. The app sends a whole-page transcript with
-ONE line per text region detected by the layout-detection (PaddleOCR) step, and
-maps each returned line back onto the same region by position. So every template
-gets the same non-negotiable line-preservation contract appended by
-`get_template()`: the model may correct text *within* a line but must return the
-exact same number of lines, in the same order. The finetuned local model
-(`local_es`) does not use these templates — it corrects line-by-line directly.
+Line count is sacred: one line per detected text region, mapped back by
+position. Every template gets _LINE_PRESERVATION appended to enforce that.
+(local_es skips these — it corrects one line at a time anyway.)
 """
 
-# Appended to every template. The whole page is sent for context, but the line
-# structure is fixed by text detection and must survive verbatim.
 _LINE_PRESERVATION = (
     "\n\nCRITICAL — DO NOT CHANGE THE NUMBER OF LINES:\n"
     "The transcript below has exactly one line per text region detected on the "
@@ -84,18 +74,13 @@ TEMPLATES = {
 
 
 def get_template(name: str) -> str:
-    """Return the prompt prefix for the given template + the line contract.
-
-    The whole-page transcript is concatenated straight after the returned
-    string by the provider clients, so the line-preservation contract and the
-    input header live at the very end here.
-    """
+    """Template prompt + the line contract. Callers append the transcript after."""
     entry = TEMPLATES.get(name, TEMPLATES["full_cleanup"])
     return entry["prompt"] + _LINE_PRESERVATION
 
 
 def list_templates() -> list:
-    """Return a list of available template metadata."""
+    """Template metadata for the UI dropdown."""
     return [
         {"id": key, "name": val["name"], "description": val["description"]}
         for key, val in TEMPLATES.items()

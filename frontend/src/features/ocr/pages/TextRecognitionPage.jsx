@@ -21,17 +21,12 @@ import {
     DEFAULT_MODELS,
 } from '../config/providers';
 
-// Default batch size (safe for 5 req/min limit)
+// Safe under the 5 req/min free-tier limit.
 const DEFAULT_BATCH_SIZE = 4;
 
-/**
- * TextRecognitionPage - Full Viewport OCR Workspace
- * Redesigned with 3-column responsive layout
- * Supports background auto-processing with batch concurrent requests
- * Now supports multiple providers: gemini, chatgpt, deepseek, qwen
- */
+// Three-column OCR workspace. Pages process in the background while the user
+// browses; Gemini goes through the batch endpoint, everyone else sequentially.
 export default function TextRecognitionPage({ provider = 'gemini', bookName = 'transcript', processedImages, onBack, onHome, onComplete }) {
-    // API Configuration
     const [apiKey, setApiKey] = useState('');
     const [isKeyValid, setIsKeyValid] = useState(null);
     const [isValidating, setIsValidating] = useState(false);
@@ -40,10 +35,9 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
     const [backendOnline, setBackendOnline] = useState(null);
     const [batchSize, setBatchSize] = useState(DEFAULT_BATCH_SIZE);
 
-    // Viewing state - which page user is looking at
+    // Which page the user is looking at — independent of what's processing.
     const [viewingPageIndex, setViewingPageIndex] = useState(0);
 
-    // Processing state - tracks pages currently being processed
     const [processingPageIndex, setProcessingPageIndex] = useState(null);
     const [processingPageIndices, setProcessingPageIndices] = useState(new Set()); // For batch processing
     const [isProcessing, setIsProcessing] = useState(false);
@@ -51,18 +45,15 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
     const [isWaitingForRateLimit, setIsWaitingForRateLimit] = useState(false); // True when auto-processing is waiting
     const [error, setError] = useState(null);
 
-    // Ref to track if batch processing is in progress (prevents multiple batches)
+    // Guards against two batches running at once.
     const batchInProgressRef = useRef(false);
 
-    // Transcripts
     const [transcripts, setTranscripts] = useState({});
     const [originalTranscripts, setOriginalTranscripts] = useState({});
     const [processedPages, setProcessedPages] = useState(new Set());
-    // Pages that errored (not rate-limit/quota) — don't auto-resend the same
-    // image forever; each page is attempted once per auto-run.
+    // Real failures, not rate limits. One attempt per page per auto-run.
     const [failedPages, setFailedPages] = useState(new Set());
 
-    // Rate limit
     const [rateLimitReady, setRateLimitReady] = useState(true);
     const [waitSeconds, setWaitSeconds] = useState(0);
     const [availableSlots, setAvailableSlots] = useState(5);
@@ -71,23 +62,19 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
     const MAX_POLL_RETRIES = 30; // Stop polling after ~60 seconds (30 * 2s)
     const lastSavedSignatureRef = useRef('');
 
-    // Export state
     const [exporting, setExporting] = useState(null);
     const [isSavingSession, setIsSavingSession] = useState(false);
     const [sessionSaved, setSessionSaved] = useState(false);
 
-    // Zoom state - lifted here to persist across page changes
+    // Lifted so zoom survives page changes.
     const [zoomLevel, setZoomLevel] = useState(1);
 
-    // Custom prompt state
     const [customPrompt, setCustomPrompt] = useState('');
 
-    // Use the same page numbers shown in the Select Pages step
     const pageLabels = useMemo(() => {
         return processedImages.map((img) => `${img.pageNumber}`);
     }, [processedImages]);
 
-    // Load models on mount based on provider
     useEffect(() => {
         async function loadModels() {
             try {
@@ -104,7 +91,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         loadModels();
     }, [provider]);
 
-    // Initialize transcripts using original page labels as keys
     useEffect(() => {
         const initial = {};
         processedImages.forEach((_, index) => {
@@ -114,14 +100,12 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         setOriginalTranscripts(initial);
     }, [processedImages, pageLabels]);
 
-    // Rate limit countdown
     useEffect(() => {
         if (waitSeconds > 0) {
             const timer = setTimeout(() => {
                 setWaitSeconds((prev) => {
                     if (prev <= 1) {
                         setRateLimitReady(true);
-                        // Clear any rate-limit error so the banner doesn't linger
                         setError((e) => (e && e.includes('Rate limit') ? null : e));
                         return 0;
                     }
@@ -132,7 +116,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }
     }, [waitSeconds]);
 
-    // Computed values - for the page user is VIEWING
     const viewingPage = processedImages[viewingPageIndex];
     const viewingPageLabel = pageLabels[viewingPageIndex];
     const totalPages = processedImages.length;
@@ -140,13 +123,11 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
     const hasAnyTranscript = processedPages.size > 0;
     const canProcess = apiKey && apiKey.length >= 10 && isKeyValid !== false && rateLimitReady;
 
-    // Check if the currently viewing page is being processed (single or batch)
     const isViewingPageProcessing = isProcessing && (
         processingPageIndex === viewingPageIndex ||
         processingPageIndices.has(viewingPageIndex)
     );
 
-    // Manual API key verification (simple format check for non-Gemini providers)
     const handleVerifyKey = useCallback(async () => {
         if (!apiKey || apiKey.length < 10) return;
 
@@ -161,8 +142,7 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     setError(result.error || 'Invalid API key');
                 }
             } else {
-                // For non-Gemini providers, do a simple format check
-                // Actual validation happens on first OCR call
+                // Format check only; the key is really tested on first OCR.
                 if (apiKey.length >= 20) {
                     setIsKeyValid(true);
                 } else {
@@ -178,17 +158,14 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }
     }, [apiKey, provider]);
 
-    // Handle API key change - reset validation state
     const handleApiKeyChange = useCallback((value) => {
         setApiKey(value);
-        // Only clear validation state, don't auto-validate
         if (isKeyValid !== null) {
             setIsKeyValid(null);
         }
         setError(null);
     }, [isKeyValid]);
 
-    // Navigation - only changes viewing, not processing
     const goToPage = useCallback((index) => {
         if (index >= 0 && index < totalPages) {
             setViewingPageIndex(index);
@@ -196,7 +173,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }
     }, [totalPages]);
 
-    // Process a specific page using the unified API
     const processPage = useCallback(async (pageIndex) => {
         if (!canProcess || isProcessing) return;
 
@@ -210,14 +186,12 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         try {
             const imageData = page.processed || page.original;
 
-            // Call the unified OCR API with provider parameter
             const result = await processPageOCR(imageData, selectedModel, apiKey, provider, customPrompt);
 
             if (result.success) {
                 setTranscripts((prev) => ({ ...prev, [pageLabel]: result.transcript }));
                 setOriginalTranscripts((prev) => ({ ...prev, [pageLabel]: result.transcript }));
                 setProcessedPages((prev) => new Set([...prev, pageLabel]));
-                // Mark key as valid since OCR succeeded
                 setIsKeyValid(true);
             } else if (result.error === 'rate_limited') {
                 setRateLimitReady(false);
@@ -240,15 +214,12 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }
     }, [apiKey, processedImages, selectedModel, canProcess, isProcessing, provider, customPrompt, pageLabels]);
 
-    // Process the currently viewed page (for manual "Process Page" button)
     const processCurrentPage = useCallback(() => {
         processPage(viewingPageIndex);
     }, [processPage, viewingPageIndex]);
 
-    // Batch process multiple pages concurrently
-    // For non-Gemini providers, process sequentially since they don't have a batch endpoint
+    // Gemini has a real batch endpoint; the others go one at a time.
     const processBatch = useCallback(async (pageIndices) => {
-        // Use ref as primary guard to prevent concurrent calls
         if (batchInProgressRef.current) return;
         if (!canProcess || pageIndices.length === 0) return;
 
@@ -259,7 +230,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
 
         try {
             if (provider === 'gemini') {
-                // Gemini has a batch endpoint
                 const items = pageIndices.map(pageIndex => {
                     const page = processedImages[pageIndex];
                     return {
@@ -271,14 +241,12 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                 const result = await processBatchOCR(items, selectedModel, apiKey, customPrompt);
 
                 if (result.success) {
-                    // Check if quota was exceeded (daily limit)
                     if (result.quotaExceeded) {
                         setDailyLimitReached(true);
                         setIsAutoProcessing(false);
                         setError('Daily API quota exceeded. Please try again tomorrow or use a different API key.');
                     }
 
-                    // Process each result
                     let quotaHit = false;
                     const failures = [];
                     result.results.forEach(item => {
@@ -288,13 +256,11 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                             setOriginalTranscripts(prev => ({ ...prev, [pageLabel]: item.transcript }));
                             setProcessedPages(prev => new Set([...prev, pageLabel]));
                         } else {
-                            // Check individual errors for quota issues
                             const errLower = (item.error || '').toLowerCase();
                             if (errLower.includes('quota') || errLower.includes('resource_exhausted')) {
                                 quotaHit = true;
                             } else {
-                                // Real per-page failure — mark it so auto-processing
-                                // moves on instead of resending the same image.
+                                // Mark it so auto-processing moves on.
                                 setFailedPages(prev => new Set([...prev, pageLabel]));
                                 failures.push(`Page ${pageLabel}: ${item.error || 'failed'}`);
                             }
@@ -302,7 +268,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                         }
                     });
 
-                    // Tell the user about failures (quota, 503 busy, etc.)
                     if (quotaHit) {
                         setDailyLimitReached(true);
                         setIsAutoProcessing(false);
@@ -311,17 +276,14 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                         setError(failures.join(' • '));
                     }
 
-                    // Mark key as valid since at least some OCR succeeded
                     if (result.successfulCount > 0) {
                         setIsKeyValid(true);
                     }
 
-                    // Update rate limit status
                     const status = await getRateLimitStatus();
                     const slotsAvailable = status.available_slots || 0;
                     setAvailableSlots(slotsAvailable);
 
-                    // Mark ready if we have any slots available
                     setRateLimitReady(status.ready && slotsAvailable > 0);
 
                     if (!status.ready || slotsAvailable === 0) {
@@ -343,7 +305,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     setError(result.error || 'Batch processing failed');
                 }
             } else {
-                // For non-Gemini providers: process pages sequentially
                 for (const pageIndex of pageIndices) {
                     const page = processedImages[pageIndex];
                     const imageData = page.processed || page.original;
@@ -387,10 +348,8 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }
     }, [apiKey, processedImages, selectedModel, canProcess, provider, customPrompt, pageLabels]);
 
-    // Auto-processing - triggers batch processing when conditions are met
-    // Uses a ref-based guard to prevent rapid re-triggers
+    // Kicks off the next batch when there's room. Ref-guarded against re-entry.
     useEffect(() => {
-        // Early exit conditions
         if (!isAutoProcessing) {
             setIsWaitingForRateLimit(false);
             pollRetryCountRef.current = 0;
@@ -399,26 +358,22 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         if (batchInProgressRef.current) return;
         if (dailyLimitReached) return;
 
-        // Find all unprocessed pages (skip ones that already errored this run)
         const unprocessedIndices = processedImages
             .map((_, i) => i)
             .filter(i => !processedPages.has(pageLabels[i]) && !failedPages.has(pageLabels[i]));
 
         if (unprocessedIndices.length === 0) {
-            // All pages processed (or errored)
             setIsAutoProcessing(false);
             setIsWaitingForRateLimit(false);
             pollRetryCountRef.current = 0;
             return;
         }
 
-        // For Gemini: check rate limits. For other providers: just process.
         if (provider === 'gemini' && !rateLimitReady) {
             setIsWaitingForRateLimit(true);
 
-            // Poll every 2 seconds to check if rate limit has reset
             const pollId = setInterval(async () => {
-                // Check if we've exceeded max retries (likely daily limit)
+                // Too many retries usually means the daily quota, not the window.
                 pollRetryCountRef.current += 1;
                 if (pollRetryCountRef.current > MAX_POLL_RETRIES) {
                     setDailyLimitReached(true);
@@ -434,12 +389,10 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     const slotsAvailable = status.available_slots || 0;
                     setAvailableSlots(slotsAvailable);
 
-                    // Update wait seconds from server
                     if (status.wait_seconds !== undefined) {
                         setWaitSeconds(status.wait_seconds);
                     }
 
-                    // Check if we have any slots available
                     if (status.ready && slotsAvailable > 0) {
                         setRateLimitReady(true);
                         setWaitSeconds(0);
@@ -455,7 +408,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
             return () => clearInterval(pollId);
         }
 
-        // Ready to process - reset retry counter and take batch
         pollRetryCountRef.current = 0;
         setIsWaitingForRateLimit(false);
         const actualBatchSize = provider === 'gemini'
@@ -463,7 +415,7 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
             : Math.min(unprocessedIndices.length, batchSize);
         const batchIndices = unprocessedIndices.slice(0, actualBatchSize);
 
-        // Use a small timeout to prevent synchronous state update loops
+        // Breaks a synchronous setState loop.
         const timeoutId = setTimeout(() => {
             if (!batchInProgressRef.current && isAutoProcessing && (provider !== 'gemini' || rateLimitReady)) {
                 processBatch(batchIndices);
@@ -473,13 +425,11 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         return () => clearTimeout(timeoutId);
     }, [isAutoProcessing, rateLimitReady, availableSlots, batchSize, dailyLimitReached, processedPages, failedPages, processedImages, processBatch, provider, pageLabels]);
 
-    // Handle transcript change
     const handleTranscriptChange = useCallback((value) => {
         setTranscripts((prev) => ({ ...prev, [viewingPageLabel]: value }));
     }, [viewingPageLabel]);
 
 
-    // Reset transcript
     const handleResetTranscript = useCallback(() => {
         setTranscripts((prev) => ({ ...prev, [viewingPageLabel]: originalTranscripts[viewingPageLabel] }));
     }, [viewingPageLabel, originalTranscripts]);
@@ -568,7 +518,7 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     transcriptImages[key] = dataUrl;
                 }
             } catch {
-                // Skip image snapshot if conversion fails; transcript save still proceeds.
+                // Transcript still saves even if the image snapshot fails.
             }
         }
 
@@ -600,7 +550,6 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     if (!proceed) return;
                 }
             } catch {
-                // If the check fails, proceed with saving anyway
             }
 
             await saveTranscriptSession(
@@ -626,11 +575,9 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
         }
     }, [batchSize, bookName, buildSavePayload, customPrompt, hasAnyTranscript, isSavingSession, provider, selectedModel]);
 
-    // Toggle auto processing - properly stops all processes when toggled off
     const handleToggleAutoProcess = useCallback(() => {
         setIsAutoProcessing((prev) => {
             if (prev) {
-                // Stopping - clear all processing states
                 setIsWaitingForRateLimit(false);
                 setIsProcessing(false);
                 setProcessingPageIndices(new Set());
@@ -638,7 +585,7 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                 pollRetryCountRef.current = 0;
                 setError(null);
             } else {
-                // Starting a fresh run — allow previously-failed pages to retry.
+                // Fresh run — let previously-failed pages retry.
                 setFailedPages(new Set());
             }
             return !prev;
@@ -706,10 +653,8 @@ export default function TextRecognitionPage({ provider = 'gemini', bookName = 't
                     onNextPage={() => goToPage(viewingPageIndex + 1)}
                     onProcess={processCurrentPage}
                     onToggleAutoProcess={handleToggleAutoProcess}
-                    // Controlled zoom - persists across page changes
                     zoomLevel={zoomLevel}
                     onZoomChange={setZoomLevel}
-                    // Show which page is being processed during auto-processing
                     processingPageIndex={processingPageIndex}
                     pageLabel={viewingPageLabel}
                     pageLabels={pageLabels}

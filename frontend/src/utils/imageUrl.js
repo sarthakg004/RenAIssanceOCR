@@ -1,16 +1,8 @@
-/**
- * Image URL helpers.
- *
- * Page images are kept in app state as Blob-backed object URLs ("blob:…")
- * instead of base64 data URLs. A data URL keeps the whole encoded image as a
- * string on the JS heap (≈1.33× the PNG size, per page, for every page of the
- * book) which is what made large books lag; an object URL is a ~50-char
- * pointer and the pixels live in browser-managed storage outside the heap.
- *
- * Backends that want base64 call `toDataUrl` at the moment of the request.
- */
+// Page images live in state as blob: object URLs, not data URLs. A data URL
+// parks the whole encoded image on the JS heap for every page of the book,
+// which is what made large books crawl. Convert to base64 only at request time.
 
-/** Any image URL (blob:, http(s):, data:) → base64 data URL. */
+// blob: / http(s): / data: -> base64 data URL.
 export async function toDataUrl(url) {
     if (!url) return null;
     if (url.startsWith('data:')) return url;
@@ -24,10 +16,8 @@ export async function toDataUrl(url) {
     return `data:${blob.type || 'image/png'};base64,${btoa(bin)}`;
 }
 
-/**
- * base64 data URL → Blob-backed object URL. Non-data URLs pass through
- * unchanged. Callers own the returned URL (revoke it when replaced).
- */
+// data URL -> object URL. Anything else passes through. The caller owns the
+// result and must revoke it.
 export function dataUrlToObjectUrl(dataUrl) {
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return dataUrl;
     const [header, b64] = dataUrl.split(',');
@@ -38,7 +28,7 @@ export function dataUrlToObjectUrl(dataUrl) {
     return URL.createObjectURL(new Blob([u8], { type: mime }));
 }
 
-/** Revoke every blob: URL in a list, ignoring anything else. */
+
 export function revokeObjectUrls(urls) {
     for (const url of urls || []) {
         if (typeof url === 'string' && url.startsWith('blob:')) URL.revokeObjectURL(url);

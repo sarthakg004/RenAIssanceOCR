@@ -2,10 +2,7 @@ import React from 'react';
 import { FileText, Database, ArrowRight, BookOpen, Archive, LogOut, UserCircle } from 'lucide-react';
 import homeImage from '../assets/home-image.png';
 
-/**
- * Landing page — light blue/white theme, full-viewport hero with a
- * decorative manuscript image and the two workflow cards.
- */
+// Landing hero plus the two workflow cards.
 export default function HomePage({ onSelectMode, user, onLogout, onProfile }) {
   return (
     <div className="relative h-screen w-screen overflow-hidden flex flex-col bg-gradient-to-br from-slate-50 via-white to-blue-50">

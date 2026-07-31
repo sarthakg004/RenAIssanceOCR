@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import gc
 import logging
 import os
 from pathlib import Path
@@ -14,7 +13,7 @@ import torch
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-from app.utils.torch_device import empty_device_cache, select_torch_device
+from app.utils.torch_device import select_torch_device
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +91,8 @@ class TrOCRRecognizer:
 
         logger.info("Loading TrOCR checkpoint: %s", self.model_dir)
         self._processor = TrOCRProcessor.from_pretrained(self.model_dir, local_files_only=True)
-        # fp16 on GPU is the best quantization variant measured in
-        # checkpoints/trocr_quantization/quantization_results.csv: half the
-        # footprint (~640 MB) and ~3x faster than fp32 with negligible CER
-        # change. CPU stays fp32 (no fp16 kernels).
+        # fp16 on GPU: ~half the memory, ~3x faster, no meaningful CER change
+        # (see checkpoints/trocr_quantization/). CPU has no fp16 kernels.
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         self._model = VisionEncoderDecoderModel.from_pretrained(
             self.model_dir,
@@ -119,16 +116,6 @@ class TrOCRRecognizer:
 
         texts = self._processor.batch_decode(generated_ids, skip_special_tokens=True)
         return [t.strip() for t in texts]
-
-    def unload(self):
-        if self._model is not None:
-            del self._model
-            self._model = None
-        if self._processor is not None:
-            del self._processor
-            self._processor = None
-        gc.collect()
-        empty_device_cache(self.device)
 
 
 _recognizer_cache: dict[str, TrOCRRecognizer] = {}

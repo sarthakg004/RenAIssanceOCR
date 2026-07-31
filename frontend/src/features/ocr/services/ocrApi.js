@@ -1,16 +1,10 @@
-/**
- * Unified OCR API Service
- * Consolidates all provider-specific API calls into a single module.
- */
+// All OCR provider calls in one place. Gemini uses X-Gemini-API-Key and is
+// the only provider with server-side rate limiting; the rest use X-API-Key.
 
 import { API_ORIGIN } from '../../../config';
 import { toDataUrl } from '../../../utils/imageUrl';
 
 const API_BASE = `${API_ORIGIN}/api`;
-
-// ============================================
-// Model fetching (per provider)
-// ============================================
 
 export async function getModels(provider) {
     const endpoints = {
@@ -28,10 +22,7 @@ export async function getModels(provider) {
     return response.json();
 }
 
-// ============================================
-// Rate limit (Gemini only)
-// ============================================
-
+// Gemini only. Falls back to "ready" so a backend hiccup never blocks OCR.
 export async function getRateLimitStatus() {
     try {
         const response = await fetch(`${API_BASE}/rate-limit-status`);
@@ -51,10 +42,7 @@ export async function getRateLimitStatus() {
     }
 }
 
-// ============================================
-// API key verification
-// ============================================
-
+// Format check only — the key is really validated on the first OCR call.
 export async function verifyApiKey(apiKey) {
     if (!apiKey) {
         return { valid: false, error: 'API key is required' };
@@ -100,10 +88,6 @@ export async function verifyApiKey(apiKey) {
     }
 }
 
-// ============================================
-// Single page OCR (per provider)
-// ============================================
-
 export async function processPageOCR(imageData, model, apiKey, provider = 'gemini', customPrompt = '') {
     const endpoints = {
         gemini: '/gemini-ocr-json',
@@ -112,10 +96,8 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
         qwen: '/qwen-ocr-json',
     };
 
-    // Gemini uses X-Gemini-API-Key, others use X-API-Key
     const headerName = provider === 'gemini' ? 'X-Gemini-API-Key' : 'X-API-Key';
 
-    // For Gemini, check rate limit first
     if (provider === 'gemini') {
         const rateLimitStatus = await getRateLimitStatus();
         if (!rateLimitStatus.ready) {
@@ -179,10 +161,7 @@ export async function processPageOCR(imageData, model, apiKey, provider = 'gemin
     return data;
 }
 
-// ============================================
-// Batch OCR (Gemini only)
-// ============================================
-
+// Gemini only.
 export async function processBatchOCR(items, model, apiKey, customPrompt = '') {
     if (!items || items.length === 0) {
         return { success: false, error: 'No items to process' };
@@ -272,37 +251,6 @@ export async function processBatchOCR(items, model, apiKey, customPrompt = '') {
     }
 }
 
-// ============================================
-// Export
-// ============================================
-
-export async function exportTranscripts(transcripts, format) {
-    const filteredTranscripts = {};
-    for (const [pageNum, text] of Object.entries(transcripts)) {
-        if (text && text.trim().length > 0) {
-            filteredTranscripts[pageNum] = text;
-        }
-    }
-
-    if (Object.keys(filteredTranscripts).length === 0) {
-        throw new Error('No transcripts to export');
-    }
-
-    const response = await fetch(`${API_BASE}/export/${format}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ transcripts: filteredTranscripts, format }),
-    });
-
-    if (!response.ok) {
-        throw new Error(`Export failed: ${response.statusText}`);
-    }
-
-    return response.blob();
-}
-
 export function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -314,22 +262,7 @@ export function downloadBlob(blob, filename) {
     URL.revokeObjectURL(url);
 }
 
-// ============================================
-// Health check
-// ============================================
-
-export async function checkBackendHealth() {
-    try {
-        const response = await fetch(`${API_BASE}/health`);
-        return response.ok;
-    } catch {
-        return false;
-    }
-}
-
-// ============================================
-// CRNN Local Recognition
-// ============================================
+// ── Local recognition (CRNN / TrOCR, runs on the backend GPU) ──
 
 export async function getLocalRecognitionModels() {
     const response = await fetch(`${API_BASE}/local-recognition-models`);
@@ -369,20 +302,7 @@ export async function runLocalRecognition(imageData, boxes, modelId) {
     };
 }
 
-export async function getCRNNModels() {
-    const data = await getLocalRecognitionModels();
-    return {
-        models: (data.models || []).filter((m) => m.model_type === 'crnn'),
-    };
-}
-
-export async function runCRNNRecognition(imageData, boxes, modelId) {
-    const normalizedModelId = modelId.startsWith('crnn:') ? modelId : `crnn:${modelId}`;
-    const data = await runLocalRecognition(imageData, boxes, normalizedModelId);
-    return data;
-}
-
-// ── Local export helpers (no backend needed) ──
+// ── Export helpers (pure client-side, no backend round-trip) ──
 
 export function exportCRNNResultsAsText(resultsByPage) {
     const lines = [];

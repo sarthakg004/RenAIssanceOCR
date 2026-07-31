@@ -19,10 +19,8 @@ import {
   Clock,
 } from 'lucide-react';
 
-/**
- * Downscale a base64 image for preview to avoid browser memory issues
- * Keeps original for OCR processing, creates smaller version for display
- */
+// Full-res scans blow up browser memory when displayed. Downscale for the
+// preview only — OCR still gets the original.
 function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
   const [previewSrc, setPreviewSrc] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -37,7 +35,6 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
       return;
     }
 
-    // If it's already a small image or blob URL, use directly
     if (imageSrc.startsWith('blob:') || imageSrc.length < 100000) {
       setPreviewSrc(imageSrc);
       return;
@@ -52,15 +49,13 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
       try {
         setDimensions({ width: img.width, height: img.height });
         
-        // Check if downscaling is needed
-        if (img.width <= maxWidth && img.height <= maxHeight) {
+            if (img.width <= maxWidth && img.height <= maxHeight) {
           setPreviewSrc(imageSrc);
           setIsLoading(false);
           return;
         }
 
-        // Calculate new dimensions maintaining aspect ratio
-        let newWidth = img.width;
+            let newWidth = img.width;
         let newHeight = img.height;
         
         if (newWidth > maxWidth) {
@@ -72,8 +67,7 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
           newHeight = maxHeight;
         }
 
-        // Create canvas and draw scaled image
-        const canvas = document.createElement('canvas');
+            const canvas = document.createElement('canvas');
         canvas.width = Math.round(newWidth);
         canvas.height = Math.round(newHeight);
         
@@ -82,13 +76,12 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-        // Convert to blob URL for better memory efficiency
+        // Blob URL, not data URL — much easier on memory.
         canvas.toBlob((blob) => {
           if (blob) {
             const blobUrl = URL.createObjectURL(blob);
             setPreviewSrc(blobUrl);
           } else {
-            // Fallback to data URL if blob fails
             setPreviewSrc(canvas.toDataURL('image/jpeg', 0.85));
           }
           setIsLoading(false);
@@ -108,7 +101,6 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
 
     img.src = imageSrc;
 
-    // Cleanup blob URLs
     return () => {
       if (previewSrc && previewSrc.startsWith('blob:')) {
         URL.revokeObjectURL(previewSrc);
@@ -119,11 +111,8 @@ function useDownscaledImage(imageSrc, maxWidth = 1200, maxHeight = 1600) {
   return { previewSrc, isLoading, error, dimensions };
 }
 
-/**
- * PagePreview Component
- * Large image preview with navigation, zoom controls, and process controls
- * Supports controlled zoom (from parent) for persistence across page changes
- */
+// Big page preview with zoom, pan and navigation. Zoom can be controlled by
+// the parent so it survives page changes.
 export default function PagePreview({
   currentPage,
   currentIndex,
@@ -140,12 +129,9 @@ export default function PagePreview({
   onNextPage,
   onProcess,
   onToggleAutoProcess,
-  // Controlled zoom props - if provided, zoom is controlled by parent
   zoomLevel: controlledZoom,
   onZoomChange,
-  // Which page is being processed (for showing status during auto-processing)
   processingPageIndex,
-  // Original page labels
   pageLabel,
   pageLabels = null,
 }) {
@@ -155,11 +141,9 @@ export default function PagePreview({
     : null;
   const imageSrc = currentPage?.processed || currentPage?.original;
 
-  // Use downscaled image for preview to handle large images
   const { previewSrc, isLoading: isDownscaling, error: downscaleError, dimensions } = useDownscaledImage(imageSrc);
   
   const [imageLoaded, setImageLoaded] = useState(false);
-  // Internal zoom state (used if not controlled)
   const [internalZoom, setInternalZoom] = useState(1);
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -168,7 +152,6 @@ export default function PagePreview({
   const imageRef = useRef(null);
   const lastClickTime = useRef(0);
 
-  // Determine if zoom is controlled or internal
   const isControlled = controlledZoom !== undefined && onZoomChange !== undefined;
   const zoomLevel = isControlled ? controlledZoom : internalZoom;
   const setZoomLevel = isControlled ? onZoomChange : setInternalZoom;
@@ -177,19 +160,17 @@ export default function PagePreview({
   const MAX_ZOOM = 5.0;
   const ZOOM_STEP = 0.1;
 
-  // Reset only image loading state when page changes (not zoom - that's controlled by parent now)
+  // Only the loading state — zoom is the parent's business.
   useEffect(() => {
     setImageLoaded(false);
   }, [currentIndex, previewSrc]);
 
-  // Smooth zoom with easing - uses requestAnimationFrame for smoother transitions
   const smoothZoom = useCallback((targetZoom, instant = false) => {
     const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, targetZoom));
     const roundedZoom = Math.round(clampedZoom * 100) / 100;
     setZoomLevel(roundedZoom);
   }, [setZoomLevel]);
 
-  // Zoom handlers with larger increments for better UX
   const handleZoomIn = useCallback(() => {
     smoothZoom(zoomLevel * 1.25); // Multiplicative zoom feels more natural
   }, [zoomLevel, smoothZoom]);
@@ -219,17 +200,15 @@ export default function PagePreview({
     smoothZoom(Math.max(MIN_ZOOM, fitZoom));
   }, [dimensions, smoothZoom]);
 
-  // Handle slider change
   const handleSliderChange = useCallback((e) => {
     smoothZoom(parseFloat(e.target.value));
   }, [smoothZoom]);
 
-  // Preset zoom levels for quick access
   const handlePresetZoom = useCallback((preset) => {
     smoothZoom(preset);
   }, [smoothZoom]);
 
-  // Smooth mouse wheel zoom - multiplicative for natural feel
+  // Multiplicative, so each tick feels the same at any zoom level.
   const handleWheel = useCallback((e) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -238,14 +217,11 @@ export default function PagePreview({
     }
   }, [zoomLevel, smoothZoom]);
 
-  // Double-click to toggle zoom
   const handleDoubleClick = useCallback((e) => {
     e.preventDefault();
     if (zoomLevel <= 1.1) {
-      // Zoom to 2x centered on click point
       smoothZoom(2);
     } else {
-      // Reset to 1x
       smoothZoom(1);
       if (containerRef.current) {
         containerRef.current.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
@@ -253,9 +229,7 @@ export default function PagePreview({
     }
   }, [zoomLevel, smoothZoom]);
 
-  // Mouse pan handlers for dragging when zoomed
   const handleMouseDown = useCallback((e) => {
-    // Check for double-click
     const now = Date.now();
     if (now - lastClickTime.current < 300) {
       handleDoubleClick(e);
@@ -288,7 +262,6 @@ export default function PagePreview({
     setIsPanning(false);
   }, []);
 
-  // Attach wheel event
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -296,7 +269,7 @@ export default function PagePreview({
     return () => container.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
-  // Global mouse up listener for panning
+  // On window, so releasing outside the image still ends the pan.
   useEffect(() => {
     if (isPanning) {
       window.addEventListener('mouseup', handleMouseUp);
@@ -500,7 +473,6 @@ export default function PagePreview({
           <div 
             className="min-w-full min-h-full flex items-center justify-center p-4"
             style={{
-              // Scale container to provide scroll area when zoomed
               width: zoomLevel > 1 ? `${100 * zoomLevel}%` : '100%',
               height: zoomLevel > 1 ? `${100 * zoomLevel}%` : '100%',
             }}
@@ -517,16 +489,12 @@ export default function PagePreview({
               style={{
                 transform: `scale(${zoomLevel})`,
                 transformOrigin: 'center center',
-                // Faster transition for more responsive feel
                 transition: isPanning ? 'none' : 'transform 0.1s ease-out, opacity 0.2s ease-out',
                 maxWidth: zoomLevel <= 1 ? '100%' : 'none',
                 maxHeight: zoomLevel <= 1 ? '100%' : 'none',
                 objectFit: 'contain',
-                // Performance optimizations
                 willChange: 'transform',
-                // High quality image rendering
                 imageRendering: zoomLevel > 1.5 ? 'auto' : 'auto',
-                // Prevent blurry text during transforms
                 backfaceVisibility: 'hidden',
                 WebkitBackfaceVisibility: 'hidden',
               }}

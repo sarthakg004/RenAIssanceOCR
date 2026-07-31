@@ -1,12 +1,6 @@
-"""Lightweight user-tracking auth routes.
+"""Signup / login / logout / me routes, plus a token-gated admin user list.
 
-Endpoints:
-  POST /api/auth/signup        create account, send (or log) verification email
-  POST /api/auth/login         verify credentials, set session cookie
-  POST /api/auth/logout        clear session cookie
-  GET  /api/auth/me            current user from the session cookie
-  GET  /api/auth/verify-email  mark account verified, redirect to frontend
-  GET  /api/admin/users        token-protected user count + list
+Sessions are a signed httpOnly cookie — no JWT, no refresh tokens.
 """
 
 from __future__ import annotations
@@ -14,7 +8,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Header, HTTPException, Response
-from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -39,8 +32,7 @@ from ..core.config import ADMIN_TOKEN, PUBLIC_BASE_URL, SESSION_MAX_AGE
 
 router = APIRouter()
 
-# Cookie is marked Secure only when the public origin is https, so it still
-# works over plain http on localhost during development.
+# Secure flag only on https, otherwise the cookie wouldn't stick on localhost.
 _COOKIE_SECURE = PUBLIC_BASE_URL.lower().startswith("https")
 
 
@@ -95,23 +87,20 @@ def signup(
         name=payload.name.strip(),
         institute=(payload.institute or "").strip() or "personal",
         password_hash=hash_password(payload.password),
-        # Email verification is intentionally skipped — accounts are usable
-        # immediately. This is lightweight usage tracking, not a security gate.
+        # No email verification — this is usage tracking, not a security gate.
         is_verified=True,
-        verification_token=None,
     )
 
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    # Central tracking: try immediately after the response is sent. If it
-    # fails (Supabase down/unreachable), tracked_at stays NULL and the
-    # background retry loop pushes it later — nothing is lost.
+    # Push to central tracking after the response goes out. If it fails,
+    # tracked_at stays NULL and the retry loop picks it up later.
     background_tasks.add_task(track_user_now, user.id)
 
     _set_session_cookie(response, user.id)
-    return AuthResponse(user=UserOut(**user.public_dict()), email_sent=False)
+    return AuthResponse(user=UserOut(**user.public_dict()))
 
 
 # ── Login ───────────────────────────────────────────────────────────────────
@@ -131,7 +120,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
     db.refresh(user)
 
     _set_session_cookie(response, user.id)
-    return AuthResponse(user=UserOut(**user.public_dict()), email_sent=False)
+    return AuthResponse(user=UserOut(**user.public_dict()))
 
 
 # ── Logout ──────────────────────────────────────────────────────────────────
@@ -156,10 +145,9 @@ def update_profile(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    """Update the logged-in user's name / email / institute (username is fixed).
+    """Update name / email / institute (username is fixed).
 
-    Changes are saved locally and synced to the central Supabase row by the
-    user's previous email (best-effort, after the response).
+    Saved locally, then best-effort synced to Supabase keyed on the old email.
     """
     old_email = user.email
     new_email = str(payload.email).strip().lower()
@@ -186,22 +174,6 @@ def update_profile(
         user.institute,
     )
     return UserOut(**user.public_dict())
-
-
-# ── Email verification ───────────────────────────────────────────────────────
-
-@router.get("/api/auth/verify-email")
-def verify_email(token: str, db: Session = Depends(get_db)):
-    frontend = PUBLIC_BASE_URL.rstrip("/")
-    user = db.scalar(select(User).where(User.verification_token == token))
-    if user is None:
-        # Token already consumed or invalid — bounce to the app with a flag.
-        return RedirectResponse(url=f"{frontend}/?verified=already", status_code=303)
-
-    user.is_verified = True
-    user.verification_token = None
-    db.commit()
-    return RedirectResponse(url=f"{frontend}/?verified=success", status_code=303)
 
 
 # ── Admin: user tracking view ────────────────────────────────────────────────

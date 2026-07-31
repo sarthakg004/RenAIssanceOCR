@@ -1,12 +1,7 @@
-"""
-OCR Dataset Builder Service
+"""Build line-level OCR training datasets as ZIPs.
 
-Builds line-level OCR training datasets by:
-  1. Aligning sorted bounding boxes with transcript lines
-  2. Cropping line images with padding
-  3. Exporting in multiple formats (CSV, TrOCR, CRNN, PaddleOCR)
-
-Memory-efficient: processes one page at a time and releases arrays.
+Boxes get sorted into reading order, paired with transcript lines, cropped, and
+zipped. One page in memory at a time — a book's worth of full-res scans won't fit.
 """
 
 import csv
@@ -28,22 +23,18 @@ def _box_centroid(box: List[List[float]]) -> Tuple[float, float]:
 
 
 def sort_boxes_reading_order(boxes: List[List[List[float]]]) -> List[int]:
-    """
-    Sort bounding boxes in reading order (top→bottom, left→right).
-
-    Returns list of original indices in sorted order.
-    """
+    """Indices of `boxes` in reading order: top to bottom, left to right."""
     if not boxes:
         return []
 
     centroids = [_box_centroid(b) for b in boxes]
 
-    # Cluster into rows by y-centroid
     ys = np.array([c[1] for c in centroids])
     if len(ys) == 0:
         return []
 
-    # Median line height for row grouping
+    # Row threshold scales with the typical line height, so it survives both
+    # thumbnail-sized and 6000px scans.
     heights = []
     for b in boxes:
         pts = np.array(b, dtype=np.float32)
@@ -51,10 +42,8 @@ def sort_boxes_reading_order(boxes: List[List[List[float]]]) -> List[int]:
     med_h = float(np.median(heights)) if heights else 20.0
     row_thresh = max(med_h * 0.5, 10.0)
 
-    # Sort by y first
     order = sorted(range(len(centroids)), key=lambda i: centroids[i][1])
 
-    # Group into rows
     rows: List[List[int]] = []
     current_row: List[int] = [order[0]]
     current_y = centroids[order[0]][1]
@@ -69,7 +58,6 @@ def sort_boxes_reading_order(boxes: List[List[List[float]]]) -> List[int]:
             current_y = cy
     rows.append(current_row)
 
-    # Within each row sort by x
     result = []
     for row in rows:
         row.sort(key=lambda i: centroids[i][0])
@@ -82,12 +70,10 @@ def align_boxes_with_transcript(
     boxes: List[List[List[float]]],
     lines: List[str],
 ) -> Tuple[List[Tuple[List[List[float]], str]], int, int]:
-    """
-    Align bounding boxes with transcript lines in reading order.
+    """Zip boxes (in reading order) with transcript lines.
 
-    Returns:
-        (pairs, num_boxes, num_lines)
-        where pairs = [(box, text), ...]
+    -> ([(box, text), ...], num_boxes, num_lines). Extra of either is dropped,
+    and the counts let the caller warn about the mismatch.
     """
     sorted_indices = sort_boxes_reading_order(boxes)
     sorted_boxes = [boxes[i] for i in sorted_indices]
@@ -105,10 +91,7 @@ def crop_line_image(
     box: List[List[float]],
     padding: int = 4,
 ) -> np.ndarray:
-    """
-    Crop a text-line image from a page image using the bounding box.
-    Adds small padding around the crop.
-    """
+    """Crop one line out of the page, with a few pixels of breathing room."""
     pts = np.array(box, dtype=np.float32)
     x_min, y_min = int(pts[:, 0].min()), int(pts[:, 1].min())
     x_max, y_max = int(pts[:, 0].max()), int(pts[:, 1].max())
@@ -128,7 +111,7 @@ def crop_line_image(
 # ── Filename helper ─────────────────────────────────────────────────
 
 def _safe_label(text: str, max_len: int = 30) -> str:
-    """Create a filesystem-safe label from text (for filenames)."""
+    """Turn transcript text into something safe to use as a filename."""
     safe = re.sub(r"[^\w\s-]", "", text)
     safe = re.sub(r"\s+", "_", safe.strip())
     return safe[:max_len] if safe else "line"
@@ -140,16 +123,9 @@ def build_dataset_zip(
     pages_data: List[Dict[str, Any]],
     book_name: str = "dataset",
 ) -> io.BytesIO:
-    """
-    Build a ZIP archive containing the OCR training dataset.
+    """ZIP of line crops plus a labels.csv.
 
-    pages_data: list of dicts, each with:
-        - page_key: str (e.g. "page001")
-        - image_data: str (base64 data-URL of the page image)
-        - boxes: list of 4-point polygons
-        - lines: list of transcript lines
-
-    Returns a BytesIO containing the ZIP.
+    pages_data entries: {page_key, image_data (base64 data URL), boxes, lines}.
     """
     import base64
 
@@ -162,11 +138,9 @@ def build_dataset_zip(
             boxes = page["boxes"]
             lines = page["lines"]
 
-            # Extract numeric page label for path naming
             page_num_match = re.search(r"(\d+)", str(page_key))
             page_dir = f"page_{int(page_num_match.group(1))}" if page_num_match else f"page_{page_key}"
 
-            # Decode the page image
             img_b64 = page["image_data"]
             if "," in img_b64:
                 img_b64 = img_b64.split(",", 1)[1]
@@ -177,11 +151,10 @@ def build_dataset_zip(
             if img is None:
                 continue
 
-            # Align
             pairs, _, _ = align_boxes_with_transcript(boxes, lines)
+            # Two lines with the same text would collide on filename.
             seen_labels: Dict[str, int] = {}
 
-            # Process each pair
             for idx, (box, text) in enumerate(pairs):
                 crop = crop_line_image(img, box)
                 label = _safe_label(text, max_len=80)
@@ -191,19 +164,16 @@ def build_dataset_zip(
 
                 img_filename = f"{book_name}/{page_dir}/{label_with_suffix}.png"
 
-                # Encode crop to PNG
                 _, png_data = cv2.imencode(".png", crop)
                 zf.writestr(img_filename, png_data.tobytes())
 
                 csv_rows.append((img_filename, text))
 
-                # Release crop memory
                 del crop
 
-            # Release page image memory
             del img, nparr, img_bytes
 
-        # Write simple global labels file (UTF-8 with BOM for broad compatibility)
+        # BOM so Excel opens the accented text correctly.
         csv_buf = io.StringIO()
         writer = csv.writer(csv_buf)
         writer.writerow(["image", "text"])
@@ -219,7 +189,7 @@ def build_dataset_zip(
 # ── Detection-only Dataset Export ──────────────────────────────────
 
 def _polygon_to_xyxy(box: List[List[float]]) -> Tuple[int, int, int, int]:
-    """Axis-aligned bounding rect of a 4-point polygon, as integer pixels."""
+    """Axis-aligned integer-pixel rect around a 4-point polygon."""
     pts = np.asarray(box, dtype=np.float32)
     return (
         int(pts[:, 0].min()),
@@ -234,26 +204,10 @@ def build_detection_dataset_zip(
     book_name: str = "dataset",
     bbox_format: str = "txt",
 ) -> io.BytesIO:
-    """
-    Build a ZIP with full page images and pure line-level bounding boxes.
+    """ZIP of full page images plus their line boxes — no transcript needed.
 
-    No labels, no classes — just coordinates per detected text line.
-
-    Layout:
-        book_name/
-            images/
-                page_1.jpg
-            bboxes/
-                page_1.txt    (one "x1 y1 x2 y2" per line)
-                # or page_1.json if bbox_format == "json"
-
-    Parameters
-    ----------
-    bbox_format : "txt" (default), "json", "yolo", or "coco"
-        - "txt"  : whitespace-separated `x1 y1 x2 y2`, one box per line.
-        - "json" : array of [x1, y1, x2, y2] arrays.
-        - "yolo" : `0 cx_norm cy_norm w_norm h_norm` per line (single class), plus classes.txt.
-        - "coco" : single annotations.json at the dataset root in COCO format.
+    bbox_format: "txt" (x1 y1 x2 y2 per line), "json" (array of rects),
+    "yolo" (normalised cx cy w h + classes.txt), or "coco" (one annotations.json).
     """
     import base64
     import json
@@ -264,7 +218,7 @@ def build_detection_dataset_zip(
 
     buf = io.BytesIO()
 
-    # COCO accumulators
+    # COCO wants one file for the whole set, so accumulate across pages.
     coco_images: List[Dict[str, Any]] = []
     coco_annotations: List[Dict[str, Any]] = []
     coco_image_id = 0

@@ -1,6 +1,4 @@
-"""
-Export service — builds combined transcripts for export.
-"""
+"""Render the per-page transcripts into one txt / docx / pdf buffer."""
 
 import io
 import re
@@ -24,14 +22,11 @@ def _page_sort_key(x: str):
 
 
 def _page_display_label(key: str) -> str:
-    """Convert a page key to a human-readable label.
-    '5' -> 'Page 5', '5a' -> 'Page 5a', '5b' -> 'Page 5b'
-    """
     return f"Page {key}"
 
 
 def build_combined_transcript(transcripts: dict) -> str:
-    """Build combined transcript with page separators"""
+    """One string, pages in order, separated by a rule."""
     pages = sorted(transcripts.keys(), key=_page_sort_key)
 
     sections = []
@@ -46,7 +41,7 @@ def build_combined_transcript(transcripts: dict) -> str:
 
 
 def build_txt_export(transcripts: dict) -> io.BytesIO:
-    """Build TXT export buffer with UTF-8 BOM"""
+    """UTF-8 with a BOM, so Windows Notepad/Excel don't mangle accents."""
     combined = build_combined_transcript(transcripts)
     utf8_bom = b'\xef\xbb\xbf'
     buffer = io.BytesIO(utf8_bom + combined.encode('utf-8'))
@@ -55,39 +50,31 @@ def build_txt_export(transcripts: dict) -> io.BytesIO:
 
 
 def build_docx_export(transcripts: dict) -> io.BytesIO:
-    """Build DOCX export buffer"""
     doc = Document()
 
-    # Set document title
     title = doc.add_heading("Combined Transcript", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    doc.add_paragraph()  # Spacer
+    doc.add_paragraph()  # spacer
 
-    # Add each page
     pages = sorted(transcripts.keys(), key=_page_sort_key)
 
     for i, page in enumerate(pages):
         text = transcripts[page]
 
-        # Page header
-        heading = doc.add_heading(_page_display_label(page), level=1)
+        doc.add_heading(_page_display_label(page), level=1)
 
-        # Separator line
         separator = doc.add_paragraph("─" * 40)
         separator.runs[0].font.size = Pt(10)
 
-        # Page content
         for para_text in text.split('\n'):
             if para_text.strip():
                 para = doc.add_paragraph(para_text)
                 para.style.font.size = Pt(11)
 
-        # Add page break between pages (except last)
         if i < len(pages) - 1:
             doc.add_page_break()
 
-    # Save to buffer
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
@@ -95,7 +82,7 @@ def build_docx_export(transcripts: dict) -> io.BytesIO:
 
 
 def build_pdf_export(transcripts: dict) -> io.BytesIO:
-    """Build PDF export buffer with Unicode support"""
+    """Needs DejaVu Sans registered, or accents fall back to Helvetica."""
     buffer = io.BytesIO()
 
     doc = SimpleDocTemplate(
@@ -109,17 +96,15 @@ def build_pdf_export(transcripts: dict) -> io.BytesIO:
 
     styles = getSampleStyleSheet()
 
-    # Use DejaVu Sans for Unicode support if available, otherwise fall back to Helvetica
     font_name = 'DejaVuSans' if UNICODE_FONT_REGISTERED else 'Helvetica'
 
-    # Custom styles with Unicode-compatible font
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
         fontName=font_name,
         fontSize=18,
         spaceAfter=30,
-        alignment=1  # Center
+        alignment=1  # center
     )
 
     page_header_style = ParagraphStyle(
@@ -150,25 +135,20 @@ def build_pdf_export(transcripts: dict) -> io.BytesIO:
     )
 
     story = []
-
-    # Title
     story.append(Paragraph("Combined Transcript", title_style))
     story.append(Spacer(1, 20))
 
-    # Add each page
     pages = sorted(transcripts.keys(), key=_page_sort_key)
 
     for page in pages:
         text = transcripts[page]
 
-        # Page header
         story.append(Paragraph(_page_display_label(page), page_header_style))
         story.append(Paragraph("─" * 50, separator_style))
 
-        # Page content - escape HTML entities
+        # reportlab parses a mini-HTML in Paragraph, so escape the text first.
         for line in text.split('\n'):
             if line.strip():
-                # Escape special characters for reportlab
                 safe_line = line.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 story.append(Paragraph(safe_line, body_style))
             else:

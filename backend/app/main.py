@@ -1,19 +1,12 @@
-"""
-RenAIssance OCR Backend Server
-FastAPI server for OCR text recognition using multiple AI providers.
+"""FastAPI app wiring: mount every router, start the signup-tracking loop.
 
-Modular entrypoint — all business logic is in sub-packages:
-  • app.api.*         — route handlers
-  • app.services.*    — provider implementations (Gemini, ChatGPT, DeepSeek, Qwen)
-  • app.core.*        — config, rate limiter, font registry
-  • app.schemas.*     — Pydantic request / response models
-  • app.utils.*       — shared utilities (OCR prompt)
+Logic lives under app.api / app.services / app.core / app.schemas / app.utils.
 """
 
 import os
 import sys
 
-# Add backend directory to path for preprocessing module imports
+# `preprocessing` is a sibling of `app`, not a submodule of it.
 backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
@@ -35,16 +28,14 @@ from .api.auth import router as auth_router
 from .auth.db import init_db
 from .auth.tracking import retry_loop, tracking_enabled
 
-# Create FastAPI app
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
 
 @app.on_event("startup")
 async def _startup() -> None:
-    # Create the user-tracking table(s) if they don't exist. No-op when they do.
-    init_db()
-    # Start the background retry loop that pushes any unsent signups to
-    # Supabase (and back-fills ones missed while it was down/unconfigured).
+    init_db()  # no-op once the tables exist
+    # Pushes signups that never reached Supabase, including ones from while it
+    # was down or unconfigured.
     if tracking_enabled():
         import asyncio
 
@@ -57,7 +48,6 @@ async def _shutdown() -> None:
     if task is not None:
         task.cancel()
 
-# CORS for frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -66,7 +56,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
 app.include_router(health_router)
 app.include_router(ocr_router)
 app.include_router(preprocess_router)
@@ -78,10 +67,6 @@ app.include_router(llm_router)
 app.include_router(storage_router)
 app.include_router(auth_router)
 
-
-# ============================================
-# Run Server
-# ============================================
 
 if __name__ == "__main__":
     import uvicorn

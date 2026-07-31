@@ -1,11 +1,6 @@
-"""
-OpenAI-compatible LLM client for OCR text post-processing.
+"""One client for OpenAI, DeepSeek and Qwen.
 
-OpenAI, DeepSeek and Qwen (DashScope compatible-mode) all expose the same
-`/chat/completions` schema, so a single text-only client serves all three —
-mirroring the pattern already used by the OCR providers
-(app/services/ocr/{chatgpt,deepseek,qwen}.py), but with plain-text message
-content instead of an image payload.
+All three speak the same /chat/completions schema, so only the endpoint differs.
 """
 
 import httpx
@@ -20,22 +15,7 @@ def post_process_text_openai_compat(
     model: str,
     template_name: str = "full_cleanup",
 ) -> str:
-    """
-    Post-process OCR text via an OpenAI-compatible chat completions endpoint.
-
-    Args:
-        endpoint: Full chat-completions URL for the provider
-        api_key: Provider API key (Bearer auth)
-        text: Raw OCR text to improve
-        model: Model identifier
-        template_name: Key from prompt_templates.TEMPLATES
-
-    Returns:
-        Improved text string
-
-    Raises:
-        Exception on API errors (auth, rate limit, empty response)
-    """
+    """Clean up OCR text. endpoint is the provider's full chat-completions URL."""
     if not text or not text.strip():
         return text
 
@@ -44,8 +24,7 @@ def post_process_text_openai_compat(
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        # Matches the OCR providers' cap; post-processing output is roughly the
-        # same length as the input page, so 4096 is comfortably sufficient.
+        # Output is about as long as the input page, so this is plenty.
         "max_tokens": 4096,
     }
 

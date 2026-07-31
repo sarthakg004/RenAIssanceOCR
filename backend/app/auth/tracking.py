@@ -1,14 +1,8 @@
-"""Reliable central signup tracking via the Supabase REST API.
+"""Push signups to a central Supabase table, using the local DB as the queue.
 
-Design: the local DB is the durable queue. Every user row has `tracked_at`;
-NULL means "not yet pushed to Supabase". On signup we try once immediately; a
-background retry loop re-attempts every unsent row on an interval, so nothing
-is lost if Supabase is briefly down or unconfigured — it gets pushed once the
-service is reachable, even across restarts. Inserts are idempotent (the central
-table has UNIQUE(email) + ignore-duplicates), so retries never create dupes.
-
-This is "how many people use the app" analytics; it must never block or break
-signup, and never sends the password hash.
+`tracked_at IS NULL` means "not sent yet". We try once on signup, and a retry
+loop sweeps the rest — so an outage (or no config at all) loses nothing, even
+across restarts. Never blocks signup, never sends the password hash.
 """
 
 from __future__ import annotations
@@ -38,13 +32,11 @@ def tracking_enabled() -> bool:
 
 
 def _post_signup(user: User) -> bool:
-    """POST one signup to Supabase. Returns True on success (incl. duplicate)."""
-    # Plain insert. We deliberately do NOT use PostgREST upsert
-    # (on_conflict / resolution=ignore-duplicates): that path needs read/merge
-    # rights and trips the insert-only RLS policy. Idempotency is handled two
-    # ways instead: locally we only push rows with tracked_at=NULL (never
-    # twice), and a cross-instance duplicate email simply returns 409 below,
-    # which we treat as "already recorded".
+    """POST one signup. True on success, including "already there".
+
+    Plain insert, not PostgREST upsert — upsert needs read rights and trips the
+    insert-only RLS policy. Duplicates just 409 and we treat that as done.
+    """
     url = f"{SUPABASE_URL.rstrip('/')}/rest/v1/users"
     headers = {
         "apikey": SUPABASE_PUBLISHABLE_KEY,
@@ -65,9 +57,7 @@ def _post_signup(user: User) -> bool:
         logger.warning("[tracking] insert failed (will retry): %s", exc)
         return False
 
-    # 2xx == inserted. 409 == this email is already in the central table (e.g.
-    # the same person signed up on another instance) — that's "done", not an
-    # error, so we mark it tracked and stop retrying.
+    # 409 = already recorded, probably from another instance. Not an error.
     if resp.status_code < 300 or resp.status_code == 409:
         return True
     logger.warning(
@@ -103,10 +93,7 @@ def _flush_pending_sync() -> int:
 
 
 def track_user_now(user_id: int) -> None:
-    """Best-effort immediate push for a single new signup (BackgroundTask).
-
-    If it fails, tracked_at stays NULL and the retry loop will get it later.
-    """
+    """Try to push one signup right away. On failure the retry loop gets it."""
     if not tracking_enabled():
         logger.info("[tracking] Supabase not configured — skipping (id=%s)", user_id)
         return
@@ -126,12 +113,10 @@ def track_user_now(user_id: int) -> None:
 def update_tracked_profile(
     old_email: str, username: str, name: str, email: str, institute: str | None
 ) -> None:
-    """Best-effort PATCH of the central row when a user edits their profile.
+    """PATCH the central row after a profile edit. Never raises.
 
-    Matches the existing row by its previous email. Requires the UPDATE RLS
-    policy on the central table. If the row was never pushed yet (offline
-    signup), this matches nothing and the pending INSERT later carries the new
-    values anyway. Never raises.
+    Matched by the OLD email. If the row was never pushed, this matches nothing
+    and the pending insert carries the new values anyway.
     """
     if not tracking_enabled():
         return
@@ -158,8 +143,7 @@ def update_tracked_profile(
 
 
 async def retry_loop() -> None:
-    """Periodically flush unsent signups until they all land in Supabase."""
-    # Immediate first pass on startup (back-fills anything missed while down).
+    """Flush unsent signups on an interval. First pass runs immediately."""
     while True:
         try:
             await asyncio.to_thread(_flush_pending_sync)

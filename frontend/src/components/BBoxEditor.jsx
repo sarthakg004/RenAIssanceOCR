@@ -16,28 +16,21 @@ import {
     RotateCw,
 } from 'lucide-react';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Constants ──
 const HANDLE_RADIUS = 6;        // corner handle radius in canvas coords
 const MIN_BOX_SIZE = 10;
 const MAX_UNDO = 40;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Helpers ──
 let _uid = 0;
 function uid() { return `bb-${Date.now()}-${_uid++}`; }
 
-/** Shorten split-page labels to fit small buttons: "2_left" → "2L", "3_right" → "3R" */
+// "2_left" -> "2L", "3_right" -> "3R".
 function shortPageLabel(pageNumber) {
     return String(pageNumber).replace('_left', 'L').replace('_right', 'R');
 }
 
-/**
- * Order 4 polygon points into [TL, TR, BR, BL] so the editor's corner-resize /
- * rotate math (which assumes that vertex order) works on rotated boxes.
- */
+// The resize/rotate math assumes [TL, TR, BR, BL] vertex order.
 function orderQuad(poly) {
     const byY = [...poly].sort((a, b) => a[1] - b[1]);
     const [tl, tr] = byY.slice(0, 2).sort((a, b) => a[0] - b[0]);   // top: left, right
@@ -45,11 +38,8 @@ function orderQuad(poly) {
     return [[tl[0], tl[1]], [tr[0], tr[1]], [br[0], br[1]], [bl[0], bl[1]]];
 }
 
-/**
- * Convert a PaddleOCR polygon to the editor's 4-corner box representation.
- * 4-point quads keep their rotation (angled line boxes stay accurate); polygons
- * with a different vertex count fall back to their axis-aligned bounding rect.
- */
+// PaddleOCR polygon -> editor box. 4-point quads keep their rotation; anything
+// else collapses to its bounding rect.
 function polyToBox(poly, id) {
     if (!poly || poly.length === 0) return null;
     let pts;
@@ -63,13 +53,11 @@ function polyToBox(poly, id) {
         pts = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
     }
     return { id: id ?? uid(), points: pts, selected: false };
-    // points order: [TL, TR, BR, BL]
 }
 
-/** Convert internal box back to PaddleOCR polygon format. */
 function boxToPoly(b) { return b.points; }
 
-/** Create an axis-aligned quad from two corners (used by draw mode). */
+// Axis-aligned quad from two corners (draw mode).
 function makeRectBox(x1, y1, x2, y2) {
     return {
         id: uid(),
@@ -78,7 +66,7 @@ function makeRectBox(x1, y1, x2, y2) {
     };
 }
 
-/** Point-in-convex-polygon test (works for axis-aligned rects too). */
+// Point-in-convex-polygon.
 function pointInPolygon(px, py, pts) {
     let inside = false;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -89,7 +77,7 @@ function pointInPolygon(px, py, pts) {
     return inside;
 }
 
-/** Find which corner index (0-3) was hit, or -1. */
+// Which corner was hit (0-3), or -1.
 function hitCorner(pts, px, py, r) {
     for (let i = 0; i < pts.length; i++) {
         if (Math.hypot(px - pts[i][0], py - pts[i][1]) <= r) return i;
@@ -97,43 +85,31 @@ function hitCorner(pts, px, py, r) {
     return -1;
 }
 
-/**
- * Given a corner index and new position, return updated rectangle points
- * keeping the box axis-aligned. Opposite corner stays fixed.
- * Order: 0=TL, 1=TR, 2=BR, 3=BL
- */
+// Drag a corner, keeping the box axis-aligned. The opposite corner is the anchor.
 function resizeRectCorner(pts, cornerIdx, nx, ny) {
-    // Determine the opposite corner index
     const opposites = [2, 3, 0, 1];
     const oIdx = opposites[cornerIdx];
     const ox = pts[oIdx][0], oy = pts[oIdx][1];
-    // new rectangle from these two corners
     const x1 = Math.min(nx, ox), y1 = Math.min(ny, oy);
     const x2 = Math.max(nx, ox), y2 = Math.max(ny, oy);
     return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
 }
 
-/** Width / height of an axis-aligned rect from its 4 corner points. */
 function rectSize(pts) {
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
     return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
 }
 
-/** Rotate point (px,py) around center (cx,cy) by angle (radians). */
 function rotatePoint(px, py, cx, cy, angle) {
     const cos = Math.cos(angle), sin = Math.sin(angle);
     return [cx + (px - cx) * cos - (py - cy) * sin, cy + (px - cx) * sin + (py - cy) * cos];
 }
 
-/** Centroid of a 4-point box. */
 function getBoxCenter(pts) {
     return [pts.reduce((s, p) => s + p[0], 0) / 4, pts.reduce((s, p) => s + p[1], 0) / 4];
 }
 
-/**
- * Position of the rotation handle: offset away from the midpoint of the TL-TR edge
- * along the outward normal from the box center.
- */
+// Rotation handle sits off the TL-TR edge midpoint, along the outward normal.
 function getRotationHandlePos(pts, offsetDist) {
     const mx = (pts[0][0] + pts[1][0]) / 2;
     const my = (pts[0][1] + pts[1][1]) / 2;
@@ -143,22 +119,18 @@ function getRotationHandlePos(pts, offsetDist) {
     return [mx + (dx / len) * offsetDist, my + (dy / len) * offsetDist];
 }
 
-/** True if the click (px,py) is within radius r of the rotation handle. */
 function hitRotationHandle(pts, px, py, r, offsetDist) {
     const [hx, hy] = getRotationHandlePos(pts, offsetDist);
     return Math.hypot(px - hx, py - hy) <= r;
 }
 
-/**
- * Resize a (possibly rotated) rectangle by dragging one corner to (nx, ny).
- * Preserves the box rotation angle; opposite corner stays fixed.
- */
+// Corner resize that survives rotation — the angle is preserved and the
+// opposite corner stays put.
 function resizeRotatedCorner(pts, cornerIdx, nx, ny) {
     const opposites = [2, 3, 0, 1];
     const oIdx = opposites[cornerIdx];
     const [opx, opy] = pts[oIdx];
     const ncx = (opx + nx) / 2, ncy = (opy + ny) / 2;
-    // Detect rotation from the top edge direction
     const edgeDx = pts[1][0] - pts[0][0], edgeDy = pts[1][1] - pts[0][1];
     const angle = Math.atan2(edgeDy, edgeDx);
     const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
@@ -173,17 +145,13 @@ function resizeRotatedCorner(pts, cornerIdx, nx, ny) {
     return local.map(([lx, ly]) => [ncx + lx * cosR - ly * sinR, ncy + lx * sinR + ly * cosR]);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BBoxEditor — multi-page, supports angled bounding boxes
-// ─────────────────────────────────────────────────────────────────────────────
+// ── BBoxEditor — multi-page, supports angled bounding boxes ──
 export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, initialPageNumber = null }) {
 
     // ── Multi-page ─────────────────────────────────────────────────────────
-    // Freeze the page list at mount. The parent recomputes it whenever
-    // detection results change, so a batch detection running behind this
-    // modal would grow/reorder the list and silently shift `currentIdx`
-    // onto a different page — edits would then be saved under the wrong
-    // page number and appear to "revert".
+    // Frozen at mount. A batch detection running behind this modal reorders the
+    // parent's list, which would slide currentIdx onto a different page and save
+    // edits under the wrong page number.
     const pagesRef = useRef(pagesProp);
     const pages = pagesRef.current;
     const [currentIdx, setCurrentIdx] = useState(() => {
@@ -200,13 +168,12 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
     const overlayCanvasRef = useRef(null);
     const containerRef = useRef(null);
     const outerRef = useRef(null);
-    // The active page button in the bottom strip — scrolled into view on nav so
-    // later pages stay reachable even with a large number of pages.
+    // Scrolled into view on nav so later pages stay reachable.
     const activePageBtnRef = useRef(null);
 
-    // Grab keyboard focus when the editor opens so arrow keys work immediately
+    // Focus on open so arrow keys work straight away.
     useEffect(() => { outerRef.current?.focus(); }, []);
-    // Keep the active page button visible in the (horizontally scrolling) strip.
+
     useEffect(() => {
         activePageBtnRef.current?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
     }, [currentIdx]);
@@ -227,31 +194,22 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
     const panRef = useRef(pan);
     const imageSizeRef = useRef(imageSize);
 
-    // Sync refs in render body — guarantees they are current before any effect fires
+    // In the render body on purpose: effects fire too late.
     zoomRef.current = zoom;
     panRef.current = pan;
     imageSizeRef.current = imageSize;
 
-    // ── Mode ───────────────────────────────────────────────────────────────
     // 'select' | 'draw'
     const [mode, setMode] = useState('select');
 
-    // ── Drag state ─────────────────────────────────────────────────────────
-    // Types:
-    //  { type:'move',   id, origPts, startX, startY }
-    //  { type:'corner', id, cornerIdx, origPts }
-    //  { type:'rotate', id, origPts, center, startAngle }
-    //  { type:'draw',   startX, startY, currentX, currentY }
-    //  { type:'pan',    ... }
+    // One of: move | corner | rotate | draw | pan, each with its own payload.
     const dragRef = useRef(null);
     const isPanRef = useRef(false);
     const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
 
     const selectedId = useMemo(() => boxes.find(b => b.selected)?.id ?? null, [boxes]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Page management
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Page management ──
     const saveCurrentPage = useCallback(() => {
         if (!currentPage) return;
         pageBoxesRef.current[currentPage.pageNumber] = boxesRef.current.map(b => ({ ...b, selected: false }));
@@ -266,9 +224,8 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         const initialBoxes = saved ?? (page.polygons || []).map(poly => polyToBox(poly)).filter(Boolean);
         if (!saved) pageBoxesRef.current[page.pageNumber] = initialBoxes;
         setBoxes(initialBoxes);
-        // Sync the ref immediately — it normally updates in an effect after
-        // paint, and a fast page-to-page navigation in that window would save
-        // the PREVIOUS page's boxes under the next page's number.
+        // Synced here, not in an effect — flipping pages fast would otherwise
+        // save the previous page's boxes under the next page's number.
         boxesRef.current = initialBoxes;
 
         const img = new Image();
@@ -301,9 +258,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         loadPage(pages[idx]);
     }, [currentIdx, pages, saveCurrentPage, loadPage]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Overlay drawing
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Overlay drawing ──
     const drawOverlay = useCallback((boxList, drawState) => {
         const canvas = overlayCanvasRef.current;
         const { w, h } = imageSizeRef.current;
@@ -321,7 +276,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
             const sel = b.selected;
             const pts = b.points;
 
-            // Fill + stroke the rectangle
             ctx.strokeStyle = sel ? '#f97316' : '#22c55e';
             ctx.lineWidth = lw;
             ctx.fillStyle = sel ? 'rgba(249,115,22,0.12)' : 'rgba(34,197,94,0.08)';
@@ -334,7 +288,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
             ctx.stroke();
 
             if (sel) {
-                // Corner handles (white squares with orange border)
                 ctx.fillStyle = '#ffffff';
                 ctx.strokeStyle = '#f97316';
                 ctx.lineWidth = lw;
@@ -344,7 +297,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
                     ctx.fill(); ctx.stroke();
                 }
 
-                // Rotation handle: circle above top-edge midpoint
                 const rotOffset = Math.max(8, 30 / z);
                 const [rhx, rhy] = getRotationHandlePos(pts, rotOffset);
                 const tmx = (pts[0][0] + pts[1][0]) / 2;
@@ -358,7 +310,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
                 ctx.beginPath(); ctx.arc(rhx, rhy, rhr, 0, Math.PI * 2);
                 ctx.fillStyle = '#ffffff'; ctx.fill();
                 ctx.strokeStyle = '#f97316'; ctx.lineWidth = lw; ctx.stroke();
-                // Small arrow inside the circle
                 ctx.strokeStyle = '#f97316';
                 ctx.lineWidth = Math.max(1, lw * 0.8);
                 ctx.beginPath();
@@ -367,7 +318,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
             }
         }
 
-        // Draw rubber-band while in draw mode
         if (drawState) {
             const { startX, startY, currentX, currentY } = drawState;
             const x1 = Math.min(startX, currentX), y1 = Math.min(startY, currentY);
@@ -382,14 +332,12 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         }
     }, []);
 
-    // Redraw whenever boxes change OR when the image finishes loading (imageSize changes)
+    // imageSize is in the deps so we redraw once the image loads.
     useEffect(() => {
         if (imageSize.w > 0) drawOverlay(boxes, null);
     }, [boxes, imageSize, drawOverlay]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Undo / Redo
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Undo / Redo ──
     const pushUndo = useCallback((prevBoxes) => {
         const snap = prevBoxes.map(b => ({ ...b, points: b.points.map(p => [...p]), selected: false }));
         setUndoStack(s => { const n = [...s, snap]; return n.length > MAX_UNDO ? n.slice(-MAX_UNDO) : n; });
@@ -415,9 +363,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         });
     }, [boxes]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Coordinates
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Coordinates ──
     const screenToImage = useCallback((clientX, clientY) => {
         if (!containerRef.current) return { x: 0, y: 0 };
         const rect = containerRef.current.getBoundingClientRect();
@@ -427,11 +373,9 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         };
     }, []);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Pointer events
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Pointer events ──
     const handlePointerDown = useCallback((e) => {
-        // Pan: middle-click or ctrl+left-click
+        // Middle-click or ctrl+left-click pans.
         if (e.button === 1 || (e.button === 0 && (e.ctrlKey || e.metaKey))) {
             isPanRef.current = true;
             panStartRef.current = { x: e.clientX, y: e.clientY, panX: panRef.current.x, panY: panRef.current.y };
@@ -444,16 +388,15 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         const cr = Math.max(4, HANDLE_RADIUS / z);
         const rr = Math.max(5, (HANDLE_RADIUS + 2) / z);
 
-        // ── DRAW mode ──────────────────────────────────────────────────
+        // ── Draw mode ──
         if (mode === 'draw') {
             dragRef.current = { type: 'draw', startX: imgX, startY: imgY, currentX: imgX, currentY: imgY };
             return;
         }
 
-        // ── SELECT mode ────────────────────────────────────────────────
+        // ── Select mode: handles first, then bodies, then empty space ──
         const selBox = boxes.find(b => b.selected);
 
-        // 0. Rotation handle on selected box
         if (selBox) {
             const rotOffset = Math.max(8, 30 / z);
             if (hitRotationHandle(selBox.points, imgX, imgY, rr * 1.8, rotOffset)) {
@@ -470,7 +413,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
             }
         }
 
-        // 1. Corner handles on selected box (resize rectangle)
         if (selBox) {
             const ci = hitCorner(selBox.points, imgX, imgY, cr * 1.5);
             if (ci !== -1) {
@@ -485,7 +427,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
             }
         }
 
-        // 3. Body of any box (top-most first)
+        // Top-most box wins.
         const hit = [...boxes].reverse().find(b => pointInPolygon(imgX, imgY, b.points));
         if (hit) {
             pushUndo(boxes);
@@ -499,7 +441,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
             return;
         }
 
-        // 4. Click empty space → deselect
         setBoxes(prev => prev.map(b => ({ ...b, selected: false })));
         dragRef.current = null;
     }, [mode, boxes, screenToImage, pushUndo]);
@@ -533,7 +474,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         if (drag.type === 'rotate') {
             const [cx, cy] = drag.center;
             const currentAngle = Math.atan2(imgY - cy, imgX - cx);
-            // Slow rotation: 0.35x ratio so the box turns gently
+            // 0.35x so the box turns gently, not wildly.
             const delta = (currentAngle - drag.startAngle) * 0.35;
             setBoxes(prev => prev.map(b => {
                 if (b.id !== drag.id) return b;
@@ -546,7 +487,6 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         if (drag.type === 'corner') {
             setBoxes(prev => prev.map(b => {
                 if (b.id !== drag.id) return b;
-                // Resize while preserving rotation angle
                 const newPts = resizeRotatedCorner(drag.origPts, drag.cornerIdx, imgX, imgY);
                 return { ...b, points: newPts };
             }));
@@ -584,15 +524,13 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         return () => window.removeEventListener('mouseup', up);
     }, [handlePointerUp]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Scroll zoom
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Scroll zoom ──
     useEffect(() => {
         const el = containerRef.current;
         if (!el) return;
         const onWheel = e => {
             e.preventDefault();
-            // Gentle zoom: ~5 % per scroll tick instead of 10 %
+            // ~5% per tick — 10% overshoots constantly.
             const f = e.deltaY < 0 ? 1.05 : 1 / 1.05;
             setZoom(z => { const nz = Math.max(0.05, Math.min(8, z * f)); zoomRef.current = nz; return nz; });
         };
@@ -600,12 +538,10 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         return () => el.removeEventListener('wheel', onWheel);
     }, []);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Keyboard
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Keyboard ──
     const handleDelete = useCallback(() => {
         if (!selectedId) return;
-        // Find the box just before the deleted one (top-to-bottom order) so selection lands on it
+        // Land the selection on the box above the deleted one.
         const sorted = [...boxes].sort((a, b) => {
             const topA = Math.min(...a.points.map(p => p[1]));
             const topB = Math.min(...b.points.map(p => p[1]));
@@ -647,7 +583,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
                 if (e.key === 'z') { e.preventDefault(); handleUndo(); }
                 else if (e.key === 'y' || (e.shiftKey && e.key === 'z')) { e.preventDefault(); handleRedo(); }
             }
-            // Up / Down arrows cycle through bboxes sorted top-to-bottom
+            // Up/Down cycle boxes in top-to-bottom order.
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
                 e.preventDefault();
                 const sorted = [...boxesRef.current].sort((a, b) => {
@@ -675,9 +611,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         return () => window.removeEventListener('keydown', onKey);
     }, [selectedId, handleDelete, handleDuplicate, handleUndo, handleRedo, currentIdx, goToPage]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Fit view
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Fit view ──
     const handleFit = useCallback(() => {
         const { w, h } = imageSizeRef.current;
         if (!containerRef.current || w === 0) return;
@@ -687,9 +621,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         setZoom(fitZ); setPan(fitPan); zoomRef.current = fitZ; panRef.current = fitPan;
     }, []);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Cursor style — update based on what's under cursor
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Cursor style ──
     const [cursor, setCursor] = useState('default');
     const handleMouseMoveForCursor = useCallback((e) => {
         if (mode === 'draw') { setCursor('crosshair'); return; }
@@ -711,9 +643,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
         setCursor(hit ? 'move' : 'default');
     }, [mode, boxes, screenToImage]);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Save all pages
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Save all pages ──
     const handleSave = useCallback(() => {
         saveCurrentPage();
         const results = {};
@@ -726,9 +656,7 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
 
     const selBox = boxes.find(b => b.selected);
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Render
-    // ─────────────────────────────────────────────────────────────────────
+    // ── Render ──
     return (
         <div
             ref={outerRef}
@@ -876,9 +804,8 @@ export default function BBoxEditor({ pages: pagesProp = [], onSave, onCancel, in
                         </button>
                         <div className="flex items-center gap-1 overflow-x-auto min-w-0 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
                             {pages.map((page, idx) => {
-                                // Fall back to the original detected polygon count so
-                                // not-yet-visited pages don't misleadingly show "0"
-                                // (which looked like detection had been reverted).
+                                // Unvisited pages have no edited boxes yet; showing 0
+                                // looked like detection had been reverted.
                                 const pageBoxCount = idx === currentIdx
                                     ? boxes.length
                                     : (pageBoxesRef.current[page.pageNumber]?.length ?? page.polygons?.length ?? 0);

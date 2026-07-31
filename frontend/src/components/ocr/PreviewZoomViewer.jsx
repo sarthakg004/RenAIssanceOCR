@@ -9,10 +9,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 
-/**
- * PreviewZoomViewer Component
- * Interactive zoom viewer with pan/scroll support for preview images
- */
+// Zoom + pan viewer for preview images.
 export default function PreviewZoomViewer({
   imageSrc,
   isLoading,
@@ -31,32 +28,26 @@ export default function PreviewZoomViewer({
   const MAX_ZOOM = 4.0;
   const ZOOM_STEP = 0.25;
 
-  // Reset zoom when image changes
   useEffect(() => {
     setZoomLevel(1);
     setImageLoaded(false);
   }, [imageSrc]);
 
-  // Handle zoom in
   const handleZoomIn = useCallback(() => {
     setZoomLevel((prev) => Math.min(prev + ZOOM_STEP, MAX_ZOOM));
   }, []);
 
-  // Handle zoom out
   const handleZoomOut = useCallback(() => {
     setZoomLevel((prev) => Math.max(prev - ZOOM_STEP, MIN_ZOOM));
   }, []);
 
-  // Reset zoom
   const handleReset = useCallback(() => {
     setZoomLevel(1);
-    // Reset scroll position
     if (containerRef.current) {
       containerRef.current.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
     }
   }, []);
 
-  // Fit to panel
   const handleFitToPanel = useCallback(() => {
     if (!containerRef.current || !imageDimensions.width || !imageDimensions.height) {
       setZoomLevel(1);
@@ -74,7 +65,6 @@ export default function PreviewZoomViewer({
     setZoomLevel(Math.max(MIN_ZOOM, Math.min(fitZoom, MAX_ZOOM)));
   }, [imageDimensions]);
 
-  // Handle mouse wheel zoom with Ctrl
   const handleWheel = useCallback((e) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -83,7 +73,7 @@ export default function PreviewZoomViewer({
     }
   }, []);
 
-  // Attach wheel event with passive: false for preventDefault
+  // passive: false so preventDefault actually works.
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -92,7 +82,6 @@ export default function PreviewZoomViewer({
     return () => container.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
-  // Handle image load to get dimensions
   const handleImageLoad = useCallback((e) => {
     setImageLoaded(true);
     setImageDimensions({
@@ -101,7 +90,6 @@ export default function PreviewZoomViewer({
     });
   }, []);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -192,7 +180,6 @@ export default function PreviewZoomViewer({
           zoomLevel > 1 ? 'cursor-grab active:cursor-grabbing' : ''
         }`}
         style={{
-          // Center content when not zoomed in
           display: 'flex',
           alignItems: zoomLevel <= 1 ? 'center' : 'flex-start',
           justifyContent: zoomLevel <= 1 ? 'center' : 'flex-start',

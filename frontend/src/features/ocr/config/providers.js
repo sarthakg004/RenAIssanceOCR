@@ -1,7 +1,5 @@
-/**
- * Provider Configuration Map
- * Centralizes all provider metadata, models, and UI config.
- */
+// Provider metadata, fallback model lists and UI config in one place.
+// DeepSeek and Qwen are implemented server-side but hidden in the UI.
 
 import {
     Sparkles,
@@ -10,7 +8,6 @@ import {
     Globe,
 } from 'lucide-react';
 
-// Provider display labels
 export const PROVIDER_LABELS = {
     gemini: 'Gemini',
     chatgpt: 'ChatGPT',
@@ -18,7 +15,7 @@ export const PROVIDER_LABELS = {
     qwen: 'Qwen',
 };
 
-// Fallback models for each provider when backend is offline
+// Used when the backend can't be reached.
 export const FALLBACK_MODELS = {
     gemini: [
         { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Fast and light, best free-tier quota (recommended)' },
@@ -43,7 +40,6 @@ export const FALLBACK_MODELS = {
     ],
 };
 
-// Default model per provider
 export const DEFAULT_MODELS = {
     gemini: 'gemini-3.1-flash-lite',
     chatgpt: 'gpt-5.2',
@@ -51,7 +47,6 @@ export const DEFAULT_MODELS = {
     qwen: 'qwen-vl-max',
 };
 
-// Method options for TextDetectionPage cards
 export const METHOD_OPTIONS = [
     {
         id: 'api',
@@ -104,7 +99,7 @@ export const METHOD_OPTIONS = [
     },
 ];
 
-// Provider ID map (for TextDetectionPage → TextRecognitionPage)
+// TextDetectionPage card id -> provider id.
 export const PROVIDER_MAP = {
     'api': 'gemini',
     'chatgpt': 'chatgpt',

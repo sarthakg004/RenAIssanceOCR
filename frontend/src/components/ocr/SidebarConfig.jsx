@@ -18,7 +18,6 @@ import {
   RotateCcw,
 } from 'lucide-react';
 
-// Provider display labels
 const PROVIDER_LABELS = {
   gemini: 'Gemini',
   chatgpt: 'ChatGPT',
@@ -26,7 +25,6 @@ const PROVIDER_LABELS = {
   qwen: 'Qwen',
 };
 
-// Provider-specific API key placeholder hints
 const KEY_PLACEHOLDERS = {
   gemini: 'Enter Gemini API key...',
   chatgpt: 'Enter OpenAI API key...',
@@ -34,10 +32,7 @@ const KEY_PLACEHOLDERS = {
   qwen: 'Enter DashScope API key...',
 };
 
-/**
- * SidebarConfig Component
- * API configuration panel with proper async validation
- */
+// Provider + API key panel.
 export default function SidebarConfig({
   apiKey,
   onApiKeyChange,

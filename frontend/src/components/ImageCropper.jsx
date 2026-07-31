@@ -1,21 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Crop, Check, X, RotateCcw, Maximize2, Lock, Unlock, Copy, ChevronDown, ChevronUp } from 'lucide-react';
 
-/**
- * Mobile-style draggable image cropper
- * Features:
- * - Drag corners/edges to resize
- * - Drag center to move crop area
- * - Aspect ratio lock option
- * - Dark overlay outside crop area
- * - Apply same crop to multiple pages
- */
+// Draggable crop box with optional aspect lock. The same crop can be applied
+// across several pages at once.
 export default function ImageCropper({
   imageSrc,
   onCropComplete,
   onCancel,
   initialCrop = null,
-  // New props for multi-page support
   availablePages = [], // Array of { pageNumber, thumbnail } objects
   currentPageNumber = null,
   onBatchCropComplete = null, // Callback for applying crop to multiple pages
@@ -26,7 +18,7 @@ export default function ImageCropper({
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [displayDimensions, setDisplayDimensions] = useState({ width: 0, height: 0 });
   
-  // Crop box state (in percentage of displayed image)
+  // Percentages of the displayed image, not pixels.
   const [crop, setCrop] = useState({
     x: 10, // percentage from left
     y: 10, // percentage from top
@@ -41,16 +33,13 @@ export default function ImageCropper({
   const [aspectLocked, setAspectLocked] = useState(false);
   const [aspectRatio, setAspectRatio] = useState(null);
   
-  // Multi-page crop state
   const [showPageSelector, setShowPageSelector] = useState(false);
   const [selectedPages, setSelectedPages] = useState(new Set()); // Pages to apply crop to
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   
-  // Other pages available for batch crop (excluding current)
   const otherPages = availablePages.filter(p => p.pageNumber !== currentPageNumber);
   const hasMultiplePages = otherPages.length > 0 && onBatchCropComplete;
 
-  // Load image and get dimensions
   useEffect(() => {
     if (!imageSrc) return;
     
@@ -62,7 +51,6 @@ export default function ImageCropper({
     img.src = imageSrc;
   }, [imageSrc]);
 
-  // Calculate display dimensions when container resizes
   useEffect(() => {
     if (!containerRef.current || !imageLoaded) return;
 
@@ -92,14 +80,12 @@ export default function ImageCropper({
     return () => window.removeEventListener('resize', updateDisplayDimensions);
   }, [imageLoaded, imageDimensions]);
 
-  // Initialize crop from props
   useEffect(() => {
     if (initialCrop) {
       setCrop(initialCrop);
     }
   }, [initialCrop]);
 
-  // Lock aspect ratio based on current crop
   const handleLockAspect = () => {
     if (!aspectLocked) {
       setAspectRatio(crop.width / crop.height);
@@ -107,14 +93,12 @@ export default function ImageCropper({
     setAspectLocked(!aspectLocked);
   };
 
-  // Reset crop to full image
   const handleResetCrop = () => {
     setCrop({ x: 5, y: 5, width: 90, height: 90 });
     setAspectLocked(false);
     setAspectRatio(null);
   };
 
-  // Get cursor style for drag type
   const getCursor = (type) => {
     const cursors = {
       move: 'move',
@@ -130,7 +114,6 @@ export default function ImageCropper({
     return cursors[type] || 'default';
   };
 
-  // Handle mouse/touch start
   const handleDragStart = (e, type) => {
     e.preventDefault();
     e.stopPropagation();
@@ -144,7 +127,6 @@ export default function ImageCropper({
     setCropStart({ ...crop });
   };
 
-  // Handle mouse/touch move
   const handleDragMove = useCallback((e) => {
     if (!isDragging || !dragType) return;
 
@@ -160,7 +142,6 @@ export default function ImageCropper({
       newCrop.x = Math.max(0, Math.min(100 - cropStart.width, cropStart.x + deltaX));
       newCrop.y = Math.max(0, Math.min(100 - cropStart.height, cropStart.y + deltaY));
     } else {
-      // Handle resize
       const minSize = 10; // minimum 10% size
 
       if (dragType.includes('w')) {
@@ -182,7 +163,6 @@ export default function ImageCropper({
         newCrop.height = Math.max(minSize, Math.min(100 - cropStart.y, cropStart.height + deltaY));
       }
 
-      // Apply aspect ratio lock
       if (aspectLocked && aspectRatio) {
         if (dragType.includes('e') || dragType.includes('w')) {
           newCrop.height = newCrop.width / aspectRatio;
@@ -203,13 +183,11 @@ export default function ImageCropper({
     setCrop(newCrop);
   }, [isDragging, dragType, dragStart, cropStart, displayDimensions, aspectLocked, aspectRatio]);
 
-  // Handle mouse/touch end
   const handleDragEnd = useCallback(() => {
     setIsDragging(false);
     setDragType(null);
   }, []);
 
-  // Add event listeners
   useEffect(() => {
     if (isDragging) {
       window.addEventListener('mousemove', handleDragMove);
@@ -225,7 +203,6 @@ export default function ImageCropper({
     }
   }, [isDragging, handleDragMove, handleDragEnd]);
 
-  // Helper function to apply crop to a single image
   const applyCropToImage = async (imgSrc, cropParams) => {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -239,8 +216,7 @@ export default function ImageCropper({
       img.src = imgSrc;
     });
 
-    // Calculate actual pixel coordinates from percentages
-    const actualX = (cropParams.x / 100) * img.width;
+      const actualX = (cropParams.x / 100) * img.width;
     const actualY = (cropParams.y / 100) * img.height;
     const actualWidth = (cropParams.width / 100) * img.width;
     const actualHeight = (cropParams.height / 100) * img.height;
@@ -257,7 +233,6 @@ export default function ImageCropper({
     return canvas.toDataURL('image/png');
   };
 
-  // Apply crop to current image only
   const handleApplyCrop = async () => {
     if (!imageRef.current) return;
 
@@ -272,7 +247,6 @@ export default function ImageCropper({
     onCropComplete(croppedDataUrl, cropData);
   };
 
-  // Apply crop to current + selected pages
   const handleApplyBatchCrop = async () => {
     if (!imageRef.current || selectedPages.size === 0) return;
     
@@ -286,10 +260,8 @@ export default function ImageCropper({
     };
 
     try {
-      // First, apply to current page
       const currentCroppedUrl = await applyCropToImage(imageSrc, cropData);
       
-      // Then apply to all selected pages
       const batchResults = [];
       for (const pageNum of selectedPages) {
         const page = availablePages.find(p => p.pageNumber === pageNum);
@@ -303,7 +275,6 @@ export default function ImageCropper({
         }
       }
 
-      // Call the batch callback with all results
       onBatchCropComplete(currentCroppedUrl, cropData, batchResults);
     } catch (error) {
       console.error('Batch crop failed:', error);
@@ -312,7 +283,6 @@ export default function ImageCropper({
     }
   };
 
-  // Toggle page selection
   const togglePageSelection = (pageNum) => {
     setSelectedPages(prev => {
       const newSet = new Set(prev);
@@ -325,7 +295,6 @@ export default function ImageCropper({
     });
   };
 
-  // Select/deselect all pages
   const toggleSelectAll = () => {
     if (selectedPages.size === otherPages.length) {
       setSelectedPages(new Set());
@@ -334,7 +303,6 @@ export default function ImageCropper({
     }
   };
 
-  // Render handle for crop box
   const renderHandle = (position, cursor) => {
     const baseClasses = "absolute w-4 h-4 bg-white border-2 border-blue-500 rounded-full shadow-lg z-20 transition-transform hover:scale-125";
     const positions = {

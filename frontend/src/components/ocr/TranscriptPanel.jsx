@@ -17,16 +17,12 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { getLLMTemplates } from '../../services/geminiApi';
+import { getLLMTemplates } from '../../services/llmApi';
 
-/**
- * Regex to match special OCR markers like [illegible], [margin], [unclear], etc.
- */
+// [illegible], [margin], [unclear], ...
 const MARKER_REGEX = /(\[(?:illegible|margin|unclear|damaged|torn|faded|stained|missing|blank|unknown|(?:\?+))\])/gi;
 
-/**
- * Render transcript text with highlighted markers
- */
+
 function HighlightedTranscript({ text, monospace }) {
   const parts = useMemo(() => {
     if (!text) return [];
@@ -35,11 +31,10 @@ function HighlightedTranscript({ text, monospace }) {
     let lastIndex = 0;
     let match;
     
-    // Reset regex lastIndex
+    // The regex is /g and module-level, so reset before each pass.
     MARKER_REGEX.lastIndex = 0;
     
     while ((match = MARKER_REGEX.exec(text)) !== null) {
-      // Add text before the match
       if (match.index > lastIndex) {
         result.push({
           type: 'text',
@@ -48,7 +43,6 @@ function HighlightedTranscript({ text, monospace }) {
         });
       }
       
-      // Add the marker
       result.push({
         type: 'marker',
         content: match[0],
@@ -58,7 +52,6 @@ function HighlightedTranscript({ text, monospace }) {
       lastIndex = match.index + match[0].length;
     }
     
-    // Add remaining text
     if (lastIndex < text.length) {
       result.push({
         type: 'text',
@@ -93,11 +86,7 @@ function HighlightedTranscript({ text, monospace }) {
   );
 }
 
-/**
- * TranscriptPanel Component
- * Scrollable transcript viewer with copy/export functionality
- * Fixed height, proper overflow handling
- */
+// Transcript viewer with copy, export and LLM cleanup.
 function TranscriptPanel({
   pageNumber,
   transcript,
@@ -123,7 +112,6 @@ function TranscriptPanel({
   const [llmTemplates, setLlmTemplates] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState('full_cleanup');
 
-  // Fetch LLM templates when enabled
   useEffect(() => {
     if (!llmEnabled) return;
     let cancelled = false;
@@ -139,7 +127,6 @@ function TranscriptPanel({
 
   const hasChanges = transcript !== originalTranscript;
   
-  // Count markers in transcript
   const markerCount = useMemo(() => {
     if (!transcript) return 0;
     MARKER_REGEX.lastIndex = 0;
@@ -157,7 +144,7 @@ function TranscriptPanel({
 
   const handleDownloadTxt = () => {
     if (!transcript) return;
-    // Add UTF-8 BOM for better compatibility with text editors
+    // BOM keeps accents intact in Notepad/Excel.
     const utf8Bom = '\uFEFF';
     const blob = new Blob([utf8Bom + transcript], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -427,6 +414,6 @@ function TranscriptPanel({
   );
 }
 
-// Transcript typing is the hot path here — memo so keystrokes don't re-render
-// this panel when an unrelated parent state (rate limit, zoom, etc.) changes.
+// Typing is the hot path — memo keeps unrelated parent state (rate limit,
+// zoom) from re-rendering the panel on every keystroke.
 export default memo(TranscriptPanel);

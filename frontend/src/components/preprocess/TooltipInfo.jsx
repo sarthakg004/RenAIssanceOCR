@@ -1,12 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Info } from 'lucide-react';
 
-/**
- * TooltipInfo - A reusable tooltip component with info icon
- * 
- * Displays a small info icon that shows a tooltip on hover.
- * Supports configurable position and styling.
- */
+// Info icon with a hover tooltip.
 export default function TooltipInfo({ 
   text, 
   position = 'top', 
@@ -50,7 +45,6 @@ export default function TooltipInfo({
           left = (trigger.width - tooltip.width) / 2;
       }
       
-      // Adjust if tooltip would go off-screen
       const absoluteLeft = trigger.left + left;
       const absoluteTop = trigger.top + top;
       

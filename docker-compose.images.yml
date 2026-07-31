@@ -24,10 +24,8 @@ services:
     # never ambiguous. CPU hosts use docker-compose.images.cpu.yml instead.
     image: saarthakg004/renaissance-backend:latest-gpu
     container_name: renaissance-backend
-    # Optional .env (SECRET_KEY, ADMIN_TOKEN, SMTP_*, DATABASE_URL overrides).
-    # NOT required to run: the Supabase tracking URL + publishable key are
-    # baked into the image. `required: false` means compose still starts if
-    # there is no .env file on this host.
+    # Optional .env (SECRET_KEY, ADMIN_TOKEN, DATABASE_URL overrides). Not
+    # required — Supabase tracking creds are baked in, so compose starts without it.
     env_file:
       - path: .env
         required: false

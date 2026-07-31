@@ -1,10 +1,5 @@
-"""
-Shared helpers for OCR endpoints — base64 parsing, model validation,
-rate-limit checks, and a unified OCR execution wrapper.
-
-All provider endpoints delegate to these helpers so that validation,
-error handling, and response formatting are defined in one place.
-"""
+"""Shared bits every OCR endpoint uses: base64 parsing, validation,
+rate-limit checks, and one wrapper that turns provider calls into OCRResponse."""
 
 import base64
 import time
@@ -14,7 +9,7 @@ from fastapi import HTTPException
 
 try:
     import httpx
-except ImportError:  # httpx is optional for Gemini-only setups
+except ImportError:  # only Gemini setups can skip it
     httpx = None  # type: ignore
 
 from ..core.rate_limiter import rate_limiter
@@ -26,14 +21,7 @@ from ..services.ocr.base import BaseOCRProvider
 
 
 def parse_base64_image(image_data: str) -> tuple[bytes, str]:
-    """
-    Decode a base64-encoded image string.
-
-    Handles both raw base64 and ``data:<mime>;base64,...`` prefixed strings.
-
-    Returns:
-        (image_bytes, mime_type)
-    """
+    """Decode raw base64 or a data: URL. Returns (image_bytes, mime_type)."""
     if "," in image_data:
         header, encoded = image_data.split(",", 1)
         mime_type = (
@@ -52,7 +40,7 @@ def parse_base64_image(image_data: str) -> tuple[bytes, str]:
 
 
 def validate_model(model: str, valid_ids: list[str]) -> None:
-    """Raise *400 Bad Request* if *model* is not in the valid list."""
+    """400 if the model isn't one we know about."""
     if model not in valid_ids:
         raise HTTPException(
             status_code=400,
@@ -61,7 +49,7 @@ def validate_model(model: str, valid_ids: list[str]) -> None:
 
 
 def validate_api_key_format(api_key: str, min_length: int = 10) -> None:
-    """Raise *401 Unauthorized* if the API key is missing or too short."""
+    """401 if the key is missing or implausibly short."""
     if not api_key or len(api_key) < min_length:
         raise HTTPException(
             status_code=401,
@@ -73,12 +61,7 @@ def validate_api_key_format(api_key: str, min_length: int = 10) -> None:
 
 
 def check_rate_limit(required_slots: int = 1) -> None:
-    """
-    Check the sliding-window rate limiter.
-
-    Raises *429 Too Many Requests* with a JSON detail body when there
-    are not enough available slots.
-    """
+    """429 with a JSON body when the sliding window has no room."""
     if required_slots <= 1:
         can_proceed, wait_time = rate_limiter.can_proceed()
         if not can_proceed:
@@ -119,13 +102,10 @@ def run_ocr(
     mime_type: str,
     custom_prompt: Optional[str] = None,
 ) -> OCRResponse:
-    """
-    Call ``provider.transcribe`` and return a standardised ``OCRResponse``.
+    """Run the provider and normalise whatever it throws into an OCRResponse.
 
-    Handles:
-    • ``httpx.HTTPStatusError``  (ChatGPT / DeepSeek / Qwen providers)
-    • Google-SDK errors          (Gemini provider)
-    • Generic exceptions
+    httpx errors (ChatGPT/DeepSeek/Qwen) and Google SDK errors (Gemini) both
+    land here and get mapped onto the same 401/429 shapes.
     """
     start_time = time.time()
 
@@ -142,7 +122,6 @@ def run_ocr(
     except Exception as exc:
         processing_time = int((time.time() - start_time) * 1000)
 
-        # Re-raise as HTTP errors for known auth / quota issues
         if httpx is not None and isinstance(exc, httpx.HTTPStatusError):
             if exc.response.status_code == 401:
                 raise HTTPException(status_code=401, detail="Invalid API key")
@@ -154,9 +133,8 @@ def run_ocr(
         error_msg = str(exc)
         if "API_KEY_INVALID" in error_msg or "401" in error_msg:
             raise HTTPException(status_code=401, detail="Invalid API key")
-        # Daily/free-tier quota (Google RESOURCE_EXHAUSTED) is NOT the same as our
-        # short sliding-window limit — it won't clear for hours, so flag it as
-        # quota_exceeded so the UI can tell the user instead of silently retrying.
+        # A daily quota is not our short sliding-window limit — it won't clear
+        # for hours, so tag it separately and let the UI say so.
         if "RESOURCE_EXHAUSTED" in error_msg or "QUOTA_EXCEEDED" in error_msg or "quota" in error_msg.lower():
             raise HTTPException(
                 status_code=429,

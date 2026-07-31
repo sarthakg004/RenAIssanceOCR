@@ -38,11 +38,3 @@ class LocalRecognizeResponse(BaseModel):
     model_type: str
     device: str
     error: Optional[str] = None
-
-
-# Backward-compatible aliases for existing CRNN routes.
-CRNNModelInfo = LocalModelInfo
-CRNNModelsResponse = LocalModelsResponse
-CRNNRecognizeRequest = LocalRecognizeRequest
-CRNNRecognizeResult = LocalRecognizeResult
-CRNNRecognizeResponse = LocalRecognizeResponse

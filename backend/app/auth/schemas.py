@@ -10,8 +10,7 @@ class SignupRequest(BaseModel):
     password: str = Field(..., min_length=6, max_length=128)
     name: str = Field(..., min_length=1, max_length=128)
     email: EmailStr
-    # Required; defaults to "personal" so a user who doesn't change it still
-    # has a value (the frontend pre-fills "personal").
+    # Frontend pre-fills "personal", so this always has a value.
     institute: str = Field(default="personal", min_length=1, max_length=255)
 
 
@@ -39,6 +38,3 @@ class UserOut(BaseModel):
 
 class AuthResponse(BaseModel):
     user: UserOut
-    # True when a real verification email was sent; False when auto-verified
-    # (SMTP not configured) so the UI can tailor its message.
-    email_sent: bool = False

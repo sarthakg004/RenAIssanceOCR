@@ -1,19 +1,15 @@
-"""Password hashing and signed-cookie session handling.
+"""Password hashing and signed-cookie sessions.
 
-Deliberately tiny: bcrypt for passwords, itsdangerous for opaque signed
-session cookies and email-verification tokens. No JWT, no refresh tokens.
+bcrypt for passwords, itsdangerous for opaque signed cookies. No JWT.
 """
 
 from __future__ import annotations
-
-import secrets
 
 import bcrypt
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..core.config import SECRET_KEY, SESSION_MAX_AGE
 
-# Distinct salts so a session cookie can never be replayed as a verify token.
 _session_signer = URLSafeTimedSerializer(SECRET_KEY, salt="ren-session")
 
 SESSION_COOKIE = "ren_session"
@@ -48,10 +44,3 @@ def read_session_token(token: str) -> int | None:
         return int(data["uid"])
     except (BadSignature, SignatureExpired, KeyError, ValueError, TypeError):
         return None
-
-
-# ── Email verification token ─────────────────────────────────────────────────
-
-def new_verification_token() -> str:
-    """Random, single-use token stored on the user row."""
-    return secrets.token_urlsafe(32)

@@ -1,17 +1,8 @@
-"""
-Layout-Aware PaddleOCR Text Line Detection Service.
+"""Layout-aware text-line detection with PaddleOCR.
 
-Two-stage pipeline:
-  1. Layout detection  ->  PPStructureV3 (PP-DocLayout_plus-L)
-  2. Per-region OCR det ->  PaddleOCR (PP-OCRv5_server_det/rec)
-
-Models are created fresh per call and cleaned up after,
-matching the proven notebook implementation.
-
-Resource requirements
----------------------
-  GPU mode  : >= 8 GB VRAM recommended (server det/rec models are large).
-  CPU mode  : >= 8 GB RAM recommended; processing is significantly slower.
+Two stages: detect page regions (PP-DocLayout), then run text detection inside
+each text region. Models are built fresh per call and freed after — keeping them
+resident blew past 8 GB VRAM. Budget 8 GB VRAM (GPU) or 8 GB RAM (CPU, slow).
 """
 
 import gc
@@ -19,7 +10,7 @@ import os
 import time
 from typing import List, Tuple, Dict, Any
 
-# Disable Paddle PIR to avoid ConvertPirAttribute2RuntimeAttribute errors
+# Paddle's PIR path throws ConvertPirAttribute2RuntimeAttribute on these models.
 os.environ["FLAGS_enable_pir_api"] = "0"
 os.environ["FLAGS_enable_pir_in_executor"] = "0"
 
@@ -27,15 +18,9 @@ import cv2
 import numpy as np
 import psutil
 
-# ---------------------------------------------------------------------------
-# Lazy Paddle imports
-# ---------------------------------------------------------------------------
-# paddlepaddle-gpu links against libcuda.so.1 at import time.  If the
-# container starts without GPU access the import raises an ImportError and
-# crashes the whole server before it can serve any request.
-# We import lazily on the first detection call so the server always starts;
-# a clear error is returned to the caller if paddle is unavailable.
-# ---------------------------------------------------------------------------
+# paddlepaddle-gpu links libcuda.so.1 at import time, so importing it in a
+# container without GPU access kills the server at boot. Import on first use
+# instead and return a readable error if it fails.
 _paddle = None
 _create_model = None
 _PaddleOCR = None
@@ -43,18 +28,15 @@ _PADDLE_IMPORT_ERROR: str = ""
 
 
 def _ensure_paddle() -> None:
-    """Lazy-import paddle and paddleocr on first call; raises RuntimeError if unavailable."""
+    """Import paddle/paddleocr on first use. Raises RuntimeError if unavailable."""
     global _paddle, _create_model, _PaddleOCR, _PADDLE_IMPORT_ERROR
     if _paddle is not None:
         return
     try:
         import paddle as _p
         from paddleocr import PaddleOCR as _O
-        # Single-model layout predictor. We used to build a full PPStructureV3
-        # pipeline here just to read layout_det_res — but PPStructureV3
-        # downloads and wires EVERY sub-model it knows (tables, seals,
-        # formulas, PP-Chart2Table, …) even with all use_* flags off:
-        # several GB of weights the app never runs.
+        # Single layout model, not PPStructureV3 — that pipeline downloads every
+        # sub-model it knows (tables, seals, formulas) even with the flags off.
         from paddlex import create_model as _cm
         _paddle = _p
         _create_model = _cm
@@ -71,7 +53,7 @@ def _ensure_paddle() -> None:
         ) from exc
 
 
-# ---- constants (match working notebook) ----
+# ── Tuning constants ──────────────────────────────────────────────────
 TEXT_LABELS    = {"text", "paragraph_title", "doc_title", "header"}
 REGION_PADDING = 50
 LAYOUT_EXPAND  = 2
@@ -80,16 +62,13 @@ UPSCALE_MIN_H  = 60
 NMS_IOU_THRESH = 0.3
 GAP_MULTIPLIER = 2.0
 
-# ---- resource thresholds ----
-MIN_GPU_VRAM_GB  = 8.0   # Minimum GPU VRAM recommended for server models
-MIN_RAM_GB       = 8.0   # Minimum system RAM recommended for CPU mode
-LOW_RAM_GB       = 4.0   # RAM below this value is considered critically low
+# Thresholds for the warnings shown to the user.
+MIN_GPU_VRAM_GB  = 8.0
+MIN_RAM_GB       = 8.0
+LOW_RAM_GB       = 4.0
 
-# ---- tier selection thresholds (env-overridable) ----
-# Below these free-VRAM values, the tier falls through to the next level:
-#   >= SERVER_MIN_VRAM_GB → server models on GPU
-#   >= MOBILE_MIN_VRAM_GB → mobile models on GPU
-#   otherwise             → CPU (server if RAM >= CPU_SERVER_MIN_RAM_GB, else mobile)
+# Tier ladder (env-overridable): enough free VRAM → server models on GPU, less →
+# mobile on GPU, less still → CPU, picking server vs mobile there by free RAM.
 TIER_SERVER_MIN_VRAM_GB = float(os.environ.get("TIER_SERVER_MIN_VRAM_GB", 6.0))
 TIER_MOBILE_MIN_VRAM_GB = float(os.environ.get("TIER_MOBILE_MIN_VRAM_GB", 2.0))
 TIER_CPU_SERVER_MIN_RAM_GB = float(os.environ.get("TIER_CPU_SERVER_MIN_RAM_GB", 8.0))
@@ -107,11 +86,9 @@ MOBILE_MODELS = {
 
 
 def _model_cache_root() -> str:
-    """Root dir where PaddleX caches official models.
+    """Where PaddleX caches downloaded models (<root>/official_models/).
 
-    In Docker this is /paddle_models (set via PADDLE_PDX_CACHE_HOME — the
-    variable paddlex itself reads, so downloads land in the named volume);
-    locally it defaults to ~/.paddlex. Models land under `<root>/official_models/`.
+    /paddle_models in Docker via PADDLE_PDX_CACHE_HOME, ~/.paddlex locally.
     """
     root = (
         os.environ.get("PADDLE_PDX_MODEL_CACHE_HOME")
@@ -123,11 +100,10 @@ def _model_cache_root() -> str:
 
 
 def models_cached(use_gpu: bool = True) -> bool:
-    """True when the model set for this tier is already downloaded.
+    """True when this tier's models are already on disk.
 
-    Used by the UI to show a one-time "downloading models" notice on the first
-    detection (PaddleX fetches several GB lazily on first use). A dir counts as
-    present only if it exists and is non-empty.
+    The UI uses this to warn about the multi-GB first-run download. A directory
+    only counts if it exists AND is non-empty (a killed download leaves an empty one).
     """
     root = _model_cache_root()
     names = SERVER_MODELS if use_gpu else MOBILE_MODELS
@@ -148,18 +124,10 @@ def models_cached(use_gpu: bool = True) -> bool:
 
 
 def select_tier(use_gpu: bool) -> Dict[str, Any]:
-    """
-    Pick device + model tier based on currently-free VRAM and RAM.
+    """Pick device + model tier from currently-free VRAM/RAM.
 
-    Returns a dict with:
-      device       : "gpu" | "cpu"
-      tier         : "server" | "mobile"
-      layout_model : str
-      det_model    : str
-      rec_model    : str
-      reason       : str  — human-readable explanation
-      free_vram_gb : float
-      free_ram_gb  : float
+    -> {device, tier, layout_model, det_model, rec_model, reason,
+        free_vram_gb, free_ram_gb}. `reason` is shown to the user as-is.
     """
     _ensure_paddle()
     info = check_system_resources(use_gpu)
@@ -190,15 +158,14 @@ def select_tier(use_gpu: bool) -> Dict[str, Any]:
                 ),
                 "free_vram_gb": free_vram, "free_ram_gb": free_ram,
             }
-        # Not enough VRAM for even the mobile tier — fall through to CPU.
+        # Not enough VRAM even for mobile — fall through to CPU.
         cpu_reason_prefix = (
             f"{free_vram:.1f} GB free VRAM (< {TIER_MOBILE_MIN_VRAM_GB:.0f} GB) "
             "— falling back to CPU. "
         )
     else:
-        cpu_reason_prefix = ""  # CPU was explicitly chosen or no GPU present.
+        cpu_reason_prefix = ""  # CPU asked for, or no GPU at all
 
-    # CPU branch: pick server vs mobile based on free RAM.
     if free_ram >= TIER_CPU_SERVER_MIN_RAM_GB:
         return {
             "device": "cpu", "tier": "server",
@@ -225,25 +192,16 @@ def select_tier(use_gpu: bool) -> Dict[str, Any]:
     }
 
 
-# ==============================================================
-# Resource Check
-# ==============================================================
+# ── Resource check ────────────────────────────────────────────────────
 
 def check_system_resources(use_gpu: bool) -> Dict[str, Any]:
-    """
-    Check available GPU VRAM and system RAM.
+    """Inspect GPU VRAM (device 0) and system RAM.
 
-    Returns a dict with:
-      ``warnings``          : list[str]  — human-readable warnings (may be empty)
-      ``gpu_available``     : bool       — whether a CUDA GPU is detected
-      ``gpu_vram_gb``       : float      — total VRAM of device 0 (0 if no GPU)
-      ``gpu_vram_free_gb``  : float      — free VRAM on device 0 (0 if no GPU)
-      ``available_ram_gb``  : float      — currently free system RAM
-      ``total_ram_gb``      : float      — total system RAM
+    -> {warnings, gpu_available, gpu_vram_gb, gpu_vram_free_gb,
+        available_ram_gb, total_ram_gb}. GPU numbers are 0 when there's no GPU.
     """
     warnings: List[str] = []
 
-    # --- GPU ---
     gpu_available    = False
     gpu_vram_gb      = 0.0
     gpu_vram_free_gb = 0.0
@@ -279,7 +237,6 @@ def check_system_resources(use_gpu: bool) -> Dict[str, Any]:
                 "Consider freeing GPU memory before running detection."
             )
 
-    # --- System RAM ---
     mem = psutil.virtual_memory()
     total_ram_gb     = mem.total     / (1024 ** 3)
     available_ram_gb = mem.available / (1024 ** 3)
@@ -318,9 +275,7 @@ def _free_memory():
         pass
 
 
-# ==============================================================
-# Layout Detection Helpers
-# ==============================================================
+# ── Layout helpers ────────────────────────────────────────────────────
 
 def _resize_for_layout(image: np.ndarray,
                        max_side: int = 1500) -> Tuple[np.ndarray, float]:
@@ -403,9 +358,7 @@ def _merge_title_blocks(layout_boxes, vertical_thresh=70):
     return merged
 
 
-# ==============================================================
-# Text-Line Detection Helpers
-# ==============================================================
+# ── Text-line helpers ─────────────────────────────────────────────────
 
 def _poly_bounds(poly):
     pts = np.asarray(poly, dtype=np.float32)
@@ -543,11 +496,10 @@ def _merge_into_lines(raw_boxes, img_w, img_h, gap_multiplier=GAP_MULTIPLIER):
 
 
 def _filter_boxes_by_page_size(boxes, img_h, img_w):
-    """
-    Filter text-line boxes using text-size-aware thresholds derived from the
-    median box height.  This avoids the page-area-based threshold that failed
-    for large scans (e.g. 6048×4536) where ``page_area * 0.0001`` was far
-    larger than any individual text-line bounding box.
+    """Drop boxes too small to be a text line, scaled to the median box height.
+
+    Thresholds used to come from page area, which threw away every real line on
+    big scans (6048x4536) because page_area * 0.0001 dwarfed a line box.
     """
     if not boxes:
         return []
@@ -586,9 +538,7 @@ def _filter_boxes_by_page_size(boxes, img_h, img_w):
     return kept
 
 
-# ==============================================================
-# Debug Visualisation
-# ==============================================================
+# ── Debug visualisation ───────────────────────────────────────────────
 
 def _save_debug_image(
     image: np.ndarray,
@@ -597,12 +547,9 @@ def _save_debug_image(
     color=(0, 255, 0),
     thickness: int = 2,
 ) -> None:
-    """
-    Draw *boxes* on a copy of *image* and save to *path*.
+    """Draw boxes on a copy of the image and write it to path.
 
-    *boxes* may be:
-    - a list of 4-point np.ndarray / lists  (polygon format)
-    - a list of dicts with a ``'bbox'`` key  ([x1,y1,x2,y2] format)
+    Accepts either 4-point polygons or dicts with a 'bbox' [x1,y1,x2,y2] key.
     """
     dir_part = os.path.dirname(path)
     if dir_part:
@@ -620,9 +567,7 @@ def _save_debug_image(
     print(f"[debug] saved {path} ({len(boxes)} boxes)")
 
 
-# ==============================================================
-# Core Detection (fresh models per call, matching notebook)
-# ==============================================================
+# ── Core detection ────────────────────────────────────────────────────
 
 def detect_layout(image: np.ndarray, device: str = "gpu",
                   max_layout_side: int = 1500,
@@ -633,14 +578,14 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
     print(f"[detect_layout] image={image.shape}, resized={resized.shape}, "
           f"scale={scale:.3f}, model={model_name}, device={device}")
 
-    _ensure_paddle()  # raises RuntimeError if paddle/CUDA not available
+    _ensure_paddle()
     pipeline = None
     try:
-        _free_memory()  # clear any lingering allocations before loading model
+        _free_memory()  # drop stale allocations before loading a multi-GB model
         pipeline = _create_model(model_name=model_name, device=device)
         results = pipeline.predict(resized, batch_size=1)
     except (MemoryError, RuntimeError) as exc:
-        # RuntimeError is raised by PaddlePaddle on GPU OOM
+        # Paddle reports GPU OOM as a plain RuntimeError.
         _free_memory()
         if pipeline is not None:
             try:
@@ -677,7 +622,6 @@ def detect_layout(image: np.ndarray, device: str = "gpu",
 
     print(f"[detect_layout] after post-processing: {len(layout_boxes)} boxes")
 
-    # Cleanup — free GPU memory
     del pipeline, results
     _free_memory()
 
@@ -701,10 +645,10 @@ def detect_text_lines(image: np.ndarray, layout: list,
           f"{len(layout)} layout regions, det_model={det_model_name}, "
           f"rec_model={rec_model_name}")
 
-    _ensure_paddle()  # raises RuntimeError if paddle/CUDA not available
+    _ensure_paddle()
     ocr = None
     try:
-        _free_memory()  # clear any lingering allocations before loading model
+        _free_memory()
         ocr = _PaddleOCR(
             text_detection_model_name=det_model_name,
             text_recognition_model_name=rec_model_name,
@@ -784,7 +728,6 @@ def detect_text_lines(image: np.ndarray, layout: list,
                 if score < score_thresh:
                     continue
                 arr = np.array(poly, dtype=np.float32)
-                # Log first 2 raw polys per region (before transform)
                 if _logged_raw < 2:
                     print(f"    [raw poly {_logged_raw}] shape={arr.shape} "
                           f"raw_coords={arr.tolist()} sc={sc} ox={ox} oy={oy}")
@@ -817,7 +760,6 @@ def detect_text_lines(image: np.ndarray, layout: list,
             color=(0, 0, 255),
         )
 
-    # NMS dedup
     keep_idx = _nms(all_raw, all_scores, iou_thresh=nms_iou_thresh)
     all_raw = [all_raw[i] for i in keep_idx]
     print(f"[detect_text_lines] after NMS: {len(all_raw)}")
@@ -829,7 +771,6 @@ def detect_text_lines(image: np.ndarray, layout: list,
             color=(0, 165, 255),
         )
 
-    # Log coordinate sanity-check before merging
     if all_raw:
         print(f"[detect_text_lines] coordinate sanity: "
               f"img_w={img_w} img_h={img_h}")
@@ -842,7 +783,6 @@ def detect_text_lines(image: np.ndarray, layout: list,
                   f"y=[{pts[:,1].min():.0f},{pts[:,1].max():.0f}] "
                   f"w={bw:.1f} h={bh:.1f} area={bw*bh:.1f}")
 
-    # Merge to lines
     merged = _merge_into_lines(all_raw, img_w, img_h, gap_multiplier=gap_multiplier)
     del all_raw
 
@@ -858,16 +798,13 @@ def detect_text_lines(image: np.ndarray, layout: list,
             color=(0, 255, 0),
         )
 
-    # Cleanup
     del ocr
     _free_memory()
 
     return merged
 
 
-# ==============================================================
-# Public Orchestrator
-# ==============================================================
+# ── Public orchestrator ───────────────────────────────────────────────
 
 def run_layout_aware_detection(
     image: np.ndarray,
@@ -883,17 +820,12 @@ def run_layout_aware_detection(
     gap_multiplier: float = GAP_MULTIPLIER,
     debug_dir: str = "",
 ) -> Tuple[List[List[List[float]]], List[str]]:
-    """
-    Full pipeline: layout detection -> text line detection.
+    """Layout detection then text-line detection.
 
-    Returns
-    -------
-    lines            : list of 4-point polygons in page coordinates
-    resource_warnings: list of human-readable resource warning strings
-                       (may be empty); these should be surfaced to the user
-                       so they understand GPU/RAM requirements.
+    -> (4-point polygons in page coordinates, resource warnings). Show the
+    warnings to the user — they explain why a run is slow or about to OOM.
     """
-    # ---- Ensure paddle is importable; auto-downgrade GPU→CPU if needed ----
+    # Silently drop to CPU rather than fail if paddle can't use the GPU.
     cuda_compiled = False
     try:
         _ensure_paddle()
@@ -914,12 +846,10 @@ def run_layout_aware_detection(
 
     device = "gpu" if use_gpu else "cpu"
 
-    # ---- Resource check ------------------------------------------------
     res_info = check_system_resources(use_gpu)
     resource_warnings: List[str] = res_info["warnings"]
 
-    # Inject the CUDA-not-compiled warning at the top of the list so it is
-    # the first thing the caller/user sees.
+    # Goes first — it explains every other warning below it.
     if not cuda_compiled and device == "cpu":
         cuda_warning = (
             "GPU was requested but PaddlePaddle in this environment is CPU-only "
@@ -954,7 +884,6 @@ def run_layout_aware_detection(
 
     t0 = time.time()
 
-    # Stage 1
     layout = detect_layout(image, device=device, max_layout_side=1500,
                            model_name=layout_model_name)
 
@@ -977,7 +906,6 @@ def run_layout_aware_detection(
         print("[run_layout_aware_detection] No TEXT regions in layout!")
         return [], resource_warnings
 
-    # Stage 2
     merged = detect_text_lines(image, layout, device=device,
                                det_model_name=det_model_name,
                                rec_model_name=rec_model_name,

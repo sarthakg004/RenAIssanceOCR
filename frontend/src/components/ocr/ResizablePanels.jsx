@@ -1,10 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { GripVertical } from 'lucide-react';
 
-/**
- * ResizablePanels Component
- * A 3-column layout with draggable resizers between panels
- */
+// Three columns with draggable dividers.
 export default function ResizablePanels({
   leftPanel,
   centerPanel,
@@ -25,7 +22,6 @@ export default function ResizablePanels({
   const [isDraggingRight, setIsDraggingRight] = useState(false);
   const [containerWidth, setContainerWidth] = useState(0);
 
-  // Track container width
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -41,25 +37,23 @@ export default function ResizablePanels({
     return () => resizeObserver.disconnect();
   }, []);
 
-  // Calculate center width
+  // Center takes whatever the two side panels leave.
   const gapWidth = 8; // gap-2 = 0.5rem = 8px
   const resizerWidth = 12; // width of resizer handles
   const rightTotalWidth = hasRight ? rightWidth + gapWidth + resizerWidth : 0;
   const centerWidth = containerWidth - leftWidth - rightTotalWidth - gapWidth - resizerWidth;
 
-  // Left resizer drag handlers
   const handleLeftMouseDown = useCallback((e) => {
     e.preventDefault();
     setIsDraggingLeft(true);
   }, []);
 
-  // Right resizer drag handlers
   const handleRightMouseDown = useCallback((e) => {
     e.preventDefault();
     setIsDraggingRight(true);
   }, []);
 
-  // Global mouse move handler
+  // On window, so dragging past the divider still tracks.
   useEffect(() => {
     if (!isDraggingLeft && !isDraggingRight) return;
 
@@ -96,7 +90,6 @@ export default function ResizablePanels({
     };
   }, [isDraggingLeft, isDraggingRight, containerWidth, leftWidth, rightWidth, minLeftWidth, maxLeftWidth, minRightWidth, maxRightWidth, minCenterWidth]);
 
-  // Double click to reset
   const handleLeftDoubleClick = useCallback(() => {
     setLeftWidth(defaultLeftWidth);
   }, [defaultLeftWidth]);

@@ -1,13 +1,7 @@
-"""
-LLM post-processing provider registry + dispatch.
+"""Registry + dispatch for text-cleanup LLM providers.
 
-Mirrors the Strategy/Factory pattern used by app/services/ocr/factory.py, but
-for text→text cleanup instead of image OCR. Gemini goes through the google-genai
-SDK (gemini_client); OpenAI / DeepSeek / Qwen share the OpenAI-compatible
-chat-completions client (openai_compat_client).
-
-`local_es` is our Spanish-finetuned corrector (Qwen3-4B + LoRA adapter, 4-bit).
-It runs per-line and requires a GPU (see local_client.post_process_text_finetuned).
+Gemini uses the google-genai SDK; OpenAI/DeepSeek/Qwen share one
+chat-completions client. `local_es` is our GPU-only Spanish fine-tune.
 """
 
 from .gemini_client import post_process_text as _gemini_post_process
@@ -26,10 +20,8 @@ _OPENAI_COMPAT_ENDPOINTS = {
 }
 
 
-# Provider metadata consumed by the frontend (GET /api/llm/providers) to
-# populate the provider/model dropdowns. Models here are TEXT models suited to
-# post-processing — note Qwen uses the qwen-plus/turbo/max text line, not the
-# qwen-vl-* vision models used for OCR.
+# Feeds the frontend dropdowns via GET /api/llm/providers. These are TEXT
+# models — Qwen uses qwen-plus/turbo/max here, not the qwen-vl-* OCR models.
 LLM_PROVIDERS = [
     {
         "id": "gemini",
@@ -77,17 +69,16 @@ LLM_PROVIDERS = [
         ],
     },
     {
-        # Spanish-finetuned corrector: Qwen3-4B + LoRA adapter shipped in the
-        # image, loaded 4-bit and run per-line. GPU-only.
+        # GPU-only, and the gated base download needs HF_TOKEN. See local_client.
         "id": "local_es",
         "name": "Local fine-tuned (Spanish)",
         "enabled": True,
         "requires_key": False,
         "default_model": FINETUNED_BASE_MODEL,
         "models": [
-            {"id": FINETUNED_BASE_MODEL, "name": "Qwen3-4B Spanish (fine-tuned)"},
+            {"id": FINETUNED_BASE_MODEL, "name": "Gemma-3-4B Spanish (fine-tuned)"},
         ],
-        "note": "Fine-tuned on Spanish historical OCR; runs 4-bit on the server GPU (base weights downloaded on first use).",
+        "note": "Fine-tuned on Spanish historical OCR; runs 4-bit on the server GPU (gated base downloaded on first use — needs HF_TOKEN).",
     },
 ]
 
@@ -109,13 +100,7 @@ def post_process(
     model: str,
     template_name: str = "full_cleanup",
 ) -> str:
-    """
-    Dispatch a post-processing request to the requested provider.
-
-    Raises:
-        ValueError: unknown or not-yet-enabled provider
-        Exception:  propagated provider/API errors
-    """
+    """Route the request to `provider`. Raises ValueError if it's unknown or off."""
     provider = (provider or "gemini").lower()
 
     if provider not in _ENABLED_PROVIDER_IDS:

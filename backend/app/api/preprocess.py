@@ -1,6 +1,4 @@
-"""
-Preprocessing API Router — all preprocessing-related endpoints.
-"""
+"""Preprocessing endpoints — run the OpenCV pipeline over a base64 image."""
 
 import os
 import sys
@@ -13,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..schemas.ocr import PreprocessRequest
 
-# Ensure backend directory is in path for preprocessing module imports
+# `preprocessing` is a sibling of `app`, not a submodule of it.
 backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
@@ -26,7 +24,7 @@ router = APIRouter()
 
 @router.get("/api/preprocess/operations")
 async def get_available_operations():
-    """Get list of available preprocessing operations"""
+    """Operation names + one-line descriptions for the UI."""
     return {
         "operations": list(OP_REGISTRY.keys()),
         "descriptions": {
@@ -46,21 +44,13 @@ async def get_available_operations():
 
 @router.post("/api/preprocess")
 async def preprocess_image_endpoint(request: PreprocessRequest):
-    """
-    Apply preprocessing pipeline to an image.
+    """Run the pipeline over one image and hand back a base64 data URL.
 
-    JSON Body:
-        image_data: Base64 encoded image (with or without data URL prefix)
-        operations: List of operations to apply
-        preview_mode: Use faster algorithms for preview (optional)
-
-    Returns:
-        Processed image as base64, processing info
+    preview_mode swaps in faster, rougher algorithms for live tweaking.
     """
     start_time = time.time()
 
     try:
-        # Validate operations config
         validation = validate_pipeline_config(request.operations)
         if not validation["valid"]:
             raise HTTPException(
@@ -72,17 +62,14 @@ async def preprocess_image_endpoint(request: PreprocessRequest):
                 }
             )
 
-        # Parse base64 image data
         image_data = request.image_data
-        if "," in image_data:
-            # Has data URL prefix like "data:image/png;base64,..."
+        if "," in image_data:  # data:image/png;base64,...
             header, encoded = image_data.split(",", 1)
             mime_type = header.split(":")[1].split(";")[0] if ":" in header else "image/png"
         else:
             encoded = image_data
             mime_type = "image/png"
 
-        # Decode image
         image_bytes = base64.b64decode(encoded)
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -93,7 +80,6 @@ async def preprocess_image_endpoint(request: PreprocessRequest):
                 detail={"error": "invalid_image", "message": "Could not decode image"}
             )
 
-        # Run preprocessing pipeline
         result = run_pipeline(
             image=image,
             steps=request.operations,
@@ -101,9 +87,8 @@ async def preprocess_image_endpoint(request: PreprocessRequest):
             preview_mode=request.preview_mode,
         )
 
-        # Encode result image
         if result.image is not None:
-            # Determine output format based on input
+            # Answer in whatever format we were handed.
             if "jpeg" in mime_type or "jpg" in mime_type:
                 encode_param = [cv2.IMWRITE_JPEG_QUALITY, 95]
                 _, buffer = cv2.imencode('.jpg', result.image, encode_param)
@@ -144,14 +129,6 @@ async def preprocess_image_endpoint(request: PreprocessRequest):
 
 @router.post("/api/preprocess/validate")
 async def validate_operations(operations: list):
-    """
-    Validate preprocessing pipeline configuration.
-
-    JSON Body:
-        List of operations to validate
-
-    Returns:
-        Validation result with any errors
-    """
+    """Dry-run check of a pipeline config. Returns {valid, errors}."""
     validation = validate_pipeline_config(operations)
     return validation

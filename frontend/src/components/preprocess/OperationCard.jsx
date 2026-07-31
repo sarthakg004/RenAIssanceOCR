@@ -4,15 +4,7 @@ import TooltipInfo from './TooltipInfo';
 import OperationSlider from './OperationSlider';
 import { shouldShowControl } from '../../config/preprocessOperations';
 
-/**
- * OperationCard - Individual operation control card
- * 
- * Features:
- * - Checkbox toggle for enabling/disabling
- * - Tooltip with operation description
- * - Expandable parameter controls
- * - Compact design for sidebar use
- */
+// One operation in the sidebar: toggle, tooltip, expandable params.
 export default function OperationCard({
   operation,
   enabled = false,
@@ -137,9 +129,7 @@ export default function OperationCard({
   );
 }
 
-/**
- * ControlRenderer - Renders the appropriate control type
- */
+// Dispatches on control.type (slider, select, checkbox, ...).
 function ControlRenderer({ control, value, onChange }) {
   switch (control.type) {
     case 'slider':

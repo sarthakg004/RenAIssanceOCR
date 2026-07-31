@@ -1,22 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 
-/**
- * Hook for extracting PDF pages and loading raw image files as page objects.
- *
- * PDF extraction runs inside a Web Worker (OffscreenCanvas) so it keeps making
- * progress when the tab is hidden — main-thread canvas work is throttled to
- * ~1 Hz in background tabs, which is what made progress appear to "freeze"
- * when switching tabs.
- *
- * Page images are stored as Blob-backed object URLs, not base64 data URLs:
- * a data URL keeps the whole encoded image on the JS heap per page (hundreds
- * of MB → GBs for large books, which made the UI lag), while an object URL is
- * a ~50-char pointer with the pixels in browser-managed storage.
- *
- * Image loading is parallelised with a small concurrency cap (workers don't
- * help here because <img> decode + <canvas> ops only exist on the main thread,
- * but parallel I/O drains the queue regardless of timer throttling).
- */
+// Turns a PDF or a pile of image files into page objects.
+//
+// PDF rendering happens in a Web Worker: background tabs throttle main-thread
+// canvas work to ~1 Hz, which made extraction look frozen. Images can't use a
+// worker (<img> decode is main-thread only) so they run with a concurrency cap
+// instead. Everything comes back as blob: object URLs — see utils/imageUrl.
 
 const IMAGE_CONCURRENCY = 4;
 
@@ -34,7 +23,7 @@ export function usePdfPreview() {
   const [progress, setProgress] = useState(0);
 
   const workerRef = useRef(null);
-  // Object URLs created for the current page set; revoked on reset / reload.
+  // Revoked on reset/reload.
   const objectUrlsRef = useRef([]);
 
   const revokeAllUrls = useCallback(() => {
@@ -47,7 +36,6 @@ export function usePdfPreview() {
     return url;
   }, []);
 
-  // Tear down worker + URLs on unmount.
   useEffect(() => {
     return () => {
       if (workerRef.current) {
@@ -65,16 +53,14 @@ export function usePdfPreview() {
     setPages([]);
     revokeAllUrls();
 
-    // Recreate the worker per extraction so a stuck one can't poison later runs.
+    // Fresh worker each run, so a stuck one can't poison the next.
     if (workerRef.current) workerRef.current.terminate();
     const worker = makeWorker();
     workerRef.current = worker;
 
     const requestId = Date.now() + Math.random();
     const collected = [];
-    // Buffer streamed pages and flush at most a few times per second — a
-    // setPages per page re-renders the whole thumbnail grid N times for an
-    // N-page book.
+    // Batch the flushes — one setPages per page re-renders the whole grid.
     let pending = [];
     let flushTimer = null;
     const flush = () => {
@@ -109,7 +95,6 @@ export function usePdfPreview() {
         };
         worker.onerror = (e) => reject(new Error(e.message || 'PDF worker crashed'));
 
-        // Transfer the ArrayBuffer to avoid a copy.
         worker.postMessage(
           { type: 'extract', id: requestId, fileBuffer, options },
           [fileBuffer]
@@ -124,8 +109,7 @@ export function usePdfPreview() {
     } finally {
       if (flushTimer) clearTimeout(flushTimer);
       setIsLoading(false);
-      // Keep worker alive in case the caller starts another extraction soon;
-      // it'll be replaced on next call or torn down on unmount.
+      // Left alive for a likely next extraction; replaced or torn down later.
     }
   }, [revokeAllUrls, trackUrl]);
 
@@ -141,7 +125,6 @@ export function usePdfPreview() {
     try {
       const total = files.length;
       let done = 0;
-      // Preserve original order: index → page(s).
       const slots = new Array(total);
 
       const canvasToUrl = (canvas) => new Promise((resolve, reject) => {
@@ -153,7 +136,6 @@ export function usePdfPreview() {
 
       const processOne = async (file, index) => {
         const fileIndex = index + 1;
-        // The file itself backs the object URL — no read, no re-encode.
         const fileUrl = trackUrl(URL.createObjectURL(file));
 
         const imgData = await new Promise((resolve, reject) => {
@@ -217,7 +199,7 @@ export function usePdfPreview() {
         setProgress(Math.round((done / total) * 100));
       };
 
-      // Bounded-concurrency runner: each "lane" pulls the next index until exhausted.
+      // Each lane pulls the next index until the queue is empty.
       let cursor = 0;
       const lanes = Array.from({ length: Math.min(IMAGE_CONCURRENCY, total) }, async () => {
         while (true) {
