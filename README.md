@@ -113,6 +113,64 @@ docker compose -f docker-compose.images.cpu.yml up -d    # run (Mac / no GPU)
 docker compose -f docker-compose.images.cpu.yml down      # stop, data is kept
 ```
 
+## Manual Docker commands
+
+If you would rather not use the launcher or Compose, you can pull and run the published images by hand. The commands below use the GPU backend. On a Mac or any machine without an NVIDIA GPU, remove the `--gpus all` line from the backend command and everything still works on the CPU.
+
+### Install (run once)
+
+Pull the images and create the network and the volumes that hold your data. The volumes persist forever, so you only create them once.
+
+```bash
+docker pull saarthakg004/renaissance-backend:latest
+docker pull saarthakg004/renaissance-frontend:latest
+
+docker network create renaissance 2>/dev/null || true
+docker volume create paddle_models 2>/dev/null || true
+docker volume create renaissance_storage 2>/dev/null || true
+```
+
+### Run
+
+Start the backend, then the frontend. The `--network-alias backend` on the backend is required, because the frontend proxies API calls to `http://backend:8000` and must be able to find it by that name.
+
+```bash
+docker run -d --name renaissance-backend \
+  --gpus all \
+  --network renaissance --network-alias backend \
+  -p 8000:8000 \
+  -v paddle_models:/paddle_models \
+  -v renaissance_storage:/app/storage \
+  --restart unless-stopped \
+  saarthakg004/renaissance-backend:latest
+
+docker run -d --name renaissance-frontend \
+  --network renaissance \
+  -p 5173:8080 \
+  --restart unless-stopped \
+  saarthakg004/renaissance-frontend:latest
+```
+
+Wait about 30 seconds for the backend to start, then open http://localhost:5173.
+
+### Stop and delete the containers (your data is kept)
+
+This removes only the containers. The volumes, and therefore your datasets and transcripts, stay on disk. Run the two `docker run` commands above again to start fresh containers with the same data.
+
+```bash
+docker rm -f renaissance-backend renaissance-frontend
+```
+
+### Delete everything, including your data
+
+This is the full cleanup. It removes the containers, the network, and the volumes. Everything you saved is deleted.
+
+```bash
+docker rm -f renaissance-backend renaissance-frontend
+docker network rm renaissance
+docker volume rm paddle_models renaissance_storage
+```
+
 ## Development and tests
 
 ```bash
