@@ -189,6 +189,24 @@ export function usePipeline(options = {}) {
     triggerDebouncedPreview();
   }, []);
 
+  // Select a predefined set of steps WITHOUT running. Used by the book-type
+  // presets: the user gets the pipeline pre-filled, then reviews and processes
+  // themselves. `steps` come from createPipelineStep (id/operationId/params).
+  const applyPipeline = useCallback((steps) => {
+    if (!steps || steps.length === 0) return;
+    setPipeline(steps);
+
+    const newEnabled = {};
+    steps.forEach(step => {
+      newEnabled[step.operationId] = {
+        enabled: true,
+        params: step.params,
+      };
+    });
+    setEnabledOperations(newEnabled);
+    // Deliberately no preview trigger — selection only, per the preset contract.
+  }, []);
+
   const resetPipeline = useCallback(() => {
     setPipeline([]);
     setEnabledOperations({});
@@ -247,6 +265,7 @@ export function usePipeline(options = {}) {
     
     // Quick actions
     applyRecommendedPipeline,
+    applyPipeline,
     resetPipeline,
     
     // Utilities

@@ -213,10 +213,28 @@ def post_process_text_finetuned(
         raise
     tokenizer.padding_side = "left"  # decoder-only batched generation
 
+    # generate() stops a batch only once EVERY row has emitted a stop token, so
+    # both knobs below are about not letting one long row bill the other 15.
+    stop_ids = llm.generation_config.eos_token_id
+    stop_ids = set(stop_ids) if isinstance(stop_ids, (list, tuple)) else {stop_ids}
+
     lines = text.split("\n")
     idx = [i for i, ln in enumerate(lines) if ln.strip()]
     out = list(lines)
     answered = 0
+
+    # Batch lines of similar length together: rows are left-padded to the
+    # longest in their batch, and a batch runs as many steps as its slowest row
+    # needs. Mixing a 5-token line with a 60-token one makes the short ones pay
+    # for the long one at both ends. Results are written back to out[i] by
+    # original index, so the visual order the frontend relies on is untouched.
+    line_lens = dict(zip(
+        idx,
+        (len(t) for t in tokenizer(
+            [lines[i] for i in idx], add_special_tokens=False
+        ).input_ids),
+    ))
+    idx.sort(key=line_lens.__getitem__)
 
     for start in range(0, len(idx), batch_size):
         chunk_idx = idx[start:start + batch_size]
@@ -232,16 +250,30 @@ def post_process_text_finetuned(
             for i in chunk_idx
         ]
         enc = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+        # A corrected line runs about as long as the line that went in — this is
+        # glyph repair, not translation. Sizing the ceiling to the batch's
+        # longest input (+ slack for restored diacritics and split words) beats
+        # a flat 160, which one rambling row would otherwise drag all 16 rows to.
+        # ponytail: 1.5x + 16 is generous rather than tuned; the guard below
+        # catches anything that does overrun, so a too-tight cap can only cost a
+        # correction, never truncate a line.
+        cap = min(160, int(max(line_lens[i] for i in chunk_idx) * 1.5) + 16)
         with torch.no_grad():
             gen = llm.generate(
                 **enc,
-                max_new_tokens=160,
+                max_new_tokens=cap,
                 do_sample=False,
                 pad_token_id=tokenizer.pad_token_id,
             )
         new = gen[:, enc["input_ids"].shape[1]:]
         decoded = tokenizer.batch_decode(new, skip_special_tokens=True)
-        for i, corrected in zip(chunk_idx, decoded):
+        for i, corrected, row in zip(chunk_idx, decoded, new):
+            # No stop token means generation was cut off at the cap, so what we
+            # have is half a line. Keep the original rather than write a
+            # truncated one — a silently chopped line is worse than an uncorrected
+            # one, and the frontend has no way to tell them apart.
+            if stop_ids.isdisjoint(row.tolist()):
+                continue
             # One input line must stay one output line — the frontend maps
             # results back onto boxes by index. Never blank a line out either.
             corrected = " ".join(corrected.split()).strip()

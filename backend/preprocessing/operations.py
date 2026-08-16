@@ -84,45 +84,83 @@ def to_grayscale(
     return result
 
 
+# Below this spread (degrees) between the most- and least-skewed band, the page
+# is skewed uniformly and a single rotation is cleaner than a piecewise warp.
+_PIECEWISE_MIN_SPREAD = 1.0
+
+
 def deskew_image(
     img: np.ndarray,
     params: Dict[str, Any],
     progress: ProgressCallbackType = None
 ) -> np.ndarray:
-    """Straighten a rotated scan. params: maxAngle in degrees (15).
+    """Straighten a rotated scan, handling skew that drifts down the page.
 
-    Tries min-area-rect on the biggest contour first, falls back to Hough lines
-    when that gives a silly answer.
+    params: maxAngle in degrees (15); mode 'auto'|'global'|'piecewise' ('auto');
+    bands 2-12 (4) for the piecewise path.
+
+    A single rotation cannot fix a page whose top is straight but whose lower
+    half tilts (common near a book's spine, or when the sheet lifts off the
+    platen). 'auto' measures the skew separately in horizontal bands: if it is
+    roughly constant it rotates once, otherwise it corrects each band by its own
+    angle and blends the bands so there is no visible seam.
     """
     if progress:
         progress(0.1, "Preparing deskew analysis")
 
     max_angle = params.get("maxAngle", 15)
+    mode = str(params.get("mode", "auto")).lower()
+    num_bands = max(2, min(12, int(params.get("bands", 4))))
 
     is_color = len(img.shape) == 3
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if is_color else img.copy()
 
     if progress:
-        progress(0.2, "Detecting skew angle")
+        progress(0.25, "Detecting skew angle")
 
-    angle = _detect_skew_contour(gray)
+    # Whole-page angle: the fallback for uniform skew and for bands with no ink.
+    global_angle = _detect_skew_contour(gray)
+    if global_angle is None or abs(global_angle) > max_angle:
+        global_angle = _detect_skew_hough(gray)
+    if global_angle is None:
+        global_angle = 0.0
+    global_angle = max(-max_angle, min(max_angle, global_angle))
 
-    if angle is None or abs(angle) > max_angle:
-        if progress:
-            progress(0.4, "Using line detection")
-        angle = _detect_skew_hough(gray)
-
-    if angle is None:
-        angle = 0
-    angle = max(-max_angle, min(max_angle, angle))
+    if mode == "global":
+        return _apply_global_rotation(img, global_angle, progress)
 
     if progress:
-        progress(0.6, f"Rotating by {angle:.2f}°")
+        progress(0.45, "Measuring skew per band")
 
+    band_angles = _band_skew_angles(gray, num_bands, max_angle, global_angle)
+    spread = max(band_angles) - min(band_angles)
+
+    # Uniform skew (or an explicit request for one rotation): rotate once.
+    if mode == "auto" and spread < _PIECEWISE_MIN_SPREAD:
+        return _apply_global_rotation(img, float(np.median(band_angles)), progress)
+
+    if progress:
+        progress(0.6, "Applying piecewise deskew")
+
+    result = _piecewise_deskew(img, band_angles)
+
+    if progress:
+        progress(1.0, "Deskew complete")
+
+    return result
+
+
+def _apply_global_rotation(
+    img: np.ndarray, angle: float, progress: ProgressCallbackType = None
+) -> np.ndarray:
+    """Rotate the whole image about its centre by `angle` (already clamped)."""
     if abs(angle) < 0.1:
         if progress:
             progress(1.0, "No significant skew detected")
         return img
+
+    if progress:
+        progress(0.6, f"Rotating by {angle:.2f}°")
 
     h, w = img.shape[:2]
     center = (w // 2, h // 2)
@@ -187,6 +225,117 @@ def _detect_skew_hough(gray: np.ndarray) -> Optional[float]:
         return None
 
     return np.median(angles)
+
+
+def _band_skew_angles(
+    gray: np.ndarray, num_bands: int, max_angle: float, fallback_angle: float
+) -> list[float]:
+    """Estimate the correction angle for each horizontal band, top to bottom.
+
+    Runs on a downscaled copy (angles are scale-invariant) so estimating many
+    bands stays cheap. Bands with too little ink to trust inherit the median of
+    the confident bands (or the whole-page angle), then the series is lightly
+    smoothed so one noisy band cannot kink the correction.
+    """
+    scale = min(1.0, 1000.0 / max(gray.shape[:2]))
+    small = (
+        cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        if scale < 1.0 else gray
+    )
+    _, binary = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    h = binary.shape[0]
+    raw: list[Optional[float]] = []
+    for i in range(num_bands):
+        y0 = i * h // num_bands
+        y1 = (i + 1) * h // num_bands
+        raw.append(_projection_profile_angle(binary[y0:y1], max_angle))
+
+    return _fill_band_angles(raw, fallback_angle)
+
+
+def _projection_profile_angle(
+    binary_band: np.ndarray, max_angle: float
+) -> Optional[float]:
+    """Angle (in [-max_angle, max_angle]) that makes this band's lines horizontal.
+
+    Classic projection-profile deskew: at the correct angle the rows of text
+    line up, so the horizontal ink projection has the sharpest peaks and valleys.
+    Score each candidate by the summed squared row-to-row change in that
+    projection and keep the best, coarse (1°) then refined (0.25°). Returns None
+    when the band holds too little ink to give a trustworthy answer.
+    """
+    if binary_band.size == 0 or int(binary_band.sum()) < 255 * 50:
+        return None
+
+    h, w = binary_band.shape
+
+    def score(angle: float) -> float:
+        M = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+        rot = cv2.warpAffine(
+            binary_band, M, (w, h),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+        )
+        proj = rot.sum(axis=1, dtype=np.float64)
+        d = np.diff(proj)
+        return float(np.dot(d, d))
+
+    coarse = np.arange(-max_angle, max_angle + 0.5, 1.0)
+    best = max(coarse, key=score)
+    fine = np.arange(best - 1.0, best + 1.0 + 1e-6, 0.25)
+    best = max(fine, key=score)
+    return float(max(-max_angle, min(max_angle, best)))
+
+
+def _fill_band_angles(
+    raw: list[Optional[float]], fallback_angle: float
+) -> list[float]:
+    """Replace unconfident (None) bands with a sensible default, then smooth."""
+    confident = [a for a in raw if a is not None]
+    default = float(np.median(confident)) if confident else float(fallback_angle)
+    filled = [a if a is not None else default for a in raw]
+
+    # 3-tap moving average: a single outlier band bends the correction less.
+    smoothed = []
+    for i in range(len(filled)):
+        window = filled[max(0, i - 1):i + 2]
+        smoothed.append(float(np.mean(window)))
+    return smoothed
+
+
+def _piecewise_deskew(img: np.ndarray, band_angles: list[float]) -> np.ndarray:
+    """Rotate each horizontal band by its own angle and blend the bands.
+
+    Each band is corrected by rotating the whole image about that band's centre,
+    then every output row is a linear blend of the two nearest band rotations.
+    The blend weights form a partition of unity (they sum to 1 per row), so the
+    transition between bands is gradual and leaves no seam.
+    """
+    h, w = img.shape[:2]
+    n = len(band_angles)
+    cx = w / 2.0
+
+    # Band-index coordinate for each output row: band i's centre sits at p = i.
+    p = np.clip(np.arange(h) / h * n - 0.5, 0.0, n - 1)
+
+    channel_shape = () if img.ndim == 2 else (img.shape[2],)
+    acc = np.zeros((h, w) + channel_shape, dtype=np.float32)
+
+    for i, angle in enumerate(band_angles):
+        weight = np.clip(1.0 - np.abs(p - i), 0.0, 1.0)  # triangular
+        if not weight.any():
+            continue
+        cy = (i + 0.5) * h / n
+        M = cv2.getRotationMatrix2D((cx, cy), float(angle), 1.0)
+        rot = cv2.warpAffine(
+            img, M, (w, h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE,
+        ).astype(np.float32)
+        acc += rot * weight.reshape(h, *([1] * len(channel_shape)))
+
+    return np.clip(acc, 0, 255).astype(np.uint8)
 
 
 # ── Enhancement ───────────────────────────────────────────────────────

@@ -65,8 +65,19 @@ export const OPERATIONS = [
     id: 'deskew',
     name: 'Deskew',
     category: 'basic',
-    tooltip: 'Automatically detect and correct image rotation/skew from scanning.',
+    tooltip: 'Detect and correct scanning skew. "Auto" and "Piecewise" also fix pages whose skew drifts down the sheet (e.g. straight at the top, tilted near the spine).',
     controls: [
+      {
+        id: 'mode',
+        label: 'Mode',
+        type: 'select',
+        options: [
+          { value: 'auto', label: 'Auto' },
+          { value: 'global', label: 'Global (one rotation)' },
+          { value: 'piecewise', label: 'Piecewise (variable skew)' },
+        ],
+        default: 'auto',
+      },
       {
         id: 'maxAngle',
         label: 'Max Angle',
@@ -77,8 +88,18 @@ export const OPERATIONS = [
         default: 15,
         unit: '°',
       },
+      {
+        id: 'bands',
+        label: 'Bands',
+        type: 'slider',
+        min: 2,
+        max: 12,
+        step: 1,
+        default: 4,
+        showWhen: { mode: ['auto', 'piecewise'] },
+      },
     ],
-    defaultParams: { maxAngle: 15 },
+    defaultParams: { mode: 'auto', maxAngle: 15, bands: 4 },
   },
 
   // Enhancement
@@ -370,6 +391,41 @@ export function getRecommendedPipeline() {
     createPipelineStep('contrast', 3),
     createPipelineStep('threshold', 4),
   ].filter(Boolean);
+}
+
+// ── Book-type presets ──
+// Pre-tested pipelines for specific book collections. Selecting one only
+// populates the sidebar/pipeline; it does NOT run — the user reviews, tweaks,
+// then processes. `steps[].params` override the operation's defaults.
+export const BOOK_TYPE_PRESETS = [
+  {
+    id: 'porcones',
+    label: 'PORCONES',
+    description: 'Pre-tested pipeline for PORCONES scans',
+    steps: [
+      { operationId: 'remove_noise', params: { maxArea: 20 } },
+    ],
+  },
+];
+
+export function getBookTypePresets() {
+  return BOOK_TYPE_PRESETS;
+}
+
+// Build pipeline steps for a book type. Returns [] for an unknown id.
+export function getBookTypePipeline(bookTypeId) {
+  const preset = BOOK_TYPE_PRESETS.find(p => p.id === bookTypeId);
+  if (!preset) return [];
+
+  return preset.steps
+    .map((step, index) => {
+      const built = createPipelineStep(step.operationId, index);
+      if (built && step.params) {
+        built.params = { ...built.params, ...step.params };
+      }
+      return built;
+    })
+    .filter(Boolean);
 }
 
 // Controls can declare a `showIf` predicate against the current params.

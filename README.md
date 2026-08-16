@@ -1,246 +1,142 @@
-# RenAIssance — OCR Preprocessing Studio
+# RenAIssance
 
-A full-stack web app for preprocessing historical documents and extracting text
-with multiple OCR backends. Upload a PDF or image, pick the pages you care
-about, clean them up with a configurable OpenCV pipeline, detect text regions
-with PaddleOCR, and transcribe with your choice of provider.
+RenAIssance is a full-stack web app for reading historical documents. You upload a PDF or image, clean up the scan, detect the text regions, and transcribe the text with your choice of engine. It was built for early modern Spanish books, but the pipeline works on any printed page.
 
-**OCR providers:** Gemini, ChatGPT, local CRNN, local TrOCR (fine-tuned from
-`microsoft/trocr-base-printed`; runs fp16 on GPU).
+The workflow is a five step wizard: Upload, Select pages, Preprocess, Text detection, and OCR & export.
 
-**Optional LLM post-correction:** Gemini / OpenAI / DeepSeek / Qwen, or a
-**Spanish fine-tuned corrector** (gemma-3-4b-it + LoRA adapter, run 4-bit
-per-line on the GPU — the adapter ships in the image, the base downloads on
-first use). The base is a **gated** model, so this provider needs an `HF_TOKEN`
-in your `.env` (with the licence accepted at
-huggingface.co/google/gemma-3-4b-it); the other providers don't.
+## Features
 
----
+- **OCR engines:** Gemini, ChatGPT, a local CRNN, and a local TrOCR (fine-tuned from `microsoft/trocr-base-printed`).
+- **Optional AI cleanup:** correct raw OCR with Gemini, OpenAI, DeepSeek, Qwen, or a Spanish fine-tuned corrector (a `gemma-3-4b-it` LoRA adapter). The fine-tuned corrector needs an NVIDIA GPU.
+- **Export:** download the transcription as TXT, DOCX, or PDF.
 
 ## What you need
 
-- **Docker** ≥ 24 with Compose v2
-- **~15 GB** free disk for images + model weights
-- **NVIDIA GPU + driver ≥ 560 + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)** for GPU acceleration. No NVIDIA GPU? The launcher automatically runs the **CPU image** instead (works everywhere, just slower).
-- A **Gemini** or **OpenAI** API key if you want to use those providers — they're entered in the UI, not baked into the image
+- Docker version 24 or newer, with Compose v2.
+- About 15 GB of free disk for the images and model weights.
+- A Gemini or OpenAI API key if you want to use those engines. You enter the key in the app, not in a file.
+- An NVIDIA GPU with driver 560 or newer and the NVIDIA Container Toolkit if you want GPU acceleration. This is optional. Without a GPU the app runs on the CPU image, which works everywhere and is only slower.
 
-> **Apple Silicon / macOS note.** Docker on macOS cannot access the GPU (no
-> Metal passthrough into containers), so the Docker image runs on CPU there. To
-> use the Apple GPU, run **natively** instead: `./run.sh --native` (PyTorch MPS
-> accelerates TrOCR/CRNN/local-LLM; PaddleOCR detection stays on CPU — it has no
-> Metal backend).
+## Run it
 
----
+Clone the repository and run the launcher for your system. It detects your GPU, checks your machine before downloading anything, and starts the correct image automatically.
 
-## Run it (one command)
-
-Clone the repo (or download the `run.*` + `docker-compose.*.yml` files) and run
-the launcher for your OS. It **detects your GPU, checks your specs before
-pulling**, and starts the correct image (GPU or CPU) automatically:
+### Linux and Windows (WSL)
 
 ```bash
-# macOS / Linux / WSL
-./run.sh                 # auto-detect: GPU image if an NVIDIA GPU is usable, else CPU
-./run.sh --cpu           # force the CPU image
-./run.sh --native        # macOS only: run natively to use the Apple GPU (MPS)
-./run.sh --build         # build locally from source instead of pulling images
-./run.sh --down          # stop everything
-# then open http://localhost:5173
+git clone https://github.com/<your-org>/RenAIssance.git
+cd RenAIssance
+./run.sh
 ```
+
+Then open http://localhost:5173 in your browser. The first run downloads the images and can take several minutes. Some models download the first time you use them, and the app shows a progress bar while that happens.
+
+Useful flags:
+
+```bash
+./run.sh --cpu     # force the CPU image
+./run.sh --build   # build from source instead of pulling published images
+./run.sh --down    # stop everything (your saved data is kept)
+```
+
+### Windows (PowerShell)
 
 ```powershell
-# Windows (PowerShell)
-.\run.ps1                # auto-detect GPU/CPU
-.\run.ps1 -Cpu           # force CPU image
-.\run.ps1 -Down          # stop
+.\run.ps1          # auto-detect GPU or CPU
+.\run.ps1 -Cpu     # force the CPU image
+.\run.ps1 -Down    # stop
 ```
 
-If your machine doesn't meet the GPU requirements (driver too old, no NVIDIA
-Container Toolkit, too little VRAM/RAM), the launcher prints exactly what's
-missing **before** downloading the multi-GB image and offers to fall back to the
-CPU image.
+## Running on a Mac
 
-### Under the hood: Docker Compose
+Docker on macOS cannot reach the GPU, so on a Mac the app always runs on the **CPU image**. This is expected and everything works, it is just slower than on an NVIDIA machine. The local Spanish fine-tuned corrector is the only feature that requires a GPU, so on a Mac use Gemini or OpenAI for the AI cleanup step instead.
 
-The launcher just selects the right Compose file. You can run them directly:
+Follow these steps.
+
+1. Install Docker Desktop for Mac from https://www.docker.com/products/docker-desktop and start it. Wait until the whale icon in the menu bar stops animating, which means Docker is ready.
+2. Install Git if you do not have it. The simplest way is to run `git --version` in the Terminal, which offers to install the developer tools if Git is missing.
+3. Clone the repository and enter the folder:
+
+   ```bash
+   git clone https://github.com/<your-org>/RenAIssance.git
+   cd RenAIssance
+   ```
+
+4. Start the app. The launcher sees there is no NVIDIA GPU and picks the CPU image for you:
+
+   ```bash
+   ./run.sh
+   ```
+
+   If you prefer to be explicit, run `./run.sh --cpu`.
+
+5. Wait for the download to finish. The first run pulls a few gigabytes, so give it a few minutes on a normal connection.
+6. Open http://localhost:5173 in your browser. The app is ready.
+7. To stop the app later, run `./run.sh --down`. Your transcripts and datasets are saved and will still be there next time.
+
+### Optional: use the Apple GPU (Apple Silicon)
+
+Docker cannot use the Apple GPU, but you can run the app directly on your Mac to get GPU acceleration for the local TrOCR and CRNN engines through Apple's Metal (MPS). Text detection still runs on the CPU because PaddleOCR has no Metal backend.
+
+You need Homebrew, Python 3.11, and Node.js:
+
+```bash
+brew install python@3.11 node
+./run-native.sh
+```
+
+The script creates a local Python environment, installs everything, and starts the app on http://localhost:5173. The first run is slow because it installs the dependencies.
+
+## Using the app
+
+1. **Upload** a PDF or an image (PNG, JPG, TIFF, or BMP).
+2. **Select** the pages you want from the thumbnail grid.
+3. **Preprocess** the pages. Toggle and tune the cleanup operations and watch the before and after preview. You can also load a pre-tested pipeline for a known book type.
+4. **Detect** the text regions on each page.
+5. **Read and export.** Pick an engine, transcribe, edit anything that needs fixing, optionally run the AI cleanup, and download the result.
+
+The app opens on a simple sign up screen that asks for a name, an email, and an institution. It exists only for lightweight usage tracking and never asks for an API key. You enter provider keys later, in the reading step, and only if you use a cloud engine.
+
+## Compose files
+
+The launcher just selects the right Compose file. You can run them directly if you prefer.
 
 | Host | File |
 |------|------|
-| NVIDIA GPU (published images) | `docker-compose.images.yml` |
-| No GPU / Mac (published images) | `docker-compose.images.cpu.yml` |
-| NVIDIA GPU (local build) | `docker-compose.yml` |
-| No GPU / Mac (local build) | `docker-compose.cpu.yml` |
-
-Compose wires the network, volumes, GPU, and service names for you (the
-frontend reaches the backend automatically), and picks up an optional `.env`:
+| NVIDIA GPU, published images | `docker-compose.images.yml` |
+| No GPU or Mac, published images | `docker-compose.images.cpu.yml` |
+| NVIDIA GPU, build from source | `docker-compose.yml` |
+| No GPU or Mac, build from source | `docker-compose.cpu.yml` |
 
 ```bash
-# Grab the compose file (or clone the repo)
-curl -O https://raw.githubusercontent.com/<your-org>/RenAIssance/main/docker-compose.images.yml
-
-docker compose -f docker-compose.images.yml pull   # get latest images
-docker compose -f docker-compose.images.yml up -d   # run
-# open http://localhost:5173
-
-docker compose -f docker-compose.images.yml down     # stop (data persists)
+docker compose -f docker-compose.images.cpu.yml up -d    # run (Mac / no GPU)
+docker compose -f docker-compose.images.cpu.yml down      # stop, data is kept
 ```
 
-That's it — skip the manual `docker run` steps below unless you specifically
-want them.
-
-### Manual `docker run` (alternative)
-
-### Initial setup (one time only)
+## Development and tests
 
 ```bash
-# Pull latest images
-docker pull saarthakg004/renaissance-backend:latest
-docker pull saarthakg004/renaissance-frontend:latest
-
-# Create network and volumes (do this once — they persist forever)
-docker network create renaissance 2>/dev/null || true
-docker volume create paddle_models 2>/dev/null || true
-docker volume create renaissance_storage 2>/dev/null || true
-```
-
-### Start the containers
-
-```bash
-# Backend with GPU support
-docker run -d --name renaissance-backend \
-  --gpus all \
-  --network renaissance \
-  --network-alias backend \
-  -p 8000:8000 \
-  -v paddle_models:/paddle_models \
-  -v renaissance_storage:/app/storage \
-  --restart unless-stopped \
-  saarthakg004/renaissance-backend:latest
-
-# NOTE: --network-alias backend is REQUIRED. The frontend's nginx proxies
-# /api/ to http://backend:8000, so the backend must be reachable as "backend"
-# on the network. (Compose does this automatically via the service name.)
-
-# Frontend
-docker run -d --name renaissance-frontend \
-  --network renaissance \
-  -p 5173:8080 \
-  --restart unless-stopped \
-  saarthakg004/renaissance-frontend:latest
-
-# Wait ~30s for containers to start, then open http://localhost:5173
-```
-
-### Stop containers (data persists in volumes)
-
-```bash
-# Stop and remove only containers — volumes and data are preserved
-docker rm -f renaissance-backend renaissance-frontend
-```
-
-### Restart containers (reuse existing volumes and data)
-
-```bash
-# Just run the container start commands above again
-# All your datasets and transcripts will be there
-```
-
-### Clean up (⚠️ WARNING: deletes all data)
-
-```bash
-# Delete containers, network, and volumes (this removes all saved datasets/transcripts)
-docker rm -f renaissance-backend renaissance-frontend
-docker network rm renaissance
-docker volume rm paddle_models renaissance_storage
-```
-
-**No GPU?** Drop `--gpus all` from the backend command — everything still runs, just slower.
-
-**All commands in one script:**
-
-```bash
-# Setup (run once)
-docker pull saarthakg004/renaissance-backend:latest
-docker pull saarthakg004/renaissance-frontend:latest
-docker network create renaissance 2>/dev/null || true
-docker volume create paddle_models 2>/dev/null || true
-docker volume create renaissance_storage 2>/dev/null || true
-
-# Start
-docker run -d --name renaissance-backend \
-  --gpus all --network renaissance --network-alias backend -p 8000:8000 \
-  -v paddle_models:/paddle_models -v renaissance_storage:/app/storage \
-  --restart unless-stopped \
-  saarthakg004/renaissance-backend:latest
-
-docker run -d --name renaissance-frontend \
-  --network renaissance -p 5173:8080 \
-  --restart unless-stopped \
-  saarthakg004/renaissance-frontend:latest
-
-sleep 30 && echo "Open http://localhost:5173"
-```
-
----
-
-## How it works
-
-A 5-step wizard, one step per page:
-
-1. **Upload** — PDF or image files (PNG, JPG, TIFF, BMP)
-2. **Select pages** — thumbnail grid, click or shift-click to pick
-3. **Preprocess** — toggle and tune 7 OpenCV ops (normalize, grayscale, deskew, denoise, contrast, sharpen, binarize), preview before/after
-4. **Text detection** — layout-aware line detection via PaddleOCR, pick a recognition backend
-5. **OCR & export** — transcribe with the chosen provider, edit the output, download as TXT / DOCX / PDF
-
----
-
-## Accounts & usage tracking
-
-The app opens on a simple **login / signup** page (username, password, name,
-email, institute). It exists only for lightweight usage tracking — no API key
-is ever asked for at login (provider keys are entered later, in the OCR step).
-A small **profile** menu (top-right on the home screen) lets users update their
-name, email, and institute.
-
-- **Local accounts** live in SQLite on the `storage` volume per instance.
-- **Central tracking:** each signup (and profile edit) is reported to a shared
-  Supabase table over its REST API using a *publishable* key baked into the
-  image. That key is public by design and the table is RLS-locked
-  (insert/update only — no reads/deletes), so no database password or
-  service-role key is ever shipped.
-- **Optional env** (via `.env` / `-e`, all backend-only): `SECRET_KEY` (stable
-  session signing — otherwise sessions reset on restart), `ADMIN_TOKEN`
-  (enables `GET /api/admin/users`), `DATABASE_URL` (use your own Postgres
-  instead of SQLite). See `.env.example`.
-
-## Development & tests
-
-```bash
-# Backend test suite (CPU-safe — no GPU needed). Runs in CI on every push.
+# Backend tests (CPU-safe, no GPU needed). CI runs these on every push.
 cd backend
 pip install -r requirements-dev.txt
 pytest tests -q
 
-# Real-GPU smoke test (run on a machine with an NVIDIA GPU):
-python tests/smoke_gpu.py
+# Frontend dev server
+cd frontend
+npm install
+npm run dev
 ```
 
-CI (`.github/workflows/docker-build.yml`) runs the CPU test suite, builds both
-the **`-gpu`** and **`-cpu`** backend image variants from the single
-`backend/Dockerfile`, and boots the CPU image to verify `/api/health` before
-tagging a release.
+Model weights are not stored in Git. Continuous integration downloads them from Google Drive when it builds the images, so a normal clone stays small.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `run.sh`/`run.ps1` says "does not meet the GPU requirements" | Install/repair the NVIDIA driver (≥ 560) + Container Toolkit, or run with `--cpu` to use the CPU image |
-| GPU image logs "started WITHOUT a usable CUDA device" | Container launched without GPU access — use the launcher, add `--gpus all`, or run the CPU image. The server still starts; only PaddleOCR detection is unavailable. |
-| Signup/login returns **502** + nginx `backend could not be resolved` | The backend container isn't reachable as `backend`. Use Compose, or add `--network-alias backend` to the manual `docker run`. |
-| Layout detection falls back to CPU (`cuda_compiled=False`) | Container launched without `--gpus all`, or host driver < 560 |
-| PaddleOCR re-downloads on every start | `paddle_models` volume was removed; it will repopulate on next run |
-| Port 8000/5173 already in use | Remap with `-p 8001:8000` / `-p 5174:8080` |
-| Frontend says "cannot reach backend" | Backend still starting — health check takes ~30 s on first run |
+| The launcher says your machine does not meet the GPU requirements | Install or repair the NVIDIA driver (560 or newer) and the Container Toolkit, or run `./run.sh --cpu` to use the CPU image. |
+| The GPU image logs that it started without a usable CUDA device | The container was launched without GPU access. Use the launcher, or run the CPU image. The server still starts, only PaddleOCR detection is unavailable. |
+| The local Spanish corrector fails on a Mac | It needs an NVIDIA GPU. Use Gemini or OpenAI for the cleanup step instead. |
+| Port 8000 or 5173 is already in use | Stop the other program using it, or remap the port in the Compose file. |
+| The frontend says it cannot reach the backend | The backend is still starting. The first health check can take about 30 seconds. |
 
-View logs: `docker logs -f renaissance-backend`.
+View logs with `docker logs -f renaissance-backend`.

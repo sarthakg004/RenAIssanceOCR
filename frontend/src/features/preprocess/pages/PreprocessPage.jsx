@@ -17,7 +17,11 @@ import {
   X,
   AlertTriangle,
   Eraser,
+  BookOpen,
+  ChevronDown,
 } from 'lucide-react';
+
+import { getBookTypePresets, getBookTypePipeline } from '../../../config/preprocessOperations';
 
 import {
   OperationsSidebar,
@@ -172,6 +176,7 @@ export default function PreprocessPage({
     removePipelineStep,
     reorderPipeline,
     applyRecommendedPipeline,
+    applyPipeline,
     resetPipeline,
     getActivePipeline,
     buildPipelineConfig,
@@ -181,6 +186,16 @@ export default function PreprocessPage({
       // Auto-preview off — too slow on full-res scans.
     },
   });
+
+  // ── Book-type presets (Recommendation dropdown) ──
+  const [showBookTypeMenu, setShowBookTypeMenu] = useState(false);
+  const bookTypePresets = getBookTypePresets();
+
+  const handleSelectBookType = useCallback((bookTypeId) => {
+    // Select-only: fill the pipeline, don't run. User reviews then processes.
+    applyPipeline(getBookTypePipeline(bookTypeId));
+    setShowBookTypeMenu(false);
+  }, [applyPipeline]);
 
   // ── Effects ──
   // Push processed AND crop-only images up. The callback is pinned to a ref so
@@ -651,17 +666,53 @@ export default function PreprocessPage({
 
           {/* Quick actions */}
           <div className="flex gap-2">
-            <button
-              onClick={applyRecommendedPipeline}
-              disabled={isProcessing}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2
-                         bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs font-medium
-                         rounded-lg hover:from-blue-600 hover:to-blue-700
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
-            >
-              <Sparkles size={13} />
-              Recommended
-            </button>
+            {/* Recommendation: pick a book type -> pre-fill a pre-tested
+                pipeline (does NOT run; the user reviews and processes). */}
+            <div className="relative flex-1">
+              <button
+                onClick={() => setShowBookTypeMenu(v => !v)}
+                disabled={isProcessing}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2
+                           bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs font-medium
+                           rounded-lg hover:from-blue-600 hover:to-blue-700
+                           disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+                title="Load a pre-tested pipeline for a known book type"
+              >
+                <BookOpen size={13} />
+                Recommendation
+                <ChevronDown size={13} className={`transition-transform ${showBookTypeMenu ? 'rotate-180' : ''}`} />
+              </button>
+
+              {showBookTypeMenu && (
+                <>
+                  {/* click-away */}
+                  <div className="fixed inset-0 z-10" onClick={() => setShowBookTypeMenu(false)} />
+                  <div className="absolute left-0 right-0 mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                    <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400 border-b border-gray-100">
+                      Select book type
+                    </p>
+                    {bookTypePresets.map(preset => (
+                      <button
+                        key={preset.id}
+                        onClick={() => handleSelectBookType(preset.id)}
+                        disabled={isProcessing}
+                        className="w-full text-left px-3 py-2 hover:bg-blue-50 disabled:opacity-50
+                                   disabled:cursor-not-allowed transition-colors"
+                      >
+                        <span className="block text-xs font-semibold text-gray-800">{preset.label}</span>
+                        {preset.description && (
+                          <span className="block text-[10px] text-gray-400 mt-0.5">{preset.description}</span>
+                        )}
+                      </button>
+                    ))}
+                    <p className="px-3 py-2 text-[10px] text-gray-400 border-t border-gray-100">
+                      Fills the pipeline for review. Nothing runs until you process.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+
             <button
               onClick={handleResetOperations}
               disabled={isProcessing}
