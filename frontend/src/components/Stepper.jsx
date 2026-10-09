@@ -1,4 +1,3 @@
-import React from 'react';
 import { Check, Upload, Layers, Wand2, ScanText, Sparkles } from 'lucide-react';
 
 const steps = [

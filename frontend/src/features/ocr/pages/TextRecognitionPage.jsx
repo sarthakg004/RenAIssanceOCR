@@ -12,11 +12,9 @@ import {
     processBatchOCR,
     getRateLimitStatus,
     verifyApiKey,
-    downloadBlob,
 } from '../services/ocrApi';
-import { saveTranscriptSession, fetchStorageOverview } from '../../../services/storageApi';
+import { saveTranscriptSession, fetchStorageOverview, downloadBlob } from '../../../services/storageApi';
 import {
-    PROVIDER_LABELS,
     FALLBACK_MODELS,
     DEFAULT_MODELS,
 } from '../config/providers';

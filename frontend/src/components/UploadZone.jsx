@@ -1,5 +1,5 @@
-import React, { useCallback, useState } from 'react';
-import { Upload, FileImage, FileText, X, Loader2, UploadCloud } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { FileImage, FileText, X, Loader2, UploadCloud } from 'lucide-react';
 
 export default function UploadZone({ onFilesSelected, isLoading }) {
   const [isDragging, setIsDragging] = useState(false);

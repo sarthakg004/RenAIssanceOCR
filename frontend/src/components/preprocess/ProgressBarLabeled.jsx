@@ -1,4 +1,3 @@
-import React from 'react';
 
 // Progress bar with a label, percentage and optional detail line.
 export default function ProgressBarLabeled({

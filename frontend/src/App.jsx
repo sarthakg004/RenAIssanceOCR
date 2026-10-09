@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { FileText, Database, BookOpen } from 'lucide-react';
+import { useState, useCallback, useEffect } from 'react';
+import { FileText, Database } from 'lucide-react';
 import Stepper from './components/Stepper';
 import DatasetStepper from './components/DatasetStepper';
 import HomePage from './pages/HomePage';

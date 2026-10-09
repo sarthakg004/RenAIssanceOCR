@@ -1,4 +1,3 @@
-import React from 'react';
 import { FileText, Database, ArrowRight, BookOpen, Archive, LogOut, UserCircle } from 'lucide-react';
 import homeImage from '../assets/home-image.png';
 

@@ -1,4 +1,3 @@
-import React from 'react';
 
 // Compact slider for a single operation parameter.
 export default function OperationSlider({

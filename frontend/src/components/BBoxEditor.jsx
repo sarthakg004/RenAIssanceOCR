@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
     X,
     Check,
@@ -13,7 +13,6 @@ import {
     ChevronLeft,
     ChevronRight,
     Copy,
-    RotateCw,
 } from 'lucide-react';
 
 // ── Constants ──
@@ -83,21 +82,6 @@ function hitCorner(pts, px, py, r) {
         if (Math.hypot(px - pts[i][0], py - pts[i][1]) <= r) return i;
     }
     return -1;
-}
-
-// Drag a corner, keeping the box axis-aligned. The opposite corner is the anchor.
-function resizeRectCorner(pts, cornerIdx, nx, ny) {
-    const opposites = [2, 3, 0, 1];
-    const oIdx = opposites[cornerIdx];
-    const ox = pts[oIdx][0], oy = pts[oIdx][1];
-    const x1 = Math.min(nx, ox), y1 = Math.min(ny, oy);
-    const x2 = Math.max(nx, ox), y2 = Math.max(ny, oy);
-    return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]];
-}
-
-function rectSize(pts) {
-    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
 }
 
 function rotatePoint(px, py, cx, cy, angle) {

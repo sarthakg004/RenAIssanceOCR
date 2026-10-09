@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { BookOpen, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { login as apiLogin, signup as apiSignup } from './authApi';
 

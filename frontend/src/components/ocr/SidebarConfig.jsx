@@ -4,7 +4,6 @@ import {
   Eye,
   EyeOff,
   Loader2,
-  CheckCircle2,
   AlertCircle,
   ShieldCheck,
   ShieldX,

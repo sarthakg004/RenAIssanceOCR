@@ -7,7 +7,6 @@ import {
   Eye,
   FileText,
   Image,
-  Filter,
   AlertTriangle,
   Layers,
   ChevronLeft,

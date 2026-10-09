@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   ChevronDown,
   Sliders,
@@ -11,7 +11,6 @@ import {
 import OperationCard from './OperationCard';
 import {
   OPERATION_CATEGORIES,
-  OPERATIONS,
   getOperationsByCategory
 } from '../../config/preprocessOperations';
 

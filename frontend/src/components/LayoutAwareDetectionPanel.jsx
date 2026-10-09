@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
     Play,
     Loader2,
@@ -35,9 +35,8 @@ import {
     runLocalRecognition,
     exportCRNNResultsAsText,
     exportCRNNResultsAsJSON,
-    downloadBlob,
 } from '../features/ocr/services/ocrApi';
-import { saveTranscriptSession, fetchStorageOverview } from '../services/storageApi';
+import { saveTranscriptSession, fetchStorageOverview, downloadBlob } from '../services/storageApi';
 import {
     getLLMProviders,
     getLLMTemplates,
@@ -2274,7 +2273,7 @@ export default function LayoutAwareDetectionPage({
                                 const response = await fetch(`${API_BASE}/api/export/pdf`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ transcripts, format: 'pdf' }),
+                                    body: JSON.stringify({ transcripts }),
                                 });
                                 if (!response.ok) throw new Error('Export failed');
                                 const blob = await response.blob();

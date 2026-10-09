@@ -1,4 +1,3 @@
-import React from 'react';
 import { FileImage, FileText, ArrowRight, Zap } from 'lucide-react';
 import UploadZone from '../../../components/UploadZone';
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Crop, Check, X, RotateCcw, Maximize2, Lock, Unlock, Copy, ChevronDown, ChevronUp } from 'lucide-react';
 
 // Draggable crop box with optional aspect lock. The same crop can be applied

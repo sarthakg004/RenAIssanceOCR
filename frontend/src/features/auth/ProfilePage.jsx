@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { X, Loader2, CheckCircle2, AlertCircle, User as UserIcon } from 'lucide-react';
 import { updateProfile } from './authApi';
 

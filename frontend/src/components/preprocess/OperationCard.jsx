@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { ChevronDown, Settings2 } from 'lucide-react';
 import TooltipInfo from './TooltipInfo';
 import OperationSlider from './OperationSlider';

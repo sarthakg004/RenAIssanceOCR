@@ -9,8 +9,6 @@ import {
   AlertCircle,
   Zap,
   Image as ImageIcon,
-  ZoomIn,
-  ZoomOut,
   RotateCcw,
   Maximize2,
   Move,

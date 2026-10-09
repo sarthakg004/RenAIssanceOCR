@@ -1,8 +1,7 @@
-import React, { useCallback, useState, useRef } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import {
   Upload,
   FileText,
-  FileImage,
   BookOpen,
   ArrowRight,
   Check,

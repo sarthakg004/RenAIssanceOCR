@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { CheckSquare, Square, Grid3X3, LayoutGrid, X, ZoomIn } from 'lucide-react';
 import PageCard from './PageCard';
 

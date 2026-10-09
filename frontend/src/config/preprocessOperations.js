@@ -397,7 +397,7 @@ export function getRecommendedPipeline() {
 // Pre-tested pipelines for specific book collections. Selecting one only
 // populates the sidebar/pipeline; it does NOT run — the user reviews, tweaks,
 // then processes. `steps[].params` override the operation's defaults.
-export const BOOK_TYPE_PRESETS = [
+const BOOK_TYPE_PRESETS = [
   {
     id: 'porcones',
     label: 'PORCONES',

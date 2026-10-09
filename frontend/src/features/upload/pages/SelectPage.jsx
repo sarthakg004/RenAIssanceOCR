@@ -1,4 +1,3 @@
-import React from 'react';
 import { ArrowRight, ArrowLeft, FileImage, Layers } from 'lucide-react';
 import PdfPreviewGrid from '../../../components/PdfPreviewGrid';
 

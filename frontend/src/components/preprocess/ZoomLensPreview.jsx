@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { X, ZoomIn, ZoomOut, Move } from 'lucide-react';
 
 // Floating magnifier for inspecting text detail, original beside processed.
