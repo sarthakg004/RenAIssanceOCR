@@ -1,0 +1,21 @@
+# Experiment environment (training, evaluation, notebooks). Python 3.10+, CUDA GPU.
+# Install the GPU builds of torch and paddle for your CUDA version first, e.g.
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+#   pip install paddlepaddle-gpu==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+# The notebooks also import the app's backend/ code, so its requirements apply too.
+-r ../backend/requirements.txt
+transformers>=5.2
+peft>=0.19
+trl>=1.8
+bitsandbytes>=0.49
+accelerate>=1.10
+datasets>=5.0
+huggingface_hub>=1.5
+paddleocr==3.4.0
+rapidfuzz>=3.14
+scikit-learn>=1.7
+pandas>=2.3
+matplotlib>=3.10
+pytesseract>=0.3   # only for the README's Tesseract figure (needs the tesseract binary)
+ipykernel
+nbclient
