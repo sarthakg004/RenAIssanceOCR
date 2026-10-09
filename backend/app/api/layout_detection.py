@@ -6,8 +6,8 @@ Budget 8 GB VRAM (GPU) or 8 GB RAM (CPU, much slower).
 """
 
 import asyncio
+import logging
 import time
-import traceback
 
 import cv2
 import numpy as np
@@ -20,6 +20,7 @@ from ..services.layout_detection import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/api/detect/models-status")
@@ -36,6 +37,10 @@ async def detection_models_status(use_gpu: bool = True):
 _detection_lock = asyncio.Lock()
 
 
+REQUIREMENTS = ("Minimum 8 GB GPU VRAM required for GPU mode. "
+                "Minimum 8 GB free RAM required for CPU mode.")
+
+
 @router.post("/api/detect/layout-aware-lines")
 async def detect_layout_aware_lines(
     image: UploadFile = File(...),
@@ -46,143 +51,61 @@ async def detect_layout_aware_lines(
     upscale_min_h: int = Form(60),
     nms_iou_thresh: float = Form(0.3),
     gap_multiplier: float = Form(2.0),
-    debug_dir: str = Form(""),
 ):
     """Detect text lines in an uploaded page.
 
     -> {lines: [4-point polygons], count, processing_time_ms, tier}.
     """
     start = time.time()
+    elapsed = lambda: int((time.time() - start) * 1000)
+    failed = lambda error, **extra: {"error": error, "lines": [], "count": 0,
+                                      "processing_time_ms": elapsed(), **extra}
+    tuning = dict(region_padding=region_padding, layout_expand=layout_expand, score_thresh=score_thresh,
+                  upscale_min_h=upscale_min_h, nms_iou_thresh=nms_iou_thresh, gap_multiplier=gap_multiplier)
+
+    def run(img, tier):
+        # Sync GPU work goes to a thread so /api/health stays responsive.
+        return asyncio.to_thread(run_layout_aware_detection, img, use_gpu=tier["device"] == "gpu",
+                                 layout_model_name=tier["layout_model"], det_model_name=tier["det_model"],
+                                 **tuning)
 
     try:
-        contents = await image.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        del contents
-
+        img = cv2.imdecode(np.frombuffer(await image.read(), np.uint8), cv2.IMREAD_COLOR)
         if img is None:
-            return {
-                "error": "Could not decode the uploaded image.",
-                "lines": [],
-                "count": 0,
-                "processing_time_ms": 0,
-            }
+            return failed("Could not decode the uploaded image.")
 
-        # The sync work goes to a thread so /api/health stays responsive
-        # while a page is in flight.
         async with _detection_lock:
-            gpu_fallback = False
-            resource_warnings = []
-
             # Probe inside the lock so the readings match what we're about to
             # allocate. Keeps 4-6 GB laptop GPUs off the server-class models.
             tier = await asyncio.to_thread(select_tier, use_gpu)
-            print(f"[LayoutAPI] tier selected: {tier['tier']} on {tier['device']}"
-                  f" — {tier['reason']}")
-            effective_use_gpu = tier["device"] == "gpu"
-
+            logger.info("tier %s on %s: %s", tier["tier"], tier["device"], tier["reason"])
+            gpu_fallback = False
             try:
-                lines, resource_warnings = await asyncio.to_thread(
-                    run_layout_aware_detection,
-                    img,
-                    use_gpu=effective_use_gpu,
-                    layout_model_name=tier["layout_model"],
-                    det_model_name=tier["det_model"],
-                    rec_model_name=tier["rec_model"],
-                    region_padding=region_padding,
-                    layout_expand=layout_expand,
-                    score_thresh=score_thresh,
-                    upscale_min_h=upscale_min_h,
-                    nms_iou_thresh=nms_iou_thresh,
-                    gap_multiplier=gap_multiplier,
-                    debug_dir=debug_dir,
-                )
-            except (ValueError, RuntimeError) as gpu_err:
-                err_msg = str(gpu_err)
-                if "Out-of-memory" in err_msg or "out of memory" in err_msg.lower():
-                    elapsed = int((time.time() - start) * 1000)
-                    return {
-                        "error": err_msg,
-                        "lines": [],
-                        "count": 0,
-                        "processing_time_ms": elapsed,
-                        "resource_warnings": resource_warnings,
-                        "tier": tier,
-                        "resource_requirements": (
-                            "Minimum 8 GB GPU VRAM required for GPU mode. "
-                            "Minimum 8 GB free RAM required for CPU mode."
-                        ),
-                    }
-                if effective_use_gpu:
-                    # Crashed for some non-OOM reason — retry on CPU.
-                    print(f"[LayoutAPI] GPU failed, falling back to CPU: {gpu_err}")
-                    gpu_fallback = True
-                    cpu_tier = await asyncio.to_thread(select_tier, False)
-                    tier = cpu_tier
-                    lines, resource_warnings = await asyncio.to_thread(
-                        run_layout_aware_detection,
-                        img,
-                        use_gpu=False,
-                        layout_model_name=cpu_tier["layout_model"],
-                        det_model_name=cpu_tier["det_model"],
-                        rec_model_name=cpu_tier["rec_model"],
-                        region_padding=region_padding,
-                        layout_expand=layout_expand,
-                        score_thresh=score_thresh,
-                        upscale_min_h=upscale_min_h,
-                        nms_iou_thresh=nms_iou_thresh,
-                        gap_multiplier=gap_multiplier,
-                        debug_dir=debug_dir,
-                    )
-                else:
+                lines, warnings = await run(img, tier)
+            except (ValueError, RuntimeError) as err:
+                if "out-of-memory" in str(err).lower() or "out of memory" in str(err).lower():
+                    return failed(str(err), resource_warnings=[], tier=tier, resource_requirements=REQUIREMENTS)
+                if tier["device"] != "gpu":
                     raise
+                # Crashed on the GPU for some non-OOM reason: retry on the CPU.
+                logger.warning("GPU detection failed, falling back to CPU: %s", err)
+                gpu_fallback = True
+                tier = await asyncio.to_thread(select_tier, False)
+                lines, warnings = await run(img, tier)
 
-        del img
-        elapsed = int((time.time() - start) * 1000)
-
-        resp = {
-            "lines": lines,
-            "count": len(lines),
-            "processing_time_ms": elapsed,
-            "tier": tier,
-        }
-        if resource_warnings:
-            resp["resource_warnings"] = resource_warnings
+        resp = {"lines": lines, "count": len(lines), "processing_time_ms": elapsed(), "tier": tier}
+        if warnings:
+            resp["resource_warnings"] = warnings
         if gpu_fallback:
             resp["warning"] = "GPU failed mid-run. Fell back to CPU."
         elif use_gpu and tier["device"] == "cpu":
-            resp["warning"] = (
-                "Not enough free GPU VRAM for detection. "
-                f"Ran on CPU instead. {tier['reason']}"
-            )
+            resp["warning"] = f"Not enough free GPU VRAM for detection. Ran on CPU instead. {tier['reason']}"
         elif use_gpu and tier["tier"] == "mobile":
-            resp["warning"] = (
-                f"Low GPU VRAM — using lighter mobile models. {tier['reason']}"
-            )
+            resp["warning"] = f"Low GPU VRAM — using lighter mobile models. {tier['reason']}"
         if use_gpu and not gpu_fallback:
-            resp["resource_requirements"] = (
-                "Minimum 8 GB GPU VRAM recommended for GPU mode. "
-                "Minimum 8 GB free RAM recommended for CPU mode."
-            )
+            resp["resource_requirements"] = REQUIREMENTS.replace("required", "recommended")
         return resp
 
     except Exception as exc:
-        traceback.print_exc()
-        elapsed = int((time.time() - start) * 1000)
-        resp = {
-            "error": f"Line detection failed: {str(exc)}",
-            "lines": [],
-            "count": 0,
-            "processing_time_ms": elapsed,
-        }
-        # Warnings gathered before the failure often explain it.
-        try:
-            if resource_warnings:
-                resp["resource_warnings"] = resource_warnings
-                resp["resource_requirements"] = (
-                    "Minimum 8 GB GPU VRAM required for GPU mode. "
-                    "Minimum 8 GB free RAM required for CPU mode."
-                )
-        except NameError:
-            pass
-        return resp
+        logger.exception("line detection failed")
+        return failed(f"Line detection failed: {exc}")

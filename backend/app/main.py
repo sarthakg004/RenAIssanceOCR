@@ -3,6 +3,7 @@
 Logic lives under app.api / app.services / app.core / app.schemas / app.utils.
 """
 
+import logging
 import os
 import sys
 
@@ -27,6 +28,8 @@ from .api.storage import router as storage_router
 from .api.auth import router as auth_router
 from .auth.db import init_db
 from .auth.tracking import retry_loop, tracking_enabled
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
@@ -66,8 +69,3 @@ app.include_router(recognition_router)
 app.include_router(llm_router)
 app.include_router(storage_router)
 app.include_router(auth_router)
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)

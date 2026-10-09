@@ -2,9 +2,7 @@
 
 from .base import BaseOCRProvider
 from .gemini import GeminiProvider
-from .chatgpt import ChatGPTProvider
-from .deepseek import DeepSeekProvider
-from .qwen import QwenProvider
+from .openai_compat import ChatGPTProvider, DeepSeekProvider, QwenProvider
 
 
 _PROVIDERS = {
@@ -24,7 +22,3 @@ class OCRFactory:
             valid = ", ".join(_PROVIDERS.keys())
             raise ValueError(f"Unknown OCR provider: '{name}'. Valid providers: {valid}")
         return provider_cls()
-
-    @staticmethod
-    def list_providers() -> list[str]:
-        return list(_PROVIDERS.keys())

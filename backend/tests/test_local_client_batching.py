@@ -120,3 +120,11 @@ def test_cut_off_line_keeps_the_original(monkeypatch, tmp_path):
     # silently chop the line, so the raw line must survive instead.
     out, _ = _run(monkeypatch, tmp_path, "keep me\ncorrect me", no_stop=["keep me"])
     assert out.split("\n") == ["keep me", "CORRECT ME"]
+
+
+def test_all_blank_lines_skip_the_model(monkeypatch, tmp_path):
+    # A page with no text (e.g. nothing detected) must not reach the tokenizer.
+    monkeypatch.setattr(local_client.LocalCorrector, "_load",
+                        lambda self: (_ for _ in ()).throw(AssertionError("model loaded")))
+    out, answered = local_client.LocalCorrector(adapter_dir=str(tmp_path)).correct_lines(["", "  "])
+    assert out == ["", "  "] and answered == 0

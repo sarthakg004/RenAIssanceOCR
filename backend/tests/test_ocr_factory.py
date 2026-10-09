@@ -6,11 +6,6 @@ from app.services.ocr.base import BaseOCRProvider
 from app.services.ocr.factory import OCRFactory
 
 
-def test_list_providers_contains_all():
-    names = set(OCRFactory.list_providers())
-    assert {"gemini", "chatgpt", "deepseek", "qwen"} <= names
-
-
 @pytest.mark.parametrize("name", ["gemini", "chatgpt", "deepseek", "qwen", "GEMINI"])
 def test_get_provider_returns_base_instance(name):
     provider = OCRFactory.get_provider(name)
@@ -26,7 +21,7 @@ def test_gemini_default_model_is_gemini_3():
     from app.services.ocr import gemini
 
     assert gemini.DEFAULT_MODEL == "gemini-3.1-flash-lite"
-    assert gemini.DEFAULT_MODEL in gemini.MODEL_IDS
+    assert gemini.DEFAULT_MODEL in gemini.GeminiProvider().model_ids
 
 
 def test_gemini_retries_transient_server_error(monkeypatch):

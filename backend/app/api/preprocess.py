@@ -125,10 +125,3 @@ async def preprocess_image_endpoint(request: PreprocessRequest):
             "processing_time_ms": processing_time,
             "error": str(e),
         }
-
-
-@router.post("/api/preprocess/validate")
-async def validate_operations(operations: list):
-    """Dry-run check of a pipeline config. Returns {valid, errors}."""
-    validation = validate_pipeline_config(operations)
-    return validation

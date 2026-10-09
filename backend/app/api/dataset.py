@@ -6,16 +6,12 @@ import traceback
 import urllib.parse
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..services.transcript_parser import parse_transcript_bytes, parse_transcript
-from ..services.dataset_builder import (
-    align_boxes_with_transcript,
-    build_dataset_zip,
-    build_detection_dataset_zip,
-)
+from ..services.transcript_parser import parse_transcript_bytes
+from ..services.dataset_builder import build_dataset_zip, build_detection_dataset_zip
 from ..storage.storage_manager import save_detection_dataset, save_recognition_dataset
 
 
@@ -31,20 +27,6 @@ class TranscriptParseResponse(BaseModel):
     page_count: int
     total_lines: int
     error: Optional[str] = None
-
-
-class AlignmentRequest(BaseModel):
-    boxes: list  # list of 4-point polygons
-    lines: list  # list of transcript strings
-
-
-class AlignmentResponse(BaseModel):
-    success: bool
-    pairs: list  # [(box, text), ...]
-    num_boxes: int
-    num_lines: int
-    num_pairs: int
-    warning: Optional[str] = None
 
 
 class PageDataItem(BaseModel):
@@ -89,67 +71,6 @@ async def parse_transcript_endpoint(
             page_count=0,
             total_lines=0,
             error=str(e),
-        )
-
-
-@router.post("/parse-transcript-text", response_model=TranscriptParseResponse)
-async def parse_transcript_text_endpoint(
-    text: str = Form(...),
-):
-    """Same as above, for text pasted straight into the UI."""
-    try:
-        pages = parse_transcript(text)
-        total_lines = sum(len(v) for v in pages.values())
-
-        return TranscriptParseResponse(
-            success=True,
-            pages=pages,
-            page_count=len(pages),
-            total_lines=total_lines,
-        )
-    except Exception as e:
-        traceback.print_exc()
-        return TranscriptParseResponse(
-            success=False,
-            pages={},
-            page_count=0,
-            total_lines=0,
-            error=str(e),
-        )
-
-
-@router.post("/align", response_model=AlignmentResponse)
-async def align_endpoint(request: AlignmentRequest):
-    """Pair one page's boxes with its transcript lines, flagging any mismatch."""
-    try:
-        pairs, num_boxes, num_lines = align_boxes_with_transcript(
-            request.boxes, request.lines
-        )
-
-        warning = None
-        if num_boxes != num_lines:
-            warning = (
-                f"Mismatch: {num_boxes} bounding boxes vs {num_lines} transcript lines. "
-                f"Only {len(pairs)} pairs will be used."
-            )
-
-        return AlignmentResponse(
-            success=True,
-            pairs=[{"box": box, "text": text} for box, text in pairs],
-            num_boxes=num_boxes,
-            num_lines=num_lines,
-            num_pairs=len(pairs),
-            warning=warning,
-        )
-    except Exception as e:
-        traceback.print_exc()
-        return AlignmentResponse(
-            success=False,
-            pairs=[],
-            num_boxes=0,
-            num_lines=0,
-            num_pairs=0,
-            warning=str(e),
         )
 
 

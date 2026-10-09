@@ -13,8 +13,7 @@ from pathlib import Path
 
 from transformers import TrOCRProcessor
 
-# The base model the user fine-tuned from (see
-# RenAIssanceExperimental/experimentation.ipynb).
+# The base model TrOCR is fine-tuned from (experimentation/src/trocr.py).
 BASE_MODEL_ID = "microsoft/trocr-base-printed"
 
 TROCR_DIR = Path("/app/models/weights/trocr")

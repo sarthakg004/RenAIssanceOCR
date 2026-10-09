@@ -45,7 +45,6 @@ AVAILABLE_MODELS = [
 ]
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
-MODEL_IDS = [m["id"] for m in AVAILABLE_MODELS]
 
 # Without this a thinking model can hang indefinitely, burning free-tier quota.
 REQUEST_TIMEOUT_MS = 120_000
@@ -64,7 +63,6 @@ class GeminiProvider(BaseOCRProvider):
 
     MODELS = AVAILABLE_MODELS
     DEFAULT_MODEL = DEFAULT_MODEL
-    MODEL_IDS = MODEL_IDS
 
     def _generate(self, client, model_name: str, image_bytes: bytes, mime_type: str, prompt: str):
         """One generation, retrying transient 5xx."""

@@ -4,6 +4,7 @@ Gemini uses the google-genai SDK; OpenAI/DeepSeek/Qwen share one
 chat-completions client. `local_es` is our GPU-only Spanish fine-tune.
 """
 
+from ..ocr.openai_compat import ChatGPTProvider, DeepSeekProvider, QwenProvider
 from .gemini_client import post_process_text as _gemini_post_process
 from .openai_compat_client import post_process_text_openai_compat
 from .local_client import (
@@ -12,11 +13,11 @@ from .local_client import (
 )
 
 
-# OpenAI-compatible chat-completions endpoints (same URLs as the OCR providers).
+# The same OpenAI-compatible chat-completions endpoints the OCR providers use.
 _OPENAI_COMPAT_ENDPOINTS = {
-    "openai": "https://api.openai.com/v1/chat/completions",
-    "deepseek": "https://api.deepseek.com/v1/chat/completions",
-    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    "openai": ChatGPTProvider.ENDPOINT,
+    "deepseek": DeepSeekProvider.ENDPOINT,
+    "qwen": QwenProvider.ENDPOINT,
 }
 
 

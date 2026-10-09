@@ -43,7 +43,7 @@ _MODEL_SEARCH_DIR = next(
     _CANDIDATE_DIRS[0],
 )
 
-# Rescanning the weights dir per request is pointless; refresh clears this.
+# Rescanning the weights dir per request is pointless.
 _model_cache: list[dict] | None = None
 
 
@@ -64,15 +64,6 @@ async def list_local_models():
     return LocalModelsResponse(
         models=[LocalModelInfo(**m) for m in models]
     )
-
-
-@router.post("/api/local-recognition-models/refresh")
-async def refresh_local_models():
-    """Force rescan of model directory."""
-    global _model_cache
-    _model_cache = None
-    models = _get_models()
-    return {"count": len(models), "models": [m["name"] for m in models]}
 
 
 def _decode_image(image_data: str) -> np.ndarray:

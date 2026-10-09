@@ -6,8 +6,7 @@ Only Gemini is rate-limited server-side (free-tier sliding window).
 import asyncio
 import time
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Header, Form
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Header
 
 from ..core.config import MIN_API_KEY_LENGTH, MAX_BATCH_SIZE
 from ..core.rate_limiter import rate_limiter
@@ -90,49 +89,6 @@ async def get_rate_limit_status():
 
 # ── Gemini ──────────────────────────────────────────────────────
 
-@router.post("/api/gemini-ocr-page", response_model=OCRResponse)
-async def gemini_ocr_page(
-    image: UploadFile = File(...),
-    model: str = Form(default="gemini-3.1-flash-lite"),
-    custom_prompt: Optional[str] = Form(default=None),
-    x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
-):
-    """Process a single uploaded image file with Gemini OCR."""
-    check_rate_limit()
-    provider = _provider("gemini")
-    validate_model(model, provider.MODEL_IDS)
-    validate_api_key_format(x_gemini_api_key)
-
-    image_bytes = await image.read()
-    content_type = image.content_type or "image/png"
-    if content_type not in ("image/png", "image/jpeg", "image/jpg", "image/webp"):
-        content_type = "image/png"
-
-    result = run_ocr(provider, x_gemini_api_key, image_bytes, model, content_type, custom_prompt)
-    if result.success:
-        rate_limiter.record_request()
-    return result
-
-
-@router.post("/api/gemini-ocr-base64", response_model=OCRResponse)
-async def gemini_ocr_base64(
-    image_data: str = Form(...),
-    model: str = Form(default="gemini-3.1-flash-lite"),
-    custom_prompt: Optional[str] = Form(default=None),
-    x_gemini_api_key: str = Header(..., alias="X-Gemini-API-Key"),
-):
-    """Process a base64-encoded image with Gemini OCR (form data)."""
-    check_rate_limit()
-    provider = _provider("gemini")
-    validate_model(model, provider.MODEL_IDS)
-
-    image_bytes, mime_type = parse_base64_image(image_data)
-    result = run_ocr(provider, x_gemini_api_key, image_bytes, model, mime_type, custom_prompt)
-    if result.success:
-        rate_limiter.record_request()
-    return result
-
-
 @router.post("/api/gemini-ocr-json", response_model=OCRResponse)
 async def gemini_ocr_json(
     request: GeminiOCRRequest,
@@ -141,7 +97,7 @@ async def gemini_ocr_json(
     """Process a base64-encoded image with Gemini OCR (JSON body)."""
     check_rate_limit()
     provider = _provider("gemini")
-    validate_model(request.model, provider.MODEL_IDS)
+    validate_model(request.model, provider.model_ids)
 
     image_bytes, mime_type = parse_base64_image(request.image_data)
     result = run_ocr(provider, x_gemini_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
@@ -166,7 +122,7 @@ async def gemini_ocr_batch(
 
     check_rate_limit(required_slots=len(request.items))
     provider = _provider("gemini")
-    validate_model(request.model, provider.MODEL_IDS)
+    validate_model(request.model, provider.model_ids)
 
     batch_start = time.time()
 
@@ -215,7 +171,7 @@ async def chatgpt_ocr_json(
 ):
     """Process a base64-encoded image with ChatGPT OCR."""
     provider = _provider("chatgpt")
-    validate_model(request.model, provider.MODEL_IDS)
+    validate_model(request.model, provider.model_ids)
     image_bytes, mime_type = parse_base64_image(request.image_data)
     return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
 
@@ -227,7 +183,7 @@ async def deepseek_ocr_json(
 ):
     """Process a base64-encoded image with DeepSeek OCR."""
     provider = _provider("deepseek")
-    validate_model(request.model, provider.MODEL_IDS)
+    validate_model(request.model, provider.model_ids)
     image_bytes, mime_type = parse_base64_image(request.image_data)
     return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)
 
@@ -239,6 +195,6 @@ async def qwen_ocr_json(
 ):
     """Process a base64-encoded image with Qwen OCR."""
     provider = _provider("qwen")
-    validate_model(request.model, provider.MODEL_IDS)
+    validate_model(request.model, provider.model_ids)
     image_bytes, mime_type = parse_base64_image(request.image_data)
     return run_ocr(provider, x_api_key, image_bytes, request.model, mime_type, request.custom_prompt)

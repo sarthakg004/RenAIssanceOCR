@@ -60,8 +60,12 @@ def test_deskew_runs_and_preserves_shape():
     assert out.dtype == np.uint8
 
 
-if __name__ == "__main__":
-    test_projection_profile_recovers_tilt()
-    test_variable_skew_detected_as_nonuniform()
-    test_deskew_runs_and_preserves_shape()
-    print("ok")
+def test_piecewise_blend_runs_on_gray_and_colour():
+    # The band blend used to reshape its weights to (h,) / (h, 1), which cannot
+    # broadcast against an (h, w[, 3]) image, so every piecewise deskew crashed.
+    import numpy as np
+    from preprocessing.operations import _piecewise_deskew
+
+    for shape in [(300, 200), (300, 200, 3)]:
+        out = _piecewise_deskew(np.full(shape, 255, np.uint8), [0.0, 2.0, 4.0])
+        assert out.shape == shape

@@ -1,7 +1,7 @@
 """CRNN line-level OCR.
 
-The architecture and helpers are copy-pasted from RenAIssanceExperimental on
-purpose, so the backend doesn't depend on that repo at runtime.
+The architecture is defined here once: experimentation/src/crnn.py imports it
+for training, so every trained checkpoint loads here unchanged.
 """
 
 from __future__ import annotations
@@ -192,6 +192,7 @@ class CRNNRecognizer:
         self._model: Optional[CRNN] = None
         self._idx2char: Optional[dict] = None
         self._img_height: int = 64
+        self._pad_value: float = 0.0
 
         if device is None:
             self.device = select_torch_device()
@@ -213,9 +214,14 @@ class CRNNRecognizer:
 
         self._idx2char = ckpt["idx2char"]
         self._img_height = ckpt.get("img_height", 64)
+        # Pad the way this checkpoint was trained: white from now on, black (0)
+        # for checkpoints saved before the padding fix.
+        self._pad_value = ckpt.get("pad_value", 0.0)
 
+        # Class count from the weights, not the vocab: index 0 is the CTC blank,
+        # and checkpoints before the off-by-one fix have len(vocab) classes.
         self._model = CRNN(
-            vocab_size=len(ckpt["vocab"]),
+            vocab_size=ckpt["model_state_dict"]["classifier.weight"].shape[0],
             lstm_hidden=ckpt.get("lstm_hidden", 256),
             lstm_layers=ckpt.get("lstm_layers", 2),
         ).to(self.device)
@@ -255,7 +261,10 @@ class CRNNRecognizer:
 
         # Lines vary in width after the fixed-height resize, so pad to the widest.
         max_w = max(t.shape[-1] for t in tensors)
-        padded = [torch.nn.functional.pad(t, (0, max_w - t.shape[-1])) for t in tensors]
+        padded = [
+            torch.nn.functional.pad(t, (0, max_w - t.shape[-1]), value=self._pad_value)
+            for t in tensors
+        ]
         batch = torch.stack(padded).to(self.device)
 
         with torch.no_grad():

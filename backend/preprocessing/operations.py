@@ -305,37 +305,29 @@ def _fill_band_angles(
 
 
 def _piecewise_deskew(img: np.ndarray, band_angles: list[float]) -> np.ndarray:
-    """Rotate each horizontal band by its own angle and blend the bands.
+    """Rotate each horizontal band by its own angle, blended into one smooth warp.
 
-    Each band is corrected by rotating the whole image about that band's centre,
-    then every output row is a linear blend of the two nearest band rotations.
-    The blend weights form a partition of unity (they sum to 1 per row), so the
-    transition between bands is gradual and leaves no seam.
+    Every output row takes its source position from the two nearest band
+    rotations, mixed by triangular weights that sum to 1 per row. Blending the
+    sampling *coordinates* (then resampling once) bends the page smoothly;
+    blending the rotated *pixels* instead would leave ghosted double text
+    wherever two bands disagree.
     """
     h, w = img.shape[:2]
     n = len(band_angles)
-    cx = w / 2.0
-
-    # Band-index coordinate for each output row: band i's centre sits at p = i.
-    p = np.clip(np.arange(h) / h * n - 0.5, 0.0, n - 1)
-
-    channel_shape = () if img.ndim == 2 else (img.shape[2],)
-    acc = np.zeros((h, w) + channel_shape, dtype=np.float32)
-
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    p = np.clip(np.arange(h) / h * n - 0.5, 0.0, n - 1)  # band i's centre sits at p = i
+    src_x, src_y = np.zeros_like(xs), np.zeros_like(ys)
     for i, angle in enumerate(band_angles):
-        weight = np.clip(1.0 - np.abs(p - i), 0.0, 1.0)  # triangular
+        weight = np.clip(1.0 - np.abs(p - i), 0.0, 1.0)[:, None]  # triangular, per row
         if not weight.any():
             continue
-        cy = (i + 0.5) * h / n
-        M = cv2.getRotationMatrix2D((cx, cy), float(angle), 1.0)
-        rot = cv2.warpAffine(
-            img, M, (w, h),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_REPLICATE,
-        ).astype(np.float32)
-        acc += rot * weight.reshape(h, *([1] * len(channel_shape)))
-
-    return np.clip(acc, 0, 255).astype(np.uint8)
+        # Where does each output pixel come from under band i's rotation?
+        inverse = cv2.invertAffineTransform(
+            cv2.getRotationMatrix2D((w / 2.0, (i + 0.5) * h / n), float(angle), 1.0))
+        src_x += weight * (inverse[0, 0] * xs + inverse[0, 1] * ys + inverse[0, 2])
+        src_y += weight * (inverse[1, 0] * xs + inverse[1, 1] * ys + inverse[1, 2])
+    return cv2.remap(img, src_x, src_y, cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
 
 
 # ── Enhancement ───────────────────────────────────────────────────────
@@ -760,7 +752,3 @@ OP_REGISTRY = {
 
 def get_operation(name: str):
     return OP_REGISTRY.get(name)
-
-
-def list_operations() -> list[str]:
-    return list(OP_REGISTRY.keys())

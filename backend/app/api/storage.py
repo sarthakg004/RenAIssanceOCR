@@ -49,16 +49,6 @@ class SaveDatasetRequest(BaseModel):
     model_info: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.get("/health")
-async def storage_health():
-    paths = ensure_storage_layout()
-    return {
-        "ok": True,
-        "root": resolve_storage_root(),
-        "paths": paths,
-    }
-
-
 @router.get("/overview")
 async def storage_overview():
     return {

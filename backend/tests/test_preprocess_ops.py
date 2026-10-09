@@ -4,15 +4,13 @@ image and return a valid array — guards against op-registry regressions."""
 import numpy as np
 import pytest
 
-from preprocessing.operations import OP_REGISTRY, list_operations
+from preprocessing.operations import OP_REGISTRY
 from preprocessing.pipeline import run_pipeline
 
 
-def test_registry_matches_list():
-    assert set(list_operations()) == set(OP_REGISTRY.keys())
-    # 7 documented OpenCV ops at minimum (normalize, grayscale, deskew,
-    # denoise, contrast, sharpen, binarize/threshold).
-    assert len(OP_REGISTRY) >= 7
+def test_registry_has_every_operation():
+    assert set(OP_REGISTRY) == {"normalize", "grayscale", "deskew", "denoise", "contrast",
+                                "sharpen", "threshold", "morph", "remove_blobs", "remove_noise"}
 
 
 @pytest.mark.parametrize("op_name", sorted(OP_REGISTRY.keys()))

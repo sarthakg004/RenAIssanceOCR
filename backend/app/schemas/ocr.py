@@ -15,7 +15,6 @@ class OCRResponse(BaseModel):
 
 class ExportRequest(BaseModel):
     transcripts: dict  # {page_number: transcript_text}
-    format: str  # "txt", "docx", "pdf"
 
 
 class PreprocessRequest(BaseModel):

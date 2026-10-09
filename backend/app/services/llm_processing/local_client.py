@@ -168,130 +168,105 @@ def _evict_all_except(keep_key: str) -> None:
             torch.cuda.empty_cache()
 
 
-def post_process_text_finetuned(
-    text: str,
-    model: str | None = None,          # ignored; adapter is fixed
-    template_name: str | None = None,  # ignored; per-line system prompt is fixed
-    batch_size: int = 16,
-) -> str:
-    """Correct OCR text with the Spanish-finetuned gemma LoRA.
+class LocalCorrector:
+    """A base causal LM plus a LoRA adapter, correcting OCR one line at a time.
 
-    Line by line, because that's how the adapter was trained — a whole page is
-    out of distribution. Blank lines are kept so paragraphs survive. Raises on
-    CPU-only hosts; the API providers still work there.
+    Line by line because that is how the adapters were trained; a whole page is
+    out of distribution. 4-bit on CUDA only. The app uses the default (gemma +
+    our Spanish adapter); the experiments also evaluate a Qwen3 adapter.
     """
-    if not text or not text.strip():
-        return text
 
-    import torch
+    def __init__(self, base_model: str = FINETUNED_BASE_MODEL, adapter_dir: str | None = None,
+                 batch_size: int = 16):
+        self.base_model, self.batch_size = base_model, batch_size
+        self.adapter_dir = adapter_dir or _adapter_dir()
 
-    from app.utils.torch_device import select_torch_device
+    def correct(self, text: str) -> str:
+        """Correct every non-blank line; blank lines and line count are preserved."""
+        if not text or not text.strip():
+            return text
+        lines = text.split("\n")
+        out, answered = self.correct_lines(lines)
+        # Keeping a line the model left empty is right per line, but answering
+        # nothing at all means it is broken (fp16 NaN logits do exactly this) and
+        # echoing the input back would look like a clean run. Fail loudly.
+        if answered == 0 and any(l.strip() for l in lines):
+            raise ValueError("Fine-tuned model returned no output for any line — "
+                             "it may have failed to load correctly.")
+        result = "\n".join(out).strip()
+        if not result:
+            raise ValueError("Fine-tuned model returned an empty response")
+        return result
 
-    if select_torch_device() != "cuda":
-        raise ValueError(
-            "The local fine-tuned Spanish model requires a GPU (4-bit QLoRA). "
-            "Use a cloud provider (Gemini/OpenAI) on CPU-only hosts."
-        )
+    def correct_lines(self, lines: list[str]) -> tuple[list[str], int]:
+        """-> (corrected lines in input order, how many the model answered)."""
+        import torch
 
-    adapter_dir = _adapter_dir()
-    if not os.path.isdir(adapter_dir):
-        raise ValueError(f"Fine-tuned adapter not found at {adapter_dir}")
+        idx = [i for i, ln in enumerate(lines) if ln.strip()]
+        if not idx:  # nothing to correct (e.g. a page where detection found no text)
+            return list(lines), 0
 
-    try:
-        tokenizer, llm, device = _load(
-            FINETUNED_BASE_MODEL, adapter_dir=adapter_dir, quantize=True
-        )
-    except Exception as exc:
-        # Turn huggingface_hub's GatedRepoError/401 into something actionable.
-        msg = str(exc).lower()
-        if "gated" in msg or "401" in msg or "authoriz" in msg or "token" in msg:
-            raise ValueError(
-                f"Could not download the gated base model '{FINETUNED_BASE_MODEL}'. "
-                "Set HF_TOKEN in the environment and accept the licence at "
-                "huggingface.co/google/gemma-3-4b-it."
-            ) from exc
-        raise
-    tokenizer.padding_side = "left"  # decoder-only batched generation
+        tokenizer, llm, device = self._load()
+        tokenizer.padding_side = "left"  # decoder-only batched generation
+        stop_ids = llm.generation_config.eos_token_id
+        stop_ids = set(stop_ids) if isinstance(stop_ids, (list, tuple)) else {stop_ids}
 
-    # generate() stops a batch only once EVERY row has emitted a stop token, so
-    # both knobs below are about not letting one long row bill the other 15.
-    stop_ids = llm.generation_config.eos_token_id
-    stop_ids = set(stop_ids) if isinstance(stop_ids, (list, tuple)) else {stop_ids}
+        # Batch lines of similar length: a batch runs as many steps as its
+        # longest row, so mixing a 5-token line with a 60-token one makes the
+        # short ones pay. Results go back by original index.
+        lengths = dict(zip(idx, (len(t) for t in tokenizer([lines[i] for i in idx],
+                                                              add_special_tokens=False).input_ids)))
+        idx.sort(key=lengths.__getitem__)
+        out, answered = list(lines), 0
+        for start in range(0, len(idx), self.batch_size):
+            chunk = idx[start:start + self.batch_size]
+            prompts = [tokenizer.apply_chat_template(
+                [{"role": "system", "content": _FINETUNED_SYSTEM_PROMPT},
+                 {"role": "user", "content": lines[i]}],
+                tokenize=False, add_generation_prompt=True) for i in chunk]
+            enc = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+            # A corrected line is about as long as its input (glyph repair, not
+            # translation). ponytail: 1.5x + 16 is generous, not tuned; the stop-
+            # token guard below catches any overrun, so a tight cap only costs a
+            # correction, never truncates a line.
+            cap = min(160, int(max(lengths[i] for i in chunk) * 1.5) + 16)
+            with torch.no_grad():
+                gen = llm.generate(**enc, max_new_tokens=cap, do_sample=False,
+                                   pad_token_id=tokenizer.pad_token_id)
+            new = gen[:, enc["input_ids"].shape[1]:]
+            for i, corrected, row in zip(chunk, tokenizer.batch_decode(new, skip_special_tokens=True), new):
+                # No stop token = cut off at the cap: keep the original, not half a line.
+                if stop_ids.isdisjoint(row.tolist()):
+                    continue
+                # One line in, one line out: the frontend maps results onto boxes by index.
+                corrected = " ".join(corrected.split())
+                if corrected:
+                    out[i] = corrected
+                    answered += 1
+        return out, answered
 
-    lines = text.split("\n")
-    idx = [i for i, ln in enumerate(lines) if ln.strip()]
-    out = list(lines)
-    answered = 0
+    def _load(self):
+        from app.utils.torch_device import select_torch_device
 
-    # Batch lines of similar length together: rows are left-padded to the
-    # longest in their batch, and a batch runs as many steps as its slowest row
-    # needs. Mixing a 5-token line with a 60-token one makes the short ones pay
-    # for the long one at both ends. Results are written back to out[i] by
-    # original index, so the visual order the frontend relies on is untouched.
-    line_lens = dict(zip(
-        idx,
-        (len(t) for t in tokenizer(
-            [lines[i] for i in idx], add_special_tokens=False
-        ).input_ids),
-    ))
-    idx.sort(key=line_lens.__getitem__)
+        if select_torch_device() != "cuda":
+            raise ValueError("The local fine-tuned Spanish model requires a GPU (4-bit QLoRA). "
+                             "Use a cloud provider (Gemini/OpenAI) on CPU-only hosts.")
+        if not os.path.isdir(self.adapter_dir):
+            raise ValueError(f"Fine-tuned adapter not found at {self.adapter_dir}")
+        try:
+            return _load(self.base_model, adapter_dir=self.adapter_dir, quantize=True)
+        except Exception as exc:
+            # Turn huggingface_hub's GatedRepoError/401 into something actionable.
+            msg = str(exc).lower()
+            if any(k in msg for k in ("gated", "401", "authoriz", "token")):
+                raise ValueError(
+                    f"Could not download the gated base model '{self.base_model}'. Set HF_TOKEN "
+                    f"in the environment and accept the licence at huggingface.co/{self.base_model}."
+                ) from exc
+            raise
 
-    for start in range(0, len(idx), batch_size):
-        chunk_idx = idx[start:start + batch_size]
-        prompts = [
-            tokenizer.apply_chat_template(
-                [
-                    {"role": "system", "content": _FINETUNED_SYSTEM_PROMPT},
-                    {"role": "user", "content": lines[i]},
-                ],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-            for i in chunk_idx
-        ]
-        enc = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
-        # A corrected line runs about as long as the line that went in — this is
-        # glyph repair, not translation. Sizing the ceiling to the batch's
-        # longest input (+ slack for restored diacritics and split words) beats
-        # a flat 160, which one rambling row would otherwise drag all 16 rows to.
-        # ponytail: 1.5x + 16 is generous rather than tuned; the guard below
-        # catches anything that does overrun, so a too-tight cap can only cost a
-        # correction, never truncate a line.
-        cap = min(160, int(max(line_lens[i] for i in chunk_idx) * 1.5) + 16)
-        with torch.no_grad():
-            gen = llm.generate(
-                **enc,
-                max_new_tokens=cap,
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id,
-            )
-        new = gen[:, enc["input_ids"].shape[1]:]
-        decoded = tokenizer.batch_decode(new, skip_special_tokens=True)
-        for i, corrected, row in zip(chunk_idx, decoded, new):
-            # No stop token means generation was cut off at the cap, so what we
-            # have is half a line. Keep the original rather than write a
-            # truncated one — a silently chopped line is worse than an uncorrected
-            # one, and the frontend has no way to tell them apart.
-            if stop_ids.isdisjoint(row.tolist()):
-                continue
-            # One input line must stay one output line — the frontend maps
-            # results back onto boxes by index. Never blank a line out either.
-            corrected = " ".join(corrected.split()).strip()
-            if corrected:
-                out[i] = corrected
-                answered += 1
 
-    # Keeping the original line when the model returns nothing is right per
-    # line, but if it answered NOTHING at all it is broken (NaN logits from a
-    # bad dtype do exactly this) — and silently echoing the input back looks
-    # like a clean run to the user. Fail loudly instead.
-    if idx and answered == 0:
-        raise ValueError(
-            "Fine-tuned model returned no output for any line — it may have "
-            "failed to load correctly."
-        )
-
-    result = "\n".join(out).strip()
-    if not result:
-        raise ValueError("Fine-tuned model returned an empty response")
-    return result
+def post_process_text_finetuned(text: str, model: str | None = None,
+                                template_name: str | None = None, batch_size: int = 16) -> str:
+    """The `local_es` provider. model/template are ignored: the adapter and its prompt are fixed."""
+    return LocalCorrector(batch_size=batch_size).correct(text)

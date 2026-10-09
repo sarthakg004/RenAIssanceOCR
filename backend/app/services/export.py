@@ -1,10 +1,7 @@
-"""Render the per-page transcripts into one txt / docx / pdf buffer."""
+"""Render the per-page transcripts into one PDF."""
 
 import io
 import re
-from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -19,66 +16,6 @@ def _page_sort_key(x: str):
     if match:
         return (int(match.group(1)), match.group(2))
     return (0, x)
-
-
-def _page_display_label(key: str) -> str:
-    return f"Page {key}"
-
-
-def build_combined_transcript(transcripts: dict) -> str:
-    """One string, pages in order, separated by a rule."""
-    pages = sorted(transcripts.keys(), key=_page_sort_key)
-
-    sections = []
-    separator = '\u2500' * 20
-    for page in pages:
-        text = transcripts[page]
-        label = _page_display_label(page)
-        section = f"{label}\n{separator}\n{text}"
-        sections.append(section)
-
-    return "\n\n".join(sections)
-
-
-def build_txt_export(transcripts: dict) -> io.BytesIO:
-    """UTF-8 with a BOM, so Windows Notepad/Excel don't mangle accents."""
-    combined = build_combined_transcript(transcripts)
-    utf8_bom = b'\xef\xbb\xbf'
-    buffer = io.BytesIO(utf8_bom + combined.encode('utf-8'))
-    buffer.seek(0)
-    return buffer
-
-
-def build_docx_export(transcripts: dict) -> io.BytesIO:
-    doc = Document()
-
-    title = doc.add_heading("Combined Transcript", 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    doc.add_paragraph()  # spacer
-
-    pages = sorted(transcripts.keys(), key=_page_sort_key)
-
-    for i, page in enumerate(pages):
-        text = transcripts[page]
-
-        doc.add_heading(_page_display_label(page), level=1)
-
-        separator = doc.add_paragraph("─" * 40)
-        separator.runs[0].font.size = Pt(10)
-
-        for para_text in text.split('\n'):
-            if para_text.strip():
-                para = doc.add_paragraph(para_text)
-                para.style.font.size = Pt(11)
-
-        if i < len(pages) - 1:
-            doc.add_page_break()
-
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
 
 
 def build_pdf_export(transcripts: dict) -> io.BytesIO:
@@ -143,7 +80,7 @@ def build_pdf_export(transcripts: dict) -> io.BytesIO:
     for page in pages:
         text = transcripts[page]
 
-        story.append(Paragraph(_page_display_label(page), page_header_style))
+        story.append(Paragraph(f"Page {page}", page_header_style))
         story.append(Paragraph("─" * 50, separator_style))
 
         # reportlab parses a mini-HTML in Paragraph, so escape the text first.

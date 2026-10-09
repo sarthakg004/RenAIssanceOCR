@@ -62,3 +62,28 @@ def test_check_resources_without_paddle_reports_no_gpu(monkeypatch):
     assert info["gpu_available"] is False
     assert info["gpu_vram_gb"] == 0.0
     assert any("GPU not available" in w for w in info["warnings"])
+
+
+def test_line_detector_keeps_pipeline_resize_settings(monkeypatch):
+    # TextDetection on its own shrinks the long side to 960 px and misses
+    # lines; the app must pin the pipeline's 64/min/4000 settings.
+    import numpy as np
+
+    calls = {}
+
+    class FakeTextDetection:
+        def __init__(self, **kwargs):
+            calls["init"] = kwargs
+
+        def predict(self, img, **kwargs):
+            calls["predict"] = kwargs
+            return iter([{"dt_polys": [], "dt_scores": []}])
+
+    monkeypatch.setattr(ld, "_ensure_paddle", lambda: None)
+    monkeypatch.setattr(ld, "_TextDetection", FakeTextDetection)
+    page = np.full((400, 300, 3), 255, np.uint8)
+    ld.detect_text_lines(page, [{"label": "text", "bbox": [10, 10, 290, 390]}], device="cpu")
+
+    assert calls["init"]["limit_side_len"] == 64
+    assert calls["init"]["limit_type"] == "min"
+    assert calls["predict"]["max_side_limit"] == 4000
