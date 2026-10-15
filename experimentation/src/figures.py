@@ -696,9 +696,10 @@ def quantization_tradeoff():
 def postprocessing_gain():
     """LLM correction on the same 851 held-out lines: a big win on weak OCR, a loss on strong OCR."""
     res = results()
-    inputs = {"stock PaddleOCR\n(weak OCR)": "pairs paddle", "our CRNN": "CRNN", "our TrOCR": "TrOCR"}
+    inputs = {"Tesseract 5\n(weak OCR)": "Tesseract", "stock PaddleOCR\n(weak OCR)": "pairs paddle",
+              "our CRNN": "CRNN", "our TrOCR": "TrOCR"}
     colors = {"OCR output": GRAY, "+ Gemma": BLUE, "+ Qwen": ORANGE}
-    fig, axes = plt.subplots(1, 2, figsize=(17, 5.2))
+    fig, axes = plt.subplots(1, 2, figsize=(19, 5.2))
     for ax, metric in zip(axes, ("cer", "wer")):
         df = pd.DataFrame([{"group": name, "model": label, "value": res[key + suffix]["line"][metric]}
                            for name, key in inputs.items()

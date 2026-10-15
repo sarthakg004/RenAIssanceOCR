@@ -21,12 +21,12 @@ Here is Tesseract 5 with its Spanish model on our sample page:
 
 ![Tesseract on the sample page](assets/01_tesseract_fails.png)
 
-| Engine | Character error rate (CER) | Word error rate (WER) |
+| Engine | Sample page: CER / WER | All 28 test pages: CER / WER |
 |---|---|---|
-| Tesseract 5, Spanish (`spa`) | **31%** | **74%** |
-| Tesseract 5, old Spanish (`spa_old`) | 37% | 92% |
+| Tesseract 5, Spanish (`spa`) | **33% / 79%** | **18.6% / 59.5%** |
+| Tesseract 5, old Spanish (`spa_old`) | 37% / 89% | 19.5% / 61.3% |
 
-Three out of four words are wrong. The failures have clear causes:
+On this page about four words in five are wrong; across all 28 test pages ([section 5](#training-data)), three in five. The old-Spanish model is worse, not better. The failures have clear causes:
 
 | What is on the page | What modern OCR does |
 |---|---|
@@ -196,12 +196,14 @@ The first fine-tune was **unstable**: its training loss rose after epoch 2. Two 
 |---|---|---|---|---|
 | **CRNN** | **1.64% / 7.31%** | 5.90% / 21.67% | 8 M | 9 ms / line |
 | **TrOCR** (fp16) | 2.57% / 10.54% | **6.08% / 21.34%** | 334 M | 34 ms / line |
-| Tesseract 5 (sample page only) | | 31% / 74% | | |
+| Tesseract 5, Spanish (off the shelf, on our line crops) | 14.27% / 57.99% | 16.85% / 59.04% | | |
+| Tesseract 5, Spanish (off the shelf, finding its own lines) | same crops as above | 18.61% / 59.53% | | |
 
 ![CRNN vs TrOCR](assets/09_recognition_comparison.png)
 
 - **On clean line crops the CRNN wins** (1.6% vs 2.6% CER), on roman and gothic type alike, at 1/40 of the size and almost 4× the speed. It reads **66%** of validation lines perfectly, TrOCR 53%.
 - **On full pages they are level.** TrOCR copes better with imperfect crops from the detector, and with binarized pages.
+- **Against off-the-shelf OCR, the pipeline cuts page error about 3×:** 18.6% → 5.9% CER, 60% → 22% WER. Our detection helps even Tesseract: reading our line boxes instead of finding its own lines brings it from 18.6% to 16.9%.
 - **Page error is about 3× line error.** On raw scans the detector loses 17 of 588 lines, and the crops it cuts are harder than the curated training crops (CER on the lines it found: 4.1% vs 1.6%). **Detection is the weakest link at page level.**
 - TrOCR's decoder is a language model, which shows: on one line the CRNN reads `Iusticia` exactly as printed, while TrOCR "modernizes" it to `Justicia`.
 - Some "errors" are mistakes in the ground truth: one transcript says `ante ela` where the page reads `ante la`, which is what both models output.
@@ -247,11 +249,14 @@ Off-the-shelf LLMs made OCR **worse**: they modernize spelling and rewrite. So w
 
 | Input (851 held-out lines) | Before: CER / WER | + Gemma | + Qwen |
 |---|---|---|---|
+| Tesseract 5 (weak OCR, never seen in training) | 14.27% / 57.99% | **11.46% / 34.32%** | 13.37% / 36.28% |
 | Stock PaddleOCR (weak OCR) | 7.18% / 33.36% | **4.01% / 14.31%** | 4.24% / 15.34% |
 | Our CRNN | 1.64% / 7.31% | 1.94% / 7.83% | 1.99% / 7.76% |
 | Our TrOCR | 2.57% / 10.54% | 3.03% / 10.68% | 2.95% / 10.81% |
 
-- **On weak OCR the corrector is a big win:** Gemma cuts PaddleOCR's word error rate from 33% to 14% (−57%) and its character error rate by 44%.
+- **On weak OCR the corrector is a big win, on more than one engine.** Gemma cuts the word error rate of Tesseract, the engine from [section 1](#1-the-problem-modern-ocr-fails-on-old-books), from 58% to 34% (−41%), and PaddleOCR's from 33% to 14% (−57%).
+- **It generalizes to an engine it never saw.** No Tesseract output was in the training data, yet of the 785 Tesseract lines Gemma changed, 594 got better and 131 worse, and perfect lines went from 17 to 101. It fixes 90% of Tesseract's long-s misreads (`fe consagra` → `se consagra`, `efta` → `esta`: 297 → 30 words).
+- **On Tesseract, word error falls much more than character error** (−41% vs −20%). The corrector fixes wrong letters (2,345 → 1,482 substituted characters), and one wrong letter makes a whole word wrong. But it cannot tell junk from text, so the extra characters Tesseract invents (`Dotor de los Niños, ** 14. 2`) stay. On the 28 full test pages the word gain holds (59% → 47%) while character error rises slightly (16.9% → 17.9%).
 - **On strong OCR it does more harm than good.** On the CRNN's output Gemma changed 137 of 851 lines: 35 for the better, 90 for the worse, and it broke 53 lines that were already perfect, mostly by modernizing (`Author` → `Autor`) or inventing spellings (`disseño` → `desseño`).
 - **Lesson:** a corrector only pays off when the input has more errors than the corrector introduces. Our retrained recognizers are now good enough that the app should use LLM correction as an option for weak engines and hard pages, not as a default.
 

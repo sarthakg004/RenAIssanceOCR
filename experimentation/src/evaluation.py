@@ -1,6 +1,7 @@
 """Line- and page-level evaluation using the app's own detection and recognizers."""
 
 import json
+import os
 
 import cv2
 import numpy as np
@@ -68,12 +69,43 @@ class PageDetector:
         return json.loads(cache.read_text())
 
 
+class Tesseract:
+    """Off-the-shelf Tesseract 5 reading one line crop at a time, the weak-OCR baseline.
+
+    --psm 13 treats the crop as one raw line. The usual single-line mode (--psm 7) returns
+    nothing for a third of the crops, because they hold slivers of the neighbouring lines.
+    """
+
+    def __init__(self, lang: str = "spa"):
+        import pytesseract
+
+        pytesseract.pytesseract.tesseract_cmd = os.environ.get("TESSERACT_CMD", "tesseract")
+        self.lang, self.ocr = lang, pytesseract.image_to_string
+
+    def predict_batch(self, images: list[Image.Image]) -> list[str]:
+        return [" ".join(self.ocr(im, lang=self.lang, config="--psm 13").split()) for im in images]
+
+    def read_page(self, image: np.ndarray) -> list[str]:
+        """The whole page with Tesseract's own layout analysis (default --psm 3), one string per line."""
+        return [" ".join(l.split()) for l in self.ocr(image, lang=self.lang).splitlines() if l.strip()]
+
+
 class Recognizer:
-    """One of the app's line recognizers, loaded from a checkpoint path."""
+    """One of the app's line recognizers, loaded from a checkpoint path, or Tesseract (path = language).
+
+    "tesseract-page" ignores our detected boxes and lets Tesseract find the lines itself,
+    the fair off-the-shelf baseline for page-level numbers.
+    """
+
+    own_layout = False
 
     def __init__(self, kind: str, path: str):
         from app.services.recognition import crnn_inference, trocr_inference
 
+        if kind in ("tesseract", "tesseract-page"):
+            self.model, self.crop = Tesseract(path), crnn_inference.crop_polygon_gray
+            self.own_layout = kind == "tesseract-page"
+            return
         module = {"crnn": crnn_inference, "trocr": trocr_inference}[kind]
         recognizer_cls = module.CRNNRecognizer if kind == "crnn" else module.TrOCRRecognizer
         self.model = recognizer_cls(str(path))
@@ -84,4 +116,6 @@ class Recognizer:
 
     def read_page(self, image: np.ndarray, boxes: list) -> list[str]:
         """One string per detected line, in the detector's reading order."""
+        if self.own_layout:
+            return self.model.read_page(image)
         return self.read([self.crop(image, b) for b in boxes]) if boxes else []

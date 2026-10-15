@@ -3,11 +3,12 @@
     python experimentation/scripts/evaluate.py detect          # cache line boxes for every test page
     python experimentation/scripts/evaluate.py recognize       # line + page predictions of every model
     python experimentation/scripts/evaluate.py recognize CRNN  # ...or only some (names from MODELS)
-    python experimentation/scripts/evaluate.py correct gemma   # LLM-correct the new models' predictions
-    python experimentation/scripts/evaluate.py correct qwen CRNN
+    python experimentation/scripts/evaluate.py correct gemma   # LLM-correct every model's predictions
+    python experimentation/scripts/evaluate.py correct qwen Tesseract
     python experimentation/scripts/evaluate.py correct-pairs gemma  # ...and on the held-out pair data
     python experimentation/scripts/evaluate.py report          # metrics -> checkpoints/eval/results.json
 
+Tesseract needs the binary and Spanish data: TESSERACT_CMD=/path/to/tesseract TESSDATA_PREFIX=/path/to/tessdata.
 Each step is its own process, so only one model holds the 8 GB GPU at a time.
 Line level: the 851 validation lines (3 unseen books). Page level: 28 pages of unseen books.
 """
@@ -23,6 +24,9 @@ OUT = CHECKPOINTS / "eval"
 MODELS = {  # name -> (kind, checkpoint)
     "CRNN": ("crnn", CHECKPOINTS / "crnn" / "best_crnn.pth"),
     "TrOCR": ("trocr", CHECKPOINTS / "trocr"),
+    "Tesseract": ("tesseract", "spa"),  # off-the-shelf baseline; "checkpoint" is the language
+    "Tesseract (own layout)": ("tesseract-page", "spa"),  # pages: Tesseract finds its own lines
+    "Tesseract old Spanish (own layout)": ("tesseract-page", "spa_old"),
     "CRNN (previous)": ("crnn", CHECKPOINTS / "previous" / "crnn" / "best_crnn.pth"),
     "TrOCR (previous)": ("trocr", CHECKPOINTS / "previous" / "trocr"),
 }
@@ -79,7 +83,7 @@ def correct(llm: str, *names: str):
 
     base, adapter = CORRECTORS[llm]
     corrector = LocalCorrector(base, str(adapter))
-    for name in names or ("CRNN", "TrOCR"):
+    for name in names or ("CRNN", "TrOCR", "Tesseract"):
         result = json.loads(_file(name).read_text())
         fixed = {"lines": corrector.correct_lines(result["lines"])[0], "pages": {}}
         for pipeline, pages in result["pages"].items():
